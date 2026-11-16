@@ -9,7 +9,6 @@
 <p align="center">
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white" /></a>
   <a href="https://github.com/yueshi/OctopOS/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green" /></a>
-  <a href="https://github.com/yueshi/OctopOS/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
   <a href="https://pypi.org/project/octop/"><img src="https://img.shields.io/pypi/v/octop" alt="PyPI" /></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/code%20style-ruff-000000?logo=ruff&logoColor=white" /></a>
   <a href="https://discord.gg/QnWdhJxq9h"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" /></a>
@@ -162,7 +161,7 @@ PostgreSQL can replace SQLite for the control plane via `config.json`, `OCTOP_DA
 
 ## Status and roadmap
 
-Current release: **1.0.2**. OctopOS is a usable single-node agent platform; the **business AgentOS** direction is still in progress in the current source tree.
+OctopOS is a usable single-node agent platform; the **business AgentOS** direction is still in progress in the current source tree.
 
 **In the current source tree**
 
