@@ -3,13 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>A smarter, self-hosted AI assistant — multi-user, multi-agent.</strong>
-</p>
-
-<p align="center">
-  <a href="https://trendshift.io/repositories/95504?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-95504" target="_blank" rel="noopener noreferrer">
-    <img src="https://trendshift.io/api/badge/repositories/95504" alt="TencentCloud/Octop | Trendshift" width="250" height="55" />
-  </a>
+  <strong>Self-hosted, multi-user, multi-agent AI platform — one process, your data.</strong>
 </p>
 
 <p align="center">
@@ -18,19 +12,17 @@
   <a href="https://github.com/TencentCloud/Octop/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
   <a href="https://pypi.org/project/octop/"><img src="https://img.shields.io/pypi/v/octop" alt="PyPI" /></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/code%20style-ruff-000000?logo=ruff&logoColor=white" /></a>
-  <a href="https://github.com/TencentCloud/Octop"><img alt="GitHub stars" src="https://img.shields.io/github/stars/TencentCloud/Octop?style=social" /></a>
-  <a href="https://github.com/TencentCloud/Octop/fork"><img alt="GitHub forks" src="https://img.shields.io/github/forks/TencentCloud/Octop?style=social" /></a>
   <a href="https://discord.gg/QnWdhJxq9h"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
-  <a href="#-highlights">Highlights</a> ·
-  <a href="#-overview">Overview</a> ·
-  <a href="#-core-technology">Core Technology</a> ·
-  <a href="#-features">Features</a> ·
-  <a href="#-roadmap">Roadmap</a> ·
-  <a href="#-quick-start">Quick Start</a> ·
-  <a href="#-contents">Contents</a>
+  <a href="#what-is-octop">What is Octop</a> ·
+  <a href="#highlights">Highlights</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#status-and-roadmap">Status</a> ·
+  <a href="#documentation">Docs</a> ·
+  <a href="#contributing">Contributing</a>
 </p>
 
 <p align="center">
@@ -39,558 +31,242 @@
 
 ---
 
-**Octop** is an open-source, self-hosted AI assistant. It's not just a tool — it's a digital life form that can operate in parallel. Through its multi-agent architecture, it builds an intelligent environment that is both independent and collaborative for teams, families, and individuals. Best of all, it runs entirely on your machine — the fully self-hosted design means privacy is never a compromise, while single-process startup makes the powerful web console, CLI, and IM integrations readily accessible.
+## What is Octop?
 
-Chat through the Web Dashboard, Feishu, DingTalk, QQ, WeChat, Telegram, Discord, WeCom, or programmatic HTTP/SSE/WebSocket. Extend capabilities with the **expert library**, **Connectors** (OAuth + MCP), and **ACP** integration for IDE workflows.
+Octop is an open-source, self-hosted AI platform for individuals, teams, and small businesses. One Python process serves the Web dashboard, CLI, IM channels, cron jobs, and the agent runtime. SQLite is the default control-plane database; PostgreSQL is optional. There is no external queue or required service beyond the LLM provider you configure.
 
-## ✨ Highlights
+The current focus is a **single-node business AgentOS**: agents and teams execute bounded goals with approvals and guardrails, MiniApps turn their output into usable data interfaces, and the desktop shell gives users a shared workspace. This is a deliberate scope: **one instance per team or customer**, not a multi-tenant SaaS cluster.
 
-| | Feature | Description |
-|---|---------|-------------|
-| 👥 | **Multi-user expert team** | One admin, shared household; built-in expert library and expert market — switch specialists per scenario |
-| 🤝 | **Cloud collaboration** | Link this Octop to another instance to browse peer experts and chat across instances; history stays on the expert's side |
-| 🎭 | **MBTI personas** | 16 personality templates plus an interactive quiz — give each agent a distinct character |
-| 🎯 | **AgentTeams** *(Beta)* | A coordinator schedules multiple experts on multi-step work; [details](docs/expert-teams.md) |
-| 🔒 | **Security built-in** | JWT multi-user isolation, tool approval, shell command guardrails, and PII redaction — data stays local |
-| 🔌 | **Connector ecosystem** | Tencent suite (Docs, Meeting, News, …); OAuth and MCP gateway extend resource boundaries — [supported connectors](docs/connectors.md) |
-| 💾 | **Pluggable workspace backends** | Local disk, Docker sandbox, PostgreSQL, or COS/S3 for agent files — separate from the control-plane DB |
-| 🧠 | **Portable memory** | Powered by [Octop Memory](https://github.com/TencentCloud/octop-memory); memory migrates with the workspace |
-| 📚 | **Knowledge base** | RAG over your documents; share corpora within a deployment and ground answers in your private data |
-| 🧩 | **Plugins** | Extend Octop with third-party plugins; bundled plugins are seeded and toggled on demand |
-| ↔️ | **ACP bidirectional** | `octop acp` for IDE/terminal AI; delegate to OpenCode / Claude Code with permission gates |
-| 💻 | **Terminal AI+** | Interactive shell in the browser — AI-assisted command execution and troubleshooting |
-| 🌐 | **Browser AI+** | Headless Chromium sessions for web automation, screenshots, and remote browsing |
-| 🖥️ | **Remote desktop** | Live screen and input from the dashboard on Linux, Windows, and macOS — remote office work and GUI apps; one-click isolated desktop on headless Linux |
-| 🪟 | **Desktop client** | Native Windows / macOS / Linux apps (and FnOS packages) alongside the web dashboard |
-| 🏠 | **Self-hosted** | Dashboard, CLI, IM channels, and cron in one `octop run` — all data under `~/.octop/` |
+## Highlights
 
-## 📌 Overview
-
-Octop is a self-hosted AI assistant platform for households and small teams. It runs a single process that serves a web dashboard, a CLI, IM channels (Feishu, DingTalk, QQ, WeChat, Telegram, Discord, WeCom, and more), and cron automation — all sharing one control-plane database under `~/.octop/` (SQLite by default; PostgreSQL optional).
-
-> Octop's design goal: keep every conversation, workspace, and credential on your own machine, while giving each user a personal team of specialized agents they can switch between per task.
-
-<details>
-<summary>🐾 What can you do with Octop</summary>
-
-- **Personal assistant** — let a dedicated agent write weekly reports, organize notes, and manage your schedule; memory persists with the workspace.
-- **Family sharing** — one admin account, the whole household; assign different agents and experts per member; share experts and knowledge bases when useful.
-- **Team helper** — AgentTeams or parallel agents, bridging Feishu / DingTalk / WeCom / WeChat to route tasks into group chats.
-- **Developer boost** — delegate coding tasks to OpenCode / Claude Code via ACP, or troubleshoot from the terminal with AI assistance.
-- **Web automation** — use Browser AI+ and remote desktop for forms, screenshots, and GUI apps.
-- **Scheduled tasks** — configure cron in natural language so the agent pushes or runs jobs on time every day.
-
-</details>
-
-## 🧠 Core Technology
-
-| Layer | Technology |
-|-------|-----------|
-| **Language** | Python 3.12+ |
-| **Web framework** | FastAPI + uvicorn |
-| **Agent runtime** | [Octop Harness](https://github.com/TencentCloud/octop-harness) |
-| **Gateway** | [Octop Gateway](https://github.com/TencentCloud/octop-gateway) |
-| **Control plane DB** | SQLite (WAL, default) or PostgreSQL (optional) |
-| **Frontend** | React 18 + TypeScript + Vite + Ant Design |
-| **Scheduling** | APScheduler |
-| **ACP** | agent-client-protocol |
-| **Build / quality** | hatchling · ruff · mypy · pytest |
-
-Octop is built on the Octop Harness stack — a set of focused runtimes that Octop composes into one process:
-
-- **[Octop Harness](https://github.com/TencentCloud/octop-harness)** — Agent runtime: model routing, tools, skills, and conversation checkpointing.
-- **[Octop Gateway](https://github.com/TencentCloud/octop-gateway)** — multi-platform IM channel bridge that normalizes incoming messages into a single processing pipeline.
-- **[Octop Memory](https://github.com/TencentCloud/octop-memory)** — hierarchical recall with full-text search, so an agent's memory travels with its workspace.
-- **[Octop Browser](https://github.com/TencentCloud/octop-browser)** — CDP-based browser automation with persistent profiles for web tasks.
-
-Instead of an external queue or message broker, Octop routes every surface — Web UI, IM, and cron — through one in-process `HarnessProcessor`. The result is a single, restart-safe process whose entire state is rebuilt from the control-plane database on boot (local SQLite by default; PostgreSQL optional).
-
-## 🤔 Features
-
-### Server & auth
-- Multi-user JWT authentication with admin role
-- First-run setup wizard (`octop init`)
-- Interactive API docs at `/api/docs` (off by default — set `"enable_api_docs": true` in `config.json` to enable)
-
-### Experts
-- Multiple experts per user; each has its own workspace, providers, channels, and cron
-- 16 MBTI persona templates + custom system prompt
-- Expert library scanned at boot (`infra/agents/experts/library/`); expert market and in-deployment expert sharing
-- **AgentTeams** *(Beta)* — coordinator + member experts for multi-step tasks ([docs/expert-teams.md](docs/expert-teams.md))
-- Workspace backends (expert files): local disk, Docker sandbox, PostgreSQL, COS/S3, and other remote stores — distinct from the control-plane database
-
-### Channels & automation
-- IM channels: Feishu, DingTalk, QQ, WeChat, Telegram, Discord, WeCom, and more
-- Proactive cron jobs with natural-language and slash-command triggers
-- Unified message processing across Web UI, IM, and cron surfaces
-
-### Surfaces
-- **Web dashboard** — chat, experts / teams, connectors, channels, cron, knowledge, plugins, settings
-- **Desktop client** — native apps for Windows / macOS / Linux; FnOS packages for NAS
-- **CLI** — `octop run`, `octop chats`, `octop acp`, admin commands
-- **HTTP/SSE/WebSocket API** — full programmatic access
-- **Remote desktop** — dashboard control of the host desktop session
-
-### Knowledge & plugins
-- **Knowledge base** — RAG over your documents; optional sharing within the same deployment
-- **Plugins** — install and manage third-party plugins (`octop plugin`); bundled plugins are seeded and toggled on demand from the dashboard
-
-### ACP (Agent Client Protocol)
-
-Octop supports ACP in two directions:
-
-1. **Inbound** — external tools use **your** Octop agent
-   ```bash
-   octop acp --agent main   # stdio ACP server for Zed, OpenCode, …
-   ```
-
-2. **Outbound** — Octop delegates to external coding agents
-   - Dashboard → **ACP** (`/acp`): configure runners (global per user)
-   - Enable **acp_runner** per agent, then delegate in chat
-
-Built-in outbound runners include OpenCode, CodeBuddy, Claude Code, and Codex.
-
-Full setup: **[docs/acp.md](docs/acp.md)**.
-
-## 🧭 Roadmap
-
-Here are our mid-to-long term plans:
-
-**Shipped**
-- [x] **Shared resource pool** — a central pool of skills and sub-agents that any user can drop into a new expert without rebuilding from scratch.
-- [x] **Expert sharing** — publish your experts to other users in the same deployment, so good configurations are reused instead of recreated.
-- [x] **PC client** — native desktop apps for Windows / macOS / Linux alongside the web dashboard and IM channels.
-
-**In progress**
-- [ ] **AgentTeams** *(Beta)* — let one coordinator autonomously schedule and orchestrate multiple experts to tackle multi-step tasks.
-- [ ] **Mobile client** *(closed beta)* — native mobile apps currently in internal testing.
-
-**Planned**
-- [ ] **Browser & terminal polishing** — browser skill *recording* (capture a workflow and replay it as a skill) and a more capable terminal AI assistant.
-- [ ] **Self-evolution** — automatically distill everyday conversations into reusable skills, so the assistant grows with you.
-- [ ] **Managed Agents** — platform-hosted agent lifecycle (provision, scale, and operate agents without managing the full self-hosted stack yourself).
-- [ ] **Project** — project-scoped workspaces that group agents, files, and conversations around a shared goal.
-- [ ] **Cloud–edge continuum** — run Octop locally while offloading selected tasks to the cloud, so light work stays on-device and heavier jobs use remote capacity when you need it.
-- [ ] **Plugin marketplace** — a curated market to discover, install, and update third-party plugins without leaving Octop.
-- [ ] **Conversational control plane** — deepen Octop’s own skills so chat can cover the full dashboard surface: create experts, wire channels, manage knowledge bases, and scaffold plugins end-to-end.
-
-This roadmap may shift as the community grows; treat it as indicative only.
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **macOS / Linux / Windows**
-- No pre-installed Python required — the installer uses [uv](https://docs.astral.sh/uv/) to provision Python 3.12 in an isolated venv under `~/.octop/`
-- A modern multi-core CPU with a few GB of RAM for the process plus model/embedding caches; enough disk for the database, agent workspaces, and document corpora
-
-### 1. Install
-
-**macOS / Linux** — one-line installer (recommended):
-
-```bash
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
-```
-
-**Windows (PowerShell)**:
-
-```powershell
-irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
-```
-
-**Windows (cmd)** — download and run, or from a cloned repo:
-
-```bat
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.bat -o install.bat
-install.bat
-```
-
-After installation, open a **new terminal** or reload your shell:
-
-```bash
-source ~/.zshrc   # Zsh
-# or
-source ~/.bashrc  # Bash
-```
-
-The installer places `octop` on your PATH via `~/.octop/bin`. Optional extras:
-
-```bash
-# Download Playwright Chromium for browser automation (skipped if a system Chrome/Chromium is already present)
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash -s -- --extras browser
-```
-
-See [scripts/README.md](scripts/README.md) for all install options (`--version`, `--from-source`, `--mirror`, Windows flags).
-
-**Desktop app** (GUI, no terminal) — grab the artifact for your platform from [GitHub Releases](https://github.com/TencentCloud/Octop/releases/latest):
-
-| Platform | Artifact |
-|----------|----------|
-| Windows | `Octop-desktop-windows-amd64-<version>.exe` (64-bit) / `Octop-desktop-windows-arm64-<version>.exe` (ARM64) — NSIS installer |
-| macOS | `Octop-desktop-darwin-arm64-<version>.dmg` (Apple Silicon) / `Octop-desktop-darwin-amd64-<version>.dmg` (Intel) |
-| Linux | `Octop-desktop-linux-amd64-<version>.tar.gz` / `Octop-desktop-linux-arm64-<version>.tar.gz` |
-| FnOS NAS | `Octop-fnos-docker-<version>.fpk` (recommended on ARM; amd64/arm64 image) / `Octop-fnos-native-<version>.fpk` (x86_64, no Docker) / `Octop-fnos-native-arm64-<version>.fpk` (ARM64 fallback if no Docker) — install via App Center |
-
-See [desktop/README.md](desktop/README.md) for the desktop shell and [fnos/README.md](fnos/README.md) for the FnOS packaging guide.
-
-**Alternative — PyPI** (if you already manage Python yourself):
-
-```bash
-pip install octop
-# optional local ONNX embedding model cache (Models → Local): pip install "octop[local-embedding]"
-# Downloads catalog weights under ~/.octop/embedding_models; not chat, not Memory.
-# Browser automation uses the bundled Playwright package; install Chromium via the installer --extras browser,
-# the dashboard, or: python -m playwright install chromium
-```
-
-From a source checkout with uv:
-
-```bash
-uv sync --extra local-embedding
-```
-
-### 2. Initialize
-
-```bash
-octop init
-```
-
-The interactive wizard creates the SQLite database, JWT secret, and first admin account under `~/.octop/`.
-
-### 3. Run
-
-```bash
-# Foreground (API + Web dashboard)
-octop run
-
-# Custom host / port
-octop run --host 0.0.0.0 --port 8088
-
-# Register as a system service (systemd / launchd / Windows service)
-octop service start
-```
-
-Open **http://127.0.0.1:8088**. With Docker, a valid `OCTOP_DEFAULT_PASSWORD` creates the admin on first boot (credentials in `/data/.octop/credential.txt`); if it is unset or rejected, open the setup wizard (unlock password in `/data/.octop/octop-login.txt`). Interactive `octop init` / the setup wizard asks you to choose a password (≥8 characters, letters and digits).
-
-### Docker (recommended for production)
-
-```bash
-# Build and start
-docker compose -f docker/docker-compose.yml up -d
-
-# China mirror when ghcr.io is unreachable (no local build)
-docker compose -f docker/docker-compose.cn.yml up -d
-
-# Or build manually
-bash docker/docker_build.sh
-docker run -d \
-  -p 8088:8088 \
-  -v octop-data:/data/.octop \
-  -e HOME=/data \
-  -e OCTOP_DEFAULT_PASSWORD="<strong-password-or-omit-for-setup-wizard>" \
-  octop:latest
-```
-
-Open `http://localhost:8088`. A valid `OCTOP_DEFAULT_PASSWORD` creates the admin on first boot and writes credentials to `/data/.octop/credential.txt`. If it is unset or rejected by the password policy, no admin is created — complete the setup wizard (unlock password in `/data/.octop/octop-login.txt`). Override the username via `OCTOP_ADMIN_USERNAME`.
-
-> **Password policy:** at least 8 characters with letters and digits.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OCTOP_PORT` | `8088` | HTTP listen port |
-| `OCTOP_DEFAULT_PASSWORD` | _(unset)_ | First-run admin password (Docker bootstrap). Valid → create admin; unset or rejected → setup wizard |
-| `OCTOP_ADMIN_USERNAME` | `admin` | First-run admin username |
-| `OCTOP_DATA` | `~/.octop` | Host data directory (compose bind mount) |
-
-See [`.env.example`](.env.example) for the full list.
-
-### Deploy with Cloud
-
-<p>
-  <a href="https://buy.cloud.tencent.com/lighthouse?blueprintType=APP_OS&blueprintOfficialId=lhbp-nxq7695q&regionId=1&zone=ap-guangzhou-6&bundleId=bundle_rs_mc_med2_01&loginSet=AUTO_PASSWORD&goodsNum=0&from=lh-console"><img alt="Deploy on Lighthouse" width="194" height="49" src="docs/assets/deploy-on-lighthouse.png" /></a><br>
-  <a href="https://buy.cloud.tencent.com/cvm?tab=custom&step=1&devPayMode=monthly&regionId=1&zoneId=100007&instanceType=SA9.64XLARGE1152&supportConfidentiality=false&platform=TencentOS&imageId=img-n3gxkolf&systemDiskType=CLOUD_HSSD&systemDiskSize=100&systemDiskBackupQuota=0&isBackup=false&backupDiskType=ALL&backupDiskCustomizeValue=&backupQuotaSegment=1&backupQuota=1&wanIp=0&loginSet=BIND_SSH_KEY&tags=null&templateCreateMode=createLt"><img alt="Deploy on CVM" width="194" height="49" src="docs/assets/deploy-on-cvm.png" /></a><br>
-  <a href="https://zenith.hosting/host/octop"><img alt="Deploy with Zenith" width="194" height="49" src="https://cdn.zenith.hosting/buttons/deploy-with-zenith.svg" /></a>
-</p>
-
-## 📑 Contents
-
-- [Highlights](#-highlights)
-- [Overview](#-overview)
-- [Core Technology](#-core-technology)
-- [Features](#-features)
-- [Roadmap](#-roadmap)
-- [Quick Start](#-quick-start)
-- **Deploy & Use**
-  - [Install options](#-install-options)
-  - [Configuration](#️-configuration)
-  - [CLI reference](#-cli-reference)
-  - [Web dashboard](#️-web-dashboard)
-  - [Data directory](#-data-directory)
-- **Architecture & Dev**
-  - [Architecture](#️-architecture)
-  - [Project layout](#-project-layout)
-  - [Development](#️-development)
-- **Project Info**
-  - [Security & privacy](#-security--privacy)
-  - [Contributing](#-contributing)
-  - [Changelog](#-changelog)
-  - [Related projects](#-related-projects)
-  - [Community](#-community)
-  - [License](#-license)
-
-## 📦 Install options
-
-| Method | Platform | Description |
-|--------|----------|-------------|
-| Remote one-liner | macOS / Linux | `curl …/octop/install.sh \| bash` |
-| Remote one-liner | Windows | `irm …/octop/install.ps1 \| iex` or `install.bat` |
-| Local script | macOS / Linux | `bash scripts/install.sh` |
-| Local script | Windows | `scripts\install.bat` or `install.ps1` |
-| PyPI | Any | `pip install octop` (optional extras such as `local-embedding`) |
-| Docker | Any | `docker/docker-compose.yml`; China mirror: `docker/docker-compose.cn.yml` |
-
-All install scripts provision an isolated environment at `~/.octop/venv` and a `~/.octop/bin/octop` wrapper — they do not touch system Python.
-
-### Upgrade
-
-`octop update` replaces only the wheel/binary — your `~/.octop/` database, workspaces, secrets, and `config.json` are preserved:
-
-```bash
-octop update          # fetch and install the latest octop, then restart the service if one is registered
-```
-
-The schema migrates automatically on next boot; run `octop init` only if the setup wizard prompts for a migration. Always back up first (`octop backup`) before a cross-version upgrade.
-
-## ⚙️ Configuration
-
-All runtime state lives in `~/.octop/`. Manage it via CLI or edit files directly.
-
-```bash
-# LLM providers and models
-octop models
-octop provider list
-
-# IM channels
-octop channel list
-octop channel install
-
-# Skills (per agent)
-octop skills list --agent main
-
-# Cron jobs
-octop cron list
-octop cron create --help
-
-# Users (admin)
-octop user list
-```
-
-### Supported LLM providers
-
-OpenAI-compatible APIs, DashScope (Qwen), Ollama, and other presets — configure per agent in the dashboard or via `octop provider`.
-
-### Supported channels
-
-| Channel | Credentials |
-|---------|-------------|
-| **Feishu** | App ID, App Secret |
-| **DingTalk** | App Key, App Secret |
-| **QQ** | Bot AppID, Token |
-| **WeChat** | QR bind / account credentials; [CLI](docs/cli.md) |
-| **Telegram** | Bot Token |
-| **Discord** | Bot Token; all accessible channels allowed by default, optional channel/DM allowlists; [setup and testing](docs/discord-channel.md) |
-| **WeCom** | Corp ID, Agent Secret |
-| **Web Dashboard** | Enabled by default |
-
-Other kinds (e.g. Yuanbao, Xiaoyi, MQTT) are available via the gateway — see channel setup in the dashboard or CLI.
-
-### Supported connectors
-
-Built-in OAuth / MCP connectors include Tencent Docs, Tencent Meeting, Notion, TickTick, OpenAlex, Feishu CLI, WeCom CLI, Agent Mail, Obsidian, WeKnora, Dify, and more. Names and descriptions are localized (`en` / `zh`).
-
-Full catalog, auth kinds, and MCP modes: **[docs/connectors.md](docs/connectors.md)**. Custom MCP servers can be added in the dashboard.
-
-## 📖 CLI reference
-
-| Command | Description |
-|---------|-------------|
-| `octop init` | Bootstrap `~/.octop/` (DB, admin, JWT secret) |
-| `octop run` | Start Octop in the foreground |
-| `octop service start` | Install and start as a system service |
-| `octop service stop` | Stop the system service |
-| `octop agent` | Create, list, start/stop agents |
-| `octop channel` | Install and manage IM channels |
-| `octop chats` | REPL and session management |
-| `octop acp` | Stdio ACP server for IDE integration |
-| `octop cron` | Manage scheduled tasks |
-| `octop models` | Provider presets and model resolution |
-| `octop skills` | Enable/disable per-agent skills |
-| `octop plugin` | Install and manage third-party plugins |
-| `octop backup` | Export / restore backups |
-| `octop clean` | Remove CLI state or wipe `~/.octop/` |
-| `octop memory list` | List running agents eligible for memory maintenance; no database changes. |
-| `octop memory slim [--agent ID]` | Back up and slim SQLite memory through the running host; uses the selected agent or prompts by number. Shows terminal and dashboard progress. [Details](docs/memory-slim.md) |
-| `octop memory slim --all` | Sequentially maintain all eligible running agents, with per-agent progress; stops on the first failure. |
-| `octop update` | Check for and install updates |
-
-In signed-in dashboard or local CLI chat, `/memory slim` explains maintenance for the current agent;
-`/memory slim --all` lists your eligible agents. Add `--confirm` to start after reviewing the impact.
-Use `/memory status` for progress/results. Chat stays available until maintenance is confirmed and begins.
-External IM maintenance requires verified sender permissions and is not enabled yet.
-
-Full reference: **[docs/cli.md](docs/cli.md)**.
-
-## 🖥️ Web dashboard
-
-After `octop run`, open **http://127.0.0.1:8088**.
+- **Multi-user, multi-agent by default** — JWT auth, per-user agents and workspaces, an expert library, and team orchestration for multi-step work.
+- **MiniApps** — agents create schema-backed data tables and single-file HTML interfaces that run in a sandboxed iframe, with page capabilities, publishing, backup, and a workspace desktop.
+- **One inbox for every channel** — Feishu, DingTalk, WeCom, WeChat, QQ, Telegram, Discord, the Web dashboard, CLI, and HTTP/SSE/WebSocket APIs share one agent runtime.
+- **Connectors and MCP** — OAuth connectors and an MCP gateway connect external services without putting credentials in agent workspaces.
+- **Knowledge, memory, skills, plugins** — RAG over private documents, portable agent memory, installable skills, and third-party plugins.
+- **Self-hosted operations** — setup wizard, TLS / Let's Encrypt, systemd/launchd services, backups, in-place updates, and `~/.octop/` as the single data root.
+- **Pluggable workspace backends** — local disk, Docker sandbox, COS/S3, and other remote stores behind one `BackendWorkspace` abstraction.
+- **ACP in both directions** — expose an agent to IDE/terminal clients, or delegate coding work to external runners such as Claude Code and OpenCode.
 
 <p align="center">
   <img src="docs/assets/readme-chat.png" alt="Octop Web Dashboard" width="800" />
 </p>
 
-- **Chat** — real-time conversation with experts and teams
-- **Experts** — create experts, pick templates / MBTI personas, share or publish experts, configure providers
-- **AgentTeams** *(Beta)* — coordinator + member experts for multi-step work
-- **Connectors** — OAuth apps and MCP gateways
-- **Channels** — IM platform setup
-- **Cron** — visual cron job management
-- **Knowledge base** — manage document corpora, semantic retrieval, and in-deployment sharing
-- **Plugins** — install, enable, and configure plugins
-- **Remote desktop** — live screen and input from the dashboard
-- **ACP** — configure outbound coding-agent runners
-- **Settings** — users, security, TLS, system
+## Quick Start
 
-Interactive API docs: **http://127.0.0.1:8088/api/docs** (disabled by default — enable by setting `"enable_api_docs": true` in `config.json`)
+**Prerequisites:** macOS, Linux, or Windows; no system Python required. The installer provisions Python 3.12 in an isolated environment under `~/.octop/`. A modern multi-core machine with a few GB of RAM is recommended.
 
-## 📁 Data directory
+### Install
 
-```
-~/.octop/                          ← install & data root
-├── config.json                    # process config (optional database section)
-├── octop.db                       # SQLite — users, agents, channels, cron, …
-├── secrets/                       # JWT secret, channel tokens
-├── agents/<agent_id>/             # per-agent workspace (SOUL.md, skills, …)
-├── security/tool_guard/           # shell command allow/deny rules
-├── logs/                          # runtime logs
-├── venv/                          # uv-managed Python (installer layout)
-└── bin/octop                      # PATH wrapper → venv/bin/octop
-```
-
-The control plane can also use PostgreSQL — set `database` in `config.json`, or `OCTOP_DATABASE_*` / the first-run wizard. With PostgreSQL, agent memory reuses the same DSN by default (per-agent schema); to keep file-based memory, set `"memory": { "backend": { "type": "sqlite" } }` in the agent config. See [docs/configuration.md](docs/configuration.md) and [docs/adr/002-database-backends.md](docs/adr/002-database-backends.md).
-
-See [docs/configuration.md](docs/configuration.md) for env vars and `config.json`.
-
-## 🏗️ Architecture
-
-```
-OctopServer
- ├─ DatabasePool            SQLite (WAL) or PostgreSQL
- ├─ SharedServices       DI root — every repo + config
- ├─ ExpertCatalog        scans agents/experts/library/ at boot
- ├─ UserManager
- │   └─ HarnessAgentManager (per user)
- │       └─ AgentRuntime (per agent)
- │           ├─ HarnessAgent      Agent runtime (octop-harness)
- │           ├─ HarnessProcessor  IM / UI / cron entry point
- │           ├─ ChannelManager    IM connections (octop-gateway)
- │           └─ CronManager       APScheduler
- └─ FastAPI app (uvicorn)
-```
-
-Single process. Restart rebuilds state from the control-plane database (local SQLite by default; PostgreSQL optional).
-
-See [docs/architecture.md](docs/architecture.md), [docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md), and [docs/adr/002-database-backends.md](docs/adr/002-database-backends.md).
-
-## 📁 Project layout
-
-```
-src/octop/
-  config.py    env-var config
-  launch.py    OctopServer boot + uvicorn
-  infra/       business core (agents, gateway, cron, db, users, …)
-  api/         HTTP layer — FastAPI app, routers, JWT, SSE
-  cli/         CLI layer — Click commands
-  dashboard/   built React SPA (wheel artifact)
-
-dashboard/     frontend source (Vite) — edit here, run make build-frontend
-
-docker/        Docker Compose, entrypoint, build & deploy scripts
-tests/         unit/ + integration/
-```
-
-## 🛠️ Development
-
-**Prerequisites:** Python 3.12+, Node 18+, [uv](https://docs.astral.sh/uv/)
+**macOS / Linux**
 
 ```bash
-# Backend
-make install          # pip install -e ".[dev]"
+curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
+```
+
+**PyPI** (if you manage Python yourself)
+
+```bash
+pip install octop
+```
+
+See [scripts/README.md](scripts/README.md) for `--version`, `--from-source`, `--mirror`, browser extras, and Windows options.
+
+### Initialize and run
+
+```bash
+octop init     # creates ~/.octop/, the SQLite database, JWT secret, and the first admin
+octop run      # serves the API and Web dashboard
+```
+
+Open **http://127.0.0.1:8088**. Use a custom host/port with `octop run --host 0.0.0.0 --port 8088`, or register a service with `octop service start`.
+
+### Docker
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+# China mirror when ghcr.io is unreachable:
+docker compose -f docker/docker-compose.cn.yml up -d
+```
+
+With Docker, a valid `OCTOP_DEFAULT_PASSWORD` creates the admin on first boot and writes credentials to `/data/.octop/credential.txt`; otherwise complete the setup wizard using the unlock password in `/data/.octop/octop-login.txt`. See [`.env.example`](.env.example) for `OCTOP_PORT`, `OCTOP_DATA`, PostgreSQL, and other variables.
+
+Native desktop clients (Windows / macOS / Linux) and FnOS packages are available from [GitHub Releases](https://github.com/TencentCloud/Octop/releases/latest).
+
+## What you can do
+
+| Scenario | What Octop provides |
+|---|---|
+| Personal assistant | A persistent agent with memory, scheduled jobs, and IM access |
+| Team / business operations | Experts and teams that plan, dispatch, execute, and record work |
+| Data collection and review | MiniApps with tables, forms, publishing, and read-only public links |
+| Customer-facing IM | Feishu / DingTalk / WeCom / WeChat / Telegram / Discord routing per expert |
+| Automation | Cron jobs, external webhooks, and connector polling |
+| Development | ACP delegation to coding agents, terminal AI, and a browser automation runtime |
+| Remote work | Optional remote desktop and browser sessions from the dashboard |
+
+## Architecture
+
+```text
+Dashboard / CLI / IM channels / cron / external events
+                         │
+                  FastAPI + WebSocket
+                         │
+                    OctopServer
+       ┌─────────────────┼──────────────────┐
+       │                 │                  │
+  AgentManager       Gateway             Cron / events
+  (per-agent         (IM channels,       (schedules,
+   harness runtime)   WS hub)             deliveries)
+       │                 │                  │
+       └─────────────────┼──────────────────┘
+                         │
+             SharedServices / RepoBundle
+                         │
+        SQLite (default) or PostgreSQL
+        + per-agent workspaces (local / Docker / COS / S3)
+```
+
+The agent loop, IM gateway, memory, and browser runtime are separate packages — [Octop Harness](https://github.com/TencentCloud/octop-harness), [Octop Gateway](https://github.com/TencentCloud/octop-gateway), [Octop Memory](https://github.com/TencentCloud/octop-memory), and [Octop Browser](https://github.com/TencentCloud/octop-browser). Octop composes them into one process and rebuilds runtime state from the control-plane database on boot.
+
+See [docs/architecture.md](docs/architecture.md) and the ADRs for the single-process and dual-database decisions:
+[docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md),
+[docs/adr/002-database-backends.md](docs/adr/002-database-backends.md).
+
+## Web dashboard and CLI
+
+The dashboard covers chat, experts and teams, MiniApps and the workspace desktop, connectors, channels, cron, knowledge, plugins, security, and settings. Interactive API docs are served at **`/api/docs`** when `"enable_api_docs": true` is set in `config.json` (disabled by default).
+
+| Command | Purpose |
+|---|---|
+| `octop init` | Bootstrap `~/.octop/` (database, admin, JWT secret) |
+| `octop run` | Start the API and dashboard in the foreground |
+| `octop service start` | Install and start as a system service |
+| `octop agent` | Create, list, start/stop, and reload agents |
+| `octop chats` | Chat REPL and session management |
+| `octop channel` | Install and manage IM channels |
+| `octop cron` | Manage scheduled jobs |
+| `octop provider` / `octop models` | Configure LLM providers and active models |
+| `octop acp` | Expose an agent over the Agent Client Protocol |
+| `octop backup` | Export or restore local data |
+| `octop update` | Update the wheel and restart the service |
+
+Full reference: [docs/cli.md](docs/cli.md). API reference: [docs/api.md](docs/api.md).
+
+## Configuration and data
+
+```text
+~/.octop/
+├── config.json                 # process config (optional database section)
+├── octop.db                    # SQLite control plane
+├── secrets/                    # JWT secret, channel tokens
+├── agents/<agent_id>/          # per-agent workspace (SOUL.md, skills, …)
+├── security/tool_guard/        # shell command guard rules
+├── logs/                       # runtime logs
+├── venv/                       # installer-managed Python
+└── bin/octop                   # PATH wrapper
+```
+
+PostgreSQL can replace SQLite for the control plane via `config.json`, `OCTOP_DATABASE_*`, or the setup wizard. Agent memory and workspace files are separate layers; see [docs/configuration.md](docs/configuration.md) and [docs/adr/002-database-backends.md](docs/adr/002-database-backends.md).
+
+## Security and privacy
+
+- **Local-first by default** — conversations, workspaces, credentials, and configuration live under `~/.octop/`.
+- **Multi-user isolation** — JWT authentication, per-user agents, and workspace ownership checks.
+- **Approvals and guardrails** — tool-level HITL approval, shell command guard rules, and PII redaction for outbound/read-only surfaces.
+- **No credential exposure to MiniApp pages** — page code runs in a sandboxed iframe without a JWT; external I/O is proxied by the host under a capability manifest.
+- **Optional isolation** — Docker sandbox backends are available per agent; the default single-user setup is optimized for a trusted machine.
+- **Deployment boundary** — Octop is a single-node platform. It does not provide multi-tenant process isolation, a distributed kernel, or an external queue. Run one instance per customer or team when isolation is required.
+
+## Status and roadmap
+
+Current release: **1.0.2**. Octop is a usable single-node agent platform; the **business AgentOS** direction is still in progress in the current source tree.
+
+**In the current source tree**
+
+- Multi-user agents, experts, teams, and workspace isolation.
+- MiniApps: schema-backed tables, sandboxed HTML pages, capability manifests, publishing, backup, and the desktop shell.
+- IM channels, connectors/MCP, knowledge bases, memory, skills, plugins, and cron.
+- Durable desktop notification inbox for access requests and HITL approvals; hidden-window resource governance.
+
+**Next (Route A: single-node business AgentOS)**
+
+- Capability contracts, boundary policy (allow / approve / deny), and capability-level audit.
+- Execution envelope and supervision: per-agent concurrency, timeouts, resource limits, restart visibility.
+- Event-plane correctness and unified scheduling / backpressure.
+- Hard budget gates across all LLM paths.
+- MiniApp data history, references, query pushdown, and application packages.
+- End-to-end tracing, metrics export, cost accounting, and readiness.
+
+**Not in current scope**
+
+- Multi-tenant SaaS clusters, distributed scheduling, or a general-purpose plugin runtime.
+- A universal event bus; Octop deliberately uses five documented event planes with at-least-once delivery.
+
+See [docs/agent-os-roadmap.md](docs/agent-os-roadmap.md) and [docs/agent-os-status-review.md](docs/agent-os-status-review.md) for the full plan and known gaps.
+
+## Development
+
+**Prerequisites:** Python 3.12+, Node 18+, [uv](https://docs.astral.sh/uv/).
+
+```bash
+make install          # install backend dev dependencies
+make install-hooks    # enable the repo's pre-commit hook (make all + dashboard build)
 make all              # format-all + lint + typecheck + test (ship bar)
 
-# Frontend (separate terminal)
-make dev-frontend     # Vite dev server on :5173 (override with VITE_DEV_PORT)
-make build-frontend   # production build → src/octop/dashboard/
+make dev              # backend + Vite dev server
+make dev-frontend     # Vite dev server only
+make build-frontend   # dashboard/ → src/octop/dashboard/
 cd dashboard && npx tsc -b
 ```
 
-Individual targets: `make test`, `make lint`, `make typecheck`, `make format`.
+Targeted tests: `uv run pytest tests/unit -q -x`, `uv run pytest tests/integration -q -x`. CI runs on Linux and Windows; do not hard-code POSIX-only paths in tests.
 
-## 🔒 Security & privacy
+## Documentation
 
-- **Local-first**: Config, chats, workspaces, and credentials live under `~/.octop/` on your machine.
-- **Multi-user isolation**: JWT auth with per-user agents and workspaces.
-- **PII redaction & tool approval**: sensitive data is redacted before it leaves the workspace, and risky tools or shell commands require explicit approval under the guardrail rules.
-- **Tool guardrails**: User-editable shell command rules under `~/.octop/security/tool_guard/`.
-- **No vendor lock-in**: Swap LLM providers, storage backends, and channels without rewriting agents.
+| Topic | Entry point |
+|---|---|
+| Architecture and ADRs | [docs/architecture.md](docs/architecture.md) |
+| API reference | [docs/api.md](docs/api.md) |
+| CLI reference | [docs/cli.md](docs/cli.md) |
+| Configuration and data directory | [docs/configuration.md](docs/configuration.md) |
+| Connectors and OAuth/MCP | [docs/connectors.md](docs/connectors.md) |
+| MiniApps | [docs/miniapp-overview.md](docs/miniapp-overview.md) |
+| AgentOS roadmap | [docs/agent-os-roadmap.md](docs/agent-os-roadmap.md) |
+| Current status and gaps | [docs/agent-os-status-review.md](docs/agent-os-status-review.md) |
+| ACP integration | [docs/acp.md](docs/acp.md) |
+| Expert teams | [docs/expert-teams.md](docs/expert-teams.md) |
+| Contributor conventions | [AGENTS.md](AGENTS.md) |
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Run `make all` (backend) or `make check-all` (full stack) before submitting
-4. Open a Pull Request
+1. Fork the repository and create a branch from `develop`.
+2. Keep changes surgical; follow [AGENTS.md](AGENTS.md) for module boundaries and i18n rules.
+3. Run `make all` (backend) and `cd dashboard && npx tsc -b` (frontend) before opening a PR.
+4. Open the PR into `develop`, not `main`.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide. Security issues: [SECURITY.md](SECURITY.md).
+Security issues: see [SECURITY.md](SECURITY.md). Release history: [CHANGELOG.md](CHANGELOG.md).
 
-Module boundaries and coding conventions: [AGENTS.md](AGENTS.md).
+## Community
 
-## 📋 Changelog
-
-See [CHANGELOG.md](CHANGELOG.md) for release history.
-
-## 🔗 Related projects
-
-| Project | Description |
-|---------|-------------|
-| [Octop Harness](https://github.com/TencentCloud/octop-harness) | Agent runtime — model routing, tools, skills, checkpointing |
-| [Octop Gateway](https://github.com/TencentCloud/octop-gateway) | Multi-platform IM channel bridge |
-| [Octop Memory](https://github.com/TencentCloud/octop-memory) | Hierarchical recall and FTS search |
-| [Octop Browser](https://github.com/TencentCloud/octop-browser) | CDP browser automation with persistent profiles |
-| [Octop Pet](https://github.com/jubaoliang/OctopPet) | A desktop pet for Octop |
-
-## 💬 Community
-
-- **Discord** — join the English-speaking community: [discord.gg/QnWdhJxq9h](https://discord.gg/QnWdhJxq9h)
-
-### WeCom Customer Group (CN)
-
-For the customer WeCom support group, scan:
+- Discord: [discord.gg/QnWdhJxq9h](https://discord.gg/QnWdhJxq9h)
+- WeCom customer group (CN):
 
 <p align="center">
-  <img src="docs/assets/qrcode.png" alt="WeCom customer group QR code" width="220" />
+  <img src="docs/assets/qrcode.png" alt="WeCom customer group QR code" width="180" />
 </p>
 
-> Please scan the QR code to join the group. For any questions or assistance, please contact the group admin directly.
+## License
 
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
-
-## ✨ Contributors
-
-Thanks to all contributors:
+[MIT](LICENSE). Thanks to all contributors:
 
 <a href="https://github.com/tencentcloud/octop/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=tencentcloud/octop" />

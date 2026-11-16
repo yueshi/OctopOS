@@ -3,13 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>支持多用户、多 Agent 的自托管 AI 助手 — 更聪明，更懂你。</strong>
-</p>
-
-<p align="center">
-  <a href="https://trendshift.io/repositories/95504?utm_source=repository-badge&utm_medium=badge&utm_campaign=badge-repository-95504" target="_blank" rel="noopener noreferrer">
-    <img src="https://trendshift.io/api/badge/repositories/95504" alt="TencentCloud/Octop | Trendshift" width="250" height="55" />
-  </a>
+  <strong>自托管、多用户、多 Agent 的 AI 平台——单进程运行，数据留在本机。</strong>
 </p>
 
 <p align="center">
@@ -18,19 +12,17 @@
   <a href="https://github.com/TencentCloud/Octop/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
   <a href="https://pypi.org/project/octop/"><img src="https://img.shields.io/pypi/v/octop" alt="PyPI" /></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/code%20style-ruff-000000?logo=ruff&logoColor=white" /></a>
-  <a href="https://github.com/TencentCloud/Octop"><img alt="GitHub stars" src="https://img.shields.io/github/stars/TencentCloud/Octop?style=social" /></a>
-  <a href="https://github.com/TencentCloud/Octop/fork"><img alt="GitHub forks" src="https://img.shields.io/github/forks/TencentCloud/Octop?style=social" /></a>
   <a href="https://discord.gg/QnWdhJxq9h"><img alt="Discord" src="https://img.shields.io/badge/Discord-%E5%8A%A0%E5%85%A5-5865F2?logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
-  <a href="#-亮点">亮点</a> ·
-  <a href="#-概述">概述</a> ·
-  <a href="#-核心技术">核心技术</a> ·
-  <a href="#-功能特性">功能特性</a> ·
-  <a href="#-规划">规划</a> ·
-  <a href="#-快速开始">快速开始</a> ·
-  <a href="#-目录">目录</a>
+  <a href="#什么是-octop">什么是 Octop</a> ·
+  <a href="#亮点">亮点</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#架构">架构</a> ·
+  <a href="#状态与路线图">状态</a> ·
+  <a href="#文档">文档</a> ·
+  <a href="#参与贡献">参与贡献</a>
 </p>
 
 <p align="center">
@@ -39,553 +31,242 @@
 
 ---
 
-**Octop** 是一个开源、自托管的 AI 助手。它不仅是工具，更是可并行运作的数字生命体。通过多 Agent 架构，它为团队、家庭和个人构建了既独立又协作的智能环境。并且这一切都运行在你的机器上——完全自托管的设计让隐私不再是妥协，而单进程启动的便捷性，则让强大的 Web 控制台、CLI 与 IM 集成触手可及。
+## 什么是 Octop？
 
-借助飞书、钉钉、QQ、微信、企业微信或 HTTP/SSE/WebSocket API 与任意 Agent 对话；通过**专家库**一键创建专业角色，通过 **Connector**（OAuth + MCP）接入外部服务，通过 **ACP** 与 IDE / 终端 AI 工具双向协作。
+Octop 是一个开源、自托管的 AI 平台，面向个人、团队与小企业。一个 Python 进程同时提供 Web 控制台、CLI、IM 通道、定时任务与 Agent 运行时。控制面默认使用 SQLite，可选 PostgreSQL；除你配置的 LLM 供应商外，不依赖外部队列或必需服务。
 
-## ✨ 亮点
+当前聚焦的是**单节点业务 AgentOS**：Agent 与团队在边界内执行目标，经过审批与防护规则；MiniApp 把交付物变成可用的数据界面；桌面 Shell 提供统一工作台。这个边界是刻意的：**每个团队/客户一个实例**，不是多租户 SaaS 集群。
 
-| | 特性 | 说明 |
-|---|------|------|
-| 👥 | **多用户多 Agent 专家团** | 一人管理，全家共用；内置专家库与专家市场，按场景切换专业角色 |
-| 🤝 | **云端协作** | 将本机 Octop 连接到另一实例，可浏览对端专家并跨实例对话；对话记录保留在专家所在侧 |
-| 🎭 | **MBTI 人格** | 16 种人格模板与互动测试，为每个 Agent 赋予鲜明性格 |
-| 🎯 | **AgentTeams** *（Beta）* | 协调者调度多位专家协作完成多步骤任务；[详见](docs/expert-teams.md) |
-| 🔒 | **更安全** | JWT 多用户隔离、工具审批、Shell 命令防护与敏感信息脱敏，数据留在本地 |
-| 🔌 | **Connector 拓展体系** | 一键接入腾讯全家桶（文档 / 会议 / 新闻等），OAuth 与 MCP 网关轻松扩展 — [支持的连接器](docs/connectors.md) |
-| 💾 | **可插拔工作区后端** | 本地目录、Docker 沙箱、PostgreSQL 或 COS/S3 存放 Agent 文件 — 与控制面数据库分离 |
-| 🧠 | **可迁移记忆系统** | 基于 [Octop Memory](https://github.com/TencentCloud/octop-memory)，记忆随工作区迁移 |
-| 📚 | **知识库** | 基于文档的 RAG 检索；支持同实例共享语料，让回答锚定私有知识 |
-| 🧩 | **插件** | 支持第三方插件扩展；内置插件随安装注入，按需一键启用 |
-| ↔️ | **ACP 双向集成** | `octop acp` 增强 IDE 与终端 AI；对话中委派 OpenCode / Claude Code 等 |
-| 💻 | **终端 AI+** | 浏览器内交互式 Shell，AI 辅助命令执行与排障 |
-| 🌐 | **浏览器 AI+** | 基于 Chromium 的无头浏览器会话，支持网页自动化、截图与远程操控 |
-| 🖥️ | **远程桌面** | 控制台内实时看屏与键鼠操控，跨 Linux / Windows / macOS；适合远程办公、GUI 软件操作，无图形 Linux 可一键搭建隔离桌面 |
-| 🪟 | **桌面客户端** | Windows / macOS / Linux 原生应用，另有飞牛（FnOS）安装包，可与 Web 控制台并行使用 |
-| 🏠 | **可自托管** | 一条 `octop run` 即可运行控制台、CLI、IM 通道与定时任务，数据存于 `~/.octop/` |
+## 亮点
 
-## 📌 概述
-
-Octop 是面向家庭与小团队的自托管 AI 助手平台。单进程同时提供 Web 控制台、CLI、IM 通道（飞书、钉钉、QQ、微信、企业微信等）与定时任务，共享 `~/.octop/` 下的控制面数据库（默认 SQLite；可选 PostgreSQL）。
-
-> Octop 的设计目标：让每一次对话、工作区与凭据都留在你自己的机器上，同时为每个用户配备一组可按场景切换的专业 Agent。
-
-<details>
-<summary>🐾 你能用 Octop 做什么</summary>
-
-- **个人助理** — 让专属 Agent 帮你写周报、整理资料、定日程，记忆随工作区长期保留。
-- **家庭共享** — 一个管理员账号，全家共用；按成员分配不同 Agent 与专家角色，也可共享专家与知识库。
-- **团队助手** — AgentTeams 或多 Agent 并行协作，对接飞书 / 钉钉 / 企业微信 / 微信，把任务自动分发到群里。
-- **开发者增效** — 通过 ACP 把编码任务委派给 OpenCode / Claude Code，或在终端用 AI 辅助排障。
-- **网页自动化** — 用浏览器 AI+ 与远程桌面自动填表、截图、操作 GUI 软件。
-- **定时任务** — 用自然语言配置 Cron，让 Agent 每天按时推送或执行任务。
-
-</details>
-
-
-
-## 🧠 核心技术
-
-| 层级 | 技术 |
-|------|------|
-| **语言** | Python 3.12+ |
-| **Web 框架** | FastAPI + uvicorn |
-| **Agent 运行时** | [Octop Harness](https://github.com/TencentCloud/octop-harness) |
-| **IM 桥接** | [Octop Gateway](https://github.com/TencentCloud/octop-gateway) |
-| **控制平面数据库** | SQLite (WAL，默认) 或 PostgreSQL（可选） |
-| **前端** | React 18 + TypeScript + Vite + Ant Design |
-| **调度** | APScheduler |
-| **ACP** | agent-client-protocol |
-| **构建 / 质量** | hatchling · ruff · mypy · pytest |
-
-Octop 基于一系列 Octop Harness 工程实践构建——它将这些专注的运行时组合进同一个进程：
-
-- **[Octop Harness](https://github.com/TencentCloud/octop-harness)** — Agent 运行时：模型路由、工具、技能与对话检查点。
-- **[Octop Gateway](https://github.com/TencentCloud/octop-gateway)** — 多平台 IM 通道桥接，将各类入站消息归一为统一的处理管线。
-- **[Octop Memory](https://github.com/TencentCloud/octop-memory)** — 分层记忆与全文检索，让 Agent 的记忆随工作区一同迁移。
-- **[Octop Browser](https://github.com/TencentCloud/octop-browser)** — 基于 CDP 的浏览器自动化，支持持久化配置，用于网页类任务。
-
-Octop 不依赖外部消息队列或中间件，而是通过进程内的 `HarnessProcessor` 统一路由所有入口——Web UI、IM 与定时任务。最终呈现为一个可重启恢复的单进程：启动时整个状态都从控制面数据库重建（默认 `~/.octop/octop.db`，亦可配置 PostgreSQL）。
-
-## 🤔 功能特性
-
-### 服务器与认证
-- 多用户 JWT 认证，支持管理员角色
-- 首次运行向导（`octop init`）
-- 交互式 API 文档：`/api/docs`（默认关闭 — 在 `config.json` 中设置 `"enable_api_docs": true` 开启）
-
-### 专家
-- 每位用户可创建多个专家；各自拥有独立工作区、供应商、通道和定时任务
-- 16 种 MBTI 人格模板 + 自定义系统提示词
-- 启动时扫描专家库（`infra/agents/experts/library/`）；支持专家市场与同实例专家共享
-- **AgentTeams** *（Beta）* — 协调者 + 成员专家协作完成多步骤任务（[docs/expert-teams.md](docs/expert-teams.md)）
-- 工作区后端（专家文件）：本地磁盘、Docker 沙箱、PostgreSQL、COS/S3 及其他远程存储 — 与控制面数据库分离
-
-### 通道与自动化
-- IM 通道：飞书、钉钉、QQ、微信、企业微信等
-- 主动定时任务，支持自然语言和斜杠命令触发
-- Web UI、IM、定时任务共用同一套消息处理链路
-
-### 使用入口
-- **Web 控制台** — 对话、专家 / 团队、连接器、通道、定时任务、知识库、插件、设置
-- **桌面客户端** — Windows / macOS / Linux 原生应用；飞牛（FnOS）安装包
-- **CLI** — `octop run`、`octop chats`、`octop acp`、管理命令
-- **HTTP/SSE/WebSocket API** — 完整的程序化访问能力
-- **远程桌面** — 在控制台操控本机桌面会话
-
-### 知识库与插件
-- **知识库** — 基于文档的 RAG 检索；支持同实例内共享语料
-- **插件** — 安装并管理第三方插件（`octop plugin`）；内置插件随安装注入，按需在控制台一键启用
-
-### ACP（Agent Client Protocol）
-
-Octop 支持两个方向的 ACP 集成：
-
-1. **入站** — 外部工具使用**你的** Octop Agent
-   ```bash
-   octop acp --agent main   # 为 Zed、OpenCode 等提供 stdio ACP 服务
-   ```
-
-2. **出站** — Octop 委派给外部编程 Agent
-   - 控制台 → **ACP**（`/acp`）：配置 Runner（按用户全局）
-   - 为 Agent 启用 **acp_runner** 后，在对话中委派任务
-
-内置出站 Runner 包括 OpenCode、CodeBuddy、Claude Code 和 Codex。
-
-完整配置：**[docs/acp.md](docs/acp.md)**。
-
-## 🧭 规划
-
-以下是我们的中长期规划：
-
-**已完成**
-- [x] **资源共享池** — 构建技能 / 子智能体共享池，用户在创建专家时可直接取用，无需从零搭建。
-- [x] **专家共享** — 支持用户将自有专家共享给其他用户使用，沉淀优秀配置、避免重复造轮子。
-- [x] **PC 端客户端** — Windows / macOS / Linux 原生桌面应用已发布，可与 Web 控制台、IM 通道并行使用。
-
-**进行中**
-- [ ] **AgentTeams** *（Beta）* — 支持协调者自主调度、编排多位专家，协同完成复杂多步骤任务。
-- [ ] **移动端客户端** *（内测中）* — 原生移动端应用，目前处于内部测试阶段。
-
-**规划中**
-- [ ] **浏览器与终端能力补全** — 增强浏览器技能*录制*（把操作流程录制为可复用技能），并完善终端 AI 助手能力。
-- [ ] **自进化能力** — 将日常对话自动沉淀为技能，让助手随使用不断成长。
-- [ ] **Managed Agents** — 平台托管的 Agent 生命周期（开通、伸缩与运维），无需自行维护完整自托管栈。
-- [ ] **Project** — 以项目为边界组织 Agent、文件与会话，围绕同一目标协作。
-- [ ] **云边端一体** — 本地运行 Octop，同时可将选定任务调度到云端执行：轻量工作留在本地，重活按需上云。
-- [ ] **插件市场** — 搭建插件市场，支持在 Octop 内发现、安装与更新第三方插件。
-- [ ] **对话式控制面** — 完善 Octop 自身 Skill，让对话即可覆盖当前控制台的完整能力：创建专家、配置通道、管理知识库，并支持开发插件。
-
-规划会随社区发展动态调整，以上仅供参考。
-
-## 🚀 快速开始
-
-### 环境要求
-
-- **macOS / Linux / Windows**
-- 无需预先安装 Python — 安装脚本通过 [uv](https://docs.astral.sh/uv/) 在 `~/.octop/` 下创建隔离的 Python 3.12 虚拟环境
-- 现代多核 CPU，并预留数 GB 内存供进程与模型/Embedding 缓存使用；磁盘需容纳数据库、Agent 工作区与文档语料
-
-### 1. 安装
-
-**macOS / Linux** — 一键安装（推荐）：
-
-```bash
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
-```
-
-**Windows（PowerShell）**：
-
-```powershell
-irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
-```
-
-**Windows（cmd）** — 下载后运行，或从已克隆的仓库执行：
-
-```bat
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.bat -o install.bat
-install.bat
-```
-
-安装完成后，请打开**新终端**，或重新加载 shell 配置：
-
-```bash
-source ~/.zshrc   # Zsh
-# 或
-source ~/.bashrc  # Bash
-```
-
-安装脚本会将 `octop` 加入 PATH（`~/.octop/bin`）。可选附加组件：
-
-```bash
-# 下载 Playwright Chromium 用于浏览器自动化（若系统已有 Chrome / Chromium 则会跳过）
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash -s -- --extras browser
-```
-
-完整安装选项见 [scripts/README.md](scripts/README.md)（`--version`、`--from-source`、`--mirror` 及 Windows 参数）。
-
-**桌面客户端**（图形界面，无需终端）— 从 [GitHub Releases](https://github.com/TencentCloud/Octop/releases/latest) 下载对应平台的安装包：
-
-| 平台 | 制品 |
-|------|------|
-| Windows | `Octop-desktop-windows-amd64-<version>.exe`（64 位）/ `Octop-desktop-windows-arm64-<version>.exe`（ARM64）— NSIS 安装程序 |
-| macOS | `Octop-desktop-darwin-arm64-<version>.dmg`（Apple 芯片）/ `Octop-desktop-darwin-amd64-<version>.dmg`（Intel） |
-| Linux | `Octop-desktop-linux-amd64-<version>.tar.gz` / `Octop-desktop-linux-arm64-<version>.tar.gz` |
-| 飞牛 NAS（FnOS） | `Octop-fnos-docker-<version>.fpk`（推荐，尤其是 ARM；amd64/arm64 镜像）/ `Octop-fnos-native-<version>.fpk`（x86_64，无需 Docker）/ `Octop-fnos-native-arm64-<version>.fpk`（ARM64，无 Docker 时再用）— 通过应用中心安装 |
-
-桌面客户端说明见 [desktop/README.md](desktop/README.md)，飞牛打包指南见 [fnos/README.md](fnos/README.md)。
-
-**备选 — PyPI**（若你已自行管理 Python 环境）：
-
-```bash
-pip install octop
-# 可选本地 ONNX Embedding 模型缓存（设置 → 模型 → 本地）：pip install "octop[local-embedding]"
-# 仅下载目录模型到 ~/.octop/embedding_models；不用于对话，也不接入 Memory。
-# 浏览器自动化依赖已内置 Playwright；Chromium 可通过安装脚本 --extras browser、
-# 控制台，或执行：python -m playwright install chromium
-```
-
-从源码用 uv 开发时：
-
-```bash
-uv sync --extra local-embedding
-```
-
-### 2. 初始化
-
-```bash
-octop init
-```
-
-交互式向导会在 `~/.octop/` 下创建 SQLite 数据库、JWT 密钥，并引导你设置首个管理员账号。
-
-### 3. 启动
-
-```bash
-# 前台运行（API + Web 控制台）
-octop run
-
-# 自定义主机与端口
-octop run --host 0.0.0.0 --port 8088
-
-# 注册为系统服务（systemd / launchd / Windows 服务）
-octop service start
-```
-
-打开 **http://127.0.0.1:8088**。Docker 若设置了合格的 `OCTOP_DEFAULT_PASSWORD`，首次启动会创建管理员（凭据写入 `/data/.octop/credential.txt`）；未设置或密码不合格则打开设置向导（向导口令在 `/data/.octop/octop-login.txt`）。交互式 `octop init` / 设置向导会让你自行设置密码（至少 8 位，且同时包含字母和数字）。
-
-### Docker（推荐用于生产部署）
-
-```bash
-# 构建并启动
-docker compose -f docker/docker-compose.yml up -d
-
-# 官方 GHCR 拉取失败时用国内源（不本地构建）
-docker compose -f docker/docker-compose.cn.yml up -d
-
-# 或手动构建
-bash docker/docker_build.sh
-docker run -d \
-  -p 8088:8088 \
-  -v octop-data:/data/.octop \
-  -e HOME=/data \
-  -e OCTOP_DEFAULT_PASSWORD="<自定义强密码，留空则进入设置向导>" \
-  octop:latest
-```
-
-打开 `http://localhost:8088`。`OCTOP_DEFAULT_PASSWORD` 合格时首次启动会创建管理员，并把凭据写入 `/data/.octop/credential.txt`。未设置或密码被策略拒绝时不自动建账号，打开页面走设置向导（向导口令在 `/data/.octop/octop-login.txt`）。可通过 `OCTOP_ADMIN_USERNAME` 覆盖用户名。
-
-> **密码策略：** 至少 8 位，且同时包含字母和数字。
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `OCTOP_PORT` | `8088` | HTTP 监听端口 |
-| `OCTOP_DEFAULT_PASSWORD` | _(未设置)_ | 首次运行管理员密码（Docker 引导）。合格则建账号；未设置或不合格则走设置向导 |
-| `OCTOP_ADMIN_USERNAME` | `admin` | 首次运行管理员用户名 |
-| `OCTOP_DATA` | `~/.octop` | 宿主机数据目录（compose 挂载） |
-
-完整变量列表见 [`.env.example`](.env.example)。
-
-### 云端部署
-
-<p>
-  <a href="https://buy.cloud.tencent.com/lighthouse?blueprintType=APP_OS&blueprintOfficialId=lhbp-nxq7695q&regionId=1&zone=ap-guangzhou-6&bundleId=bundle_rs_mc_med2_01&loginSet=AUTO_PASSWORD&goodsNum=0&from=lh-console"><img alt="部署到轻量云" width="194" height="49" src="docs/assets/deploy-on-lighthouse.png" /></a><br>
-  <a href="https://buy.cloud.tencent.com/cvm?tab=custom&step=1&devPayMode=monthly&regionId=1&zoneId=100007&instanceType=SA9.64XLARGE1152&supportConfidentiality=false&platform=TencentOS&imageId=img-n3gxkolf&systemDiskType=CLOUD_HSSD&systemDiskSize=100&systemDiskBackupQuota=0&isBackup=false&backupDiskType=ALL&backupDiskCustomizeValue=&backupQuotaSegment=1&backupQuota=1&wanIp=0&loginSet=BIND_SSH_KEY&tags=null&templateCreateMode=createLt"><img alt="部署到 CVM" width="194" height="49" src="docs/assets/deploy-on-cvm.png" /></a>
-</p>
-
-## 📑 目录
-
-- [亮点](#-亮点)
-- [概述](#-概述)
-- [核心技术](#-核心技术)
-- [功能特性](#-功能特性)
-- [规划](#-规划)
-- [快速开始](#-快速开始)
-- **部署与使用**
-  - [安装方式](#-安装方式)
-  - [配置](#️-配置)
-  - [CLI 参考](#-cli-参考)
-  - [Web 控制台](#️-web-控制台)
-  - [数据目录](#-数据目录)
-- **架构与开发**
-  - [架构](#️-架构)
-  - [项目结构](#-项目结构)
-  - [开发](#️-开发)
-- **项目信息**
-  - [安全与隐私](#-安全与隐私)
-  - [参与贡献](#-参与贡献)
-  - [更新日志](#-更新日志)
-  - [相关项目](#-相关项目)
-  - [客户企业微信群](#-客户企业微信群)
-  - [许可证](#-许可证)
-
-## 📦 安装方式
-
-| 方式 | 平台 | 说明 |
-|------|------|------|
-| 远程一键安装 | macOS / Linux | `curl …/octop/install.sh \| bash` |
-| 远程一键安装 | Windows | `irm …/octop/install.ps1 \| iex` 或 `install.bat` |
-| 本地脚本 | macOS / Linux | `bash scripts/install.sh` |
-| 本地脚本 | Windows | `scripts\install.bat` 或 `install.ps1` |
-| PyPI | 全平台 | `pip install octop`（可选 extras 如 `local-embedding`） |
-| Docker | 全平台 | `docker/docker-compose.yml`；国内镜像 `docker/docker-compose.cn.yml` |
-
-所有安装脚本均在 `~/.octop/venv` 创建隔离环境，并通过 `~/.octop/bin/octop` 包装 CLI，不会影响系统 Python。
-
-### 升级
-
-`octop update` 只替换 wheel / 二进制，你的 `~/.octop/` 数据库、工作区、密钥与 `config.json` 均会保留：
-
-```bash
-octop update          # 获取并安装最新版 Octop，若已注册系统服务则自动重启
-```
-
-数据库结构会在下次启动时自动迁移；仅当设置向导提示需要迁移时才运行 `octop init`。跨版本升级前请务必先备份（`octop backup`）。
-
-## ⚙️ 配置
-
-所有运行时数据存放在 `~/.octop/`。可通过 CLI 管理，也可直接编辑文件。
-
-```bash
-# LLM 供应商与模型
-octop models
-octop provider list
-
-# IM 通道
-octop channel list
-octop channel install
-
-# Skill（按 Agent）
-octop skills list --agent main
-
-# 定时任务
-octop cron list
-octop cron create --help
-
-# 用户（管理员）
-octop user list
-```
-
-### 支持的 LLM 供应商
-
-OpenAI 兼容 API、DashScope（千问）、Ollama 等预设 — 在控制台或通过 `octop provider` 按 Agent 配置。
-
-### 支持的通道
-
-| 通道 | 所需凭证 |
-|------|----------|
-| **飞书** | App ID、App Secret |
-| **钉钉** | App Key、App Secret |
-| **QQ** | Bot AppID、Token |
-| **微信** | 扫码绑定 / 账号凭证；见 [CLI](docs/cli.md) |
-| **企业微信** | Corp ID、Agent Secret |
-| **Web 控制台** | 默认启用 |
-
-其他通道类型（如元宝、小艺、MQTT 等）可通过网关接入 — 详见控制台或 CLI 的通道配置。
-
-### 支持的连接器
-
-内置 OAuth / MCP 连接器包括腾讯文档、腾讯会议、Notion、滴答清单、OpenAlex、飞书 CLI、企业微信 CLI、Agent Mail、Obsidian、WeKnora、Dify 等。名称与描述支持中英双语。
-
-完整目录、鉴权类型与 MCP 模式见 **[docs/connectors.md](docs/connectors.md)**。也可在控制台添加自定义 MCP。
-
-## 📖 CLI 参考
-
-| 命令 | 说明 |
-|------|------|
-| `octop init` | 初始化 `~/.octop/`（数据库、管理员、JWT 密钥） |
-| `octop run` | 前台启动 Octop |
-| `octop service start` | 安装并启动系统服务 |
-| `octop service stop` | 停止系统服务 |
-| `octop agent` | 创建、列出、启停 Agent |
-| `octop channel` | 安装与管理 IM 通道 |
-| `octop chats` | REPL 与会话管理 |
-| `octop acp` | 为 IDE 提供 stdio ACP 服务 |
-| `octop cron` | 管理定时任务 |
-| `octop models` | 供应商预设与模型解析 |
-| `octop skills` | 按 Agent 启用/禁用 Skill |
-| `octop plugin` | 安装并管理第三方插件 |
-| `octop backup` | 导出 / 恢复备份 |
-| `octop clean` | 清理 CLI 状态或清空 `~/.octop/` |
-| `octop memory list` | 列出可参与记忆维护的运行中 Agent；不改动数据库。 |
-| `octop memory slim [--agent ID]` | 通过运行中的宿主备份并精简 SQLite 记忆；使用指定 Agent 或按提示选择。在终端与控制台显示进度。[详情](docs/memory-slim.md) |
-| `octop memory slim --all` | 依次维护所有符合条件的运行中 Agent，逐个显示进度；首个失败即停止。 |
-| `octop update` | 检查并安装更新 |
-
-在已登录的 Web 控制台或本地 CLI 聊天中，`/memory slim` 会说明当前 Agent 的维护方式；
-`/memory slim --all` 列出符合条件的 Agent。审阅影响后加 `--confirm` 开始维护。
-使用 `/memory status` 查看进度/结果。维护确认并开始之前，聊天始终可用。
-外部 IM 的记忆维护需要已验证的发送者权限，暂未开放。
-
-完整参考：**[docs/cli.md](docs/cli.md)**。
-
-## 🖥️ Web 控制台
-
-`octop run` 启动后访问 **http://127.0.0.1:8088**。
+- **默认多用户、多 Agent** — JWT 认证、每用户独立 Agent 与工作区、专家库，以及面向多步骤任务的团队编排。
+- **MiniApp** — Agent 创建带 schema 的数据表与单文件 HTML 界面，运行在沙箱 iframe 中，支持页面能力清单、发布、备份与桌面工作台。
+- **全通道统一入口** — 飞书、钉钉、企业微信、微信、QQ、Telegram、Discord、Web 控制台、CLI，以及 HTTP/SSE/WebSocket API 共享同一套 Agent 运行时。
+- **Connector 与 MCP** — 通过 OAuth 与 MCP 网关接入外部服务，凭据不进入 Agent 工作区。
+- **知识库、记忆、技能、插件** — 私有文档 RAG、可迁移的 Agent 记忆、可安装技能与第三方插件。
+- **自托管运维** — 首启向导、TLS / Let's Encrypt、systemd/launchd 服务、备份、原地升级，数据统一放在 `~/.octop/`。
+- **可插拔工作区后端** — 本地磁盘、Docker 沙箱、COS/S3 等远程存储，统一走 `BackendWorkspace` 抽象。
+- **ACP 双向集成** — 把 Agent 暴露给 IDE/终端客户端，或在对话中委派 Claude Code、OpenCode 等外部编码 Agent。
 
 <p align="center">
   <img src="docs/assets/readme-chat-zh.png" alt="Octop Web 控制台" width="800" />
 </p>
 
-- **对话** — 与专家 / 团队实时聊天
-- **专家** — 创建专家、选择专家库 / MBTI、共享或发布专家、配置供应商
-- **AgentTeams** *（Beta）* — 协调者 + 成员专家协作多步骤任务
-- **Connector** — OAuth 应用与 MCP 网关
-- **通道** — IM 平台配置
-- **定时任务** — 可视化 Cron 管理
-- **知识库** — 管理文档语料、语义检索与同实例共享
-- **插件** — 安装、启用与配置插件
-- **远程桌面** — 控制台内实时看屏与键鼠操控
-- **ACP** — 配置出站编程 Agent Runner
-- **设置** — 用户、安全、TLS、系统
+## 快速开始
 
-交互式 API 文档：**http://127.0.0.1:8088/api/docs**（默认关闭 — 在 `config.json` 中设置 `"enable_api_docs": true` 开启）
+**环境要求：** macOS、Linux 或 Windows；无需预装 Python。安装脚本会在 `~/.octop/` 下创建隔离环境并准备 Python 3.12。建议使用现代多核 CPU 与数 GB 内存。
 
-## 📁 数据目录
+### 安装
 
-```
-~/.octop/                          ← 安装与数据根目录
-├── config.json                    # 进程配置（含可选 database 段）
-├── octop.db                       # 默认 SQLite 控制面（用户、Agent、通道、定时任务 …）
-├── secrets/                       # JWT 密钥、通道 Token
-├── agents/<agent_id>/             # 各 Agent 工作区（SOUL.md、skills …）
-├── security/tool_guard/           # Shell 命令允许/拒绝规则
-├── logs/                          # 运行日志
-├── venv/                          # uv 管理的 Python（安装脚本布局）
-└── bin/octop                      # PATH 包装脚本 → venv/bin/octop
-```
-
-控制面也可改用 PostgreSQL（`config.json` → `database`，或 `OCTOP_DATABASE_*` / 首次设置向导）。控制面为 PostgreSQL 时，Agent 记忆**默认复用同一 DSN**（per-agent schema）；若需继续用文件记忆，在 agent 配置里设 `"memory": { "backend": { "type": "sqlite" } }`。详见 [docs/configuration.md](docs/configuration.md) 与 [docs/adr/002-database-backends.md](docs/adr/002-database-backends.md)。
-
-环境变量与 `config.json` 详见 [docs/configuration.md](docs/configuration.md)。
-
-## 🏗️ 架构
-
-```
-OctopServer
- ├─ DatabasePool         SQLite (WAL) 或 PostgreSQL
- ├─ SharedServices       依赖注入根 — 所有 repo 与配置
- ├─ ExpertCatalog        启动时扫描 agents/experts/library/
- ├─ UserManager
- │   └─ HarnessAgentManager（按用户）
- │       └─ AgentRuntime（按 Agent）
- │           ├─ HarnessAgent      Agent 运行时（octop-harness）
- │           ├─ HarnessProcessor  IM / UI / 定时任务入口
- │           ├─ ChannelManager    IM 连接（octop-gateway）
- │           └─ CronManager       APScheduler
- └─ FastAPI app (uvicorn)
-```
-
-单进程架构。重启后从控制面数据库重建状态（默认本地 SQLite；可选 PostgreSQL）。
-
-详见 [docs/architecture.md](docs/architecture.md)、[docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md) 与 [docs/adr/002-database-backends.md](docs/adr/002-database-backends.md)。
-
-## 📁 项目结构
-
-```
-src/octop/
-  config.py    环境变量配置
-  launch.py    OctopServer 启动 + uvicorn
-  infra/       业务核心（agents、gateway、cron、db、users …）
-  api/         HTTP 层 — FastAPI 路由、JWT、SSE
-  cli/         CLI 层 — Click 命令
-  dashboard/   构建后的 React SPA（wheel 产物）
-
-dashboard/     前端源码（Vite）— 在此编辑，运行 make build-frontend
-
-docker/        Docker Compose、入口脚本、构建与部署脚本
-tests/         unit/ + integration/
-```
-
-## 🛠️ 开发
-
-**前置条件：** Python 3.12+、Node 18+、[uv](https://docs.astral.sh/uv/)
+**macOS / Linux**
 
 ```bash
-# 后端
-make install          # pip install -e ".[dev]"
-make all              # format-all + lint + typecheck + test（发布门槛）
+curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
+```
 
-# 前端（另开终端）
-make dev-frontend     # Vite 开发服务器 :5173
-make build-frontend   # 生产构建 → src/octop/dashboard/
+**Windows（PowerShell）**
+
+```powershell
+irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
+```
+
+**PyPI**（自行管理 Python 时）
+
+```bash
+pip install octop
+```
+
+`--version`、`--from-source`、`--mirror`、浏览器扩展与 Windows 选项见 [scripts/README.md](scripts/README.md)。
+
+### 初始化并启动
+
+```bash
+octop init     # 创建 ~/.octop/、SQLite 数据库、JWT 密钥与首个管理员
+octop run      # 启动 API 与 Web 控制台
+```
+
+打开 **http://127.0.0.1:8088**。可用 `octop run --host 0.0.0.0 --port 8088` 指定监听地址，或用 `octop service start` 注册为系统服务。
+
+### Docker
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+# ghcr.io 不可用时使用国内源：
+docker compose -f docker/docker-compose.cn.yml up -d
+```
+
+Docker 下，有效的 `OCTOP_DEFAULT_PASSWORD` 会在首次启动时创建管理员，凭据写入 `/data/.octop/credential.txt`；否则打开首启向导，使用 `/data/.octop/octop-login.txt` 中的解锁密码完成初始化。`OCTOP_PORT`、`OCTOP_DATA`、PostgreSQL 等变量见 [`.env.example`](.env.example)。
+
+Windows / macOS / Linux 原生桌面客户端与飞牛（FnOS）安装包见 [GitHub Releases](https://github.com/TencentCloud/Octop/releases/latest)。
+
+## 你可以用它做什么
+
+| 场景 | Octop 提供什么 |
+|---|---|
+| 个人助理 | 带记忆、定时任务与 IM 入口的长期 Agent |
+| 团队 / 业务经营 | 专家与团队规划、派发、执行并记录工作 |
+| 数据采集与审核 | MiniApp 表格、表单、发布与只读公开链接 |
+| 客户侧 IM | 按专家路由的飞书 / 钉钉 / 企业微信 / 微信 / Telegram / Discord |
+| 自动化 | 定时任务、外部 webhook 与连接器轮询 |
+| 开发协作 | ACP 委派编码 Agent、终端 AI 与浏览器自动化 |
+| 远程办公 | 从控制台使用可选远程桌面与浏览器会话 |
+
+## 架构
+
+```text
+Dashboard / CLI / IM 通道 / 定时任务 / 外部事件
+                         │
+                  FastAPI + WebSocket
+                         │
+                    OctopServer
+       ┌─────────────────┼──────────────────┐
+       │                 │                  │
+  AgentManager       Gateway             Cron / events
+  （每 Agent          （IM 通道、          （调度、
+   harness 运行时）    WS hub）             投递）
+       │                 │                  │
+       └─────────────────┼──────────────────┘
+                         │
+             SharedServices / RepoBundle
+                         │
+        SQLite（默认）或 PostgreSQL
+        + 每 Agent 工作区（本地 / Docker / COS / S3）
+```
+
+Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harness](https://github.com/TencentCloud/octop-harness)、[Octop Gateway](https://github.com/TencentCloud/octop-gateway)、[Octop Memory](https://github.com/TencentCloud/octop-memory)、[Octop Browser](https://github.com/TencentCloud/octop-browser)。Octop 把它们组合进一个进程，并在启动时从控制面数据库重建运行时状态。
+
+详见 [docs/architecture.md](docs/architecture.md) 与 ADR：
+[docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md)、
+[docs/adr/002-database-backends.md](docs/adr/002-database-backends.md)。
+
+## Web 控制台与 CLI
+
+控制台覆盖对话、专家与团队、MiniApp 与桌面工作台、Connector、通道、定时任务、知识库、插件、安全与系统设置。交互式 API 文档位于 **`/api/docs`**，需在 `config.json` 设置 `"enable_api_docs": true`（默认关闭）。
+
+| 命令 | 用途 |
+|---|---|
+| `octop init` | 初始化 `~/.octop/`（数据库、管理员、JWT 密钥） |
+| `octop run` | 前台启动 API 与控制台 |
+| `octop service start` | 安装并启动系统服务 |
+| `octop agent` | 创建、列出、启停与重载 Agent |
+| `octop chats` | 对话 REPL 与会话管理 |
+| `octop channel` | 安装与管理 IM 通道 |
+| `octop cron` | 管理定时任务 |
+| `octop provider` / `octop models` | 配置 LLM 供应商与当前模型 |
+| `octop acp` | 以 Agent Client Protocol 暴露 Agent |
+| `octop backup` | 导出或恢复本地数据 |
+| `octop update` | 更新 wheel 并重启服务 |
+
+完整参考：[docs/cli.md](docs/cli.md)。API 参考：[docs/api.md](docs/api.md)。
+
+## 配置与数据
+
+```text
+~/.octop/
+├── config.json                 # 进程配置（可选 database 段）
+├── octop.db                    # SQLite 控制面
+├── secrets/                    # JWT 密钥、通道 token
+├── agents/<agent_id>/          # 每 Agent 工作区（SOUL.md、skills 等）
+├── security/tool_guard/        # Shell 命令防护规则
+├── logs/                       # 运行日志
+├── venv/                       # 安装器管理的 Python
+└── bin/octop                   # PATH 包装器
+```
+
+控制面可通过 `config.json`、`OCTOP_DATABASE_*` 或首启向导切换到 PostgreSQL。Agent 记忆与工作区文件是独立层；详见 [docs/configuration.md](docs/configuration.md) 与 [docs/adr/002-database-backends.md](docs/adr/002-database-backends.md)。
+
+## 安全与隐私
+
+- **默认本地优先** — 对话、工作区、凭据与配置都在 `~/.octop/`。
+- **多用户隔离** — JWT 认证、每用户独立 Agent 与工作区归属校验。
+- **审批与防护** — 工具级 HITL 审批、Shell 命令防护规则，以及对外/只读面的 PII 脱敏。
+- **MiniApp 不接触凭据** — 页面运行在无 JWT 的沙箱 iframe 中，外部 I/O 由宿主按能力清单代理。
+- **可选隔离** — 每个 Agent 可配置 Docker 沙箱；默认单用户环境面向可信机器优化。
+- **部署边界** — Octop 是单节点平台，不提供多租户进程隔离、分布式内核或外部队列。需要隔离时，每个客户/团队部署一个实例。
+
+## 状态与路线图
+
+当前版本：**1.0.2**。Octop 已是可用的单节点 Agent 平台；**业务 AgentOS** 方向在当前源码中继续推进。
+
+**当前源码已具备**
+
+- 多用户 Agent、专家、团队与工作区隔离。
+- MiniApp：schema 数据表、沙箱 HTML 页面、能力清单、发布、备份与桌面 Shell。
+- IM 通道、Connector/MCP、知识库、记忆、技能、插件与定时任务。
+- 访问申请与 HITL 审批的持久通知收件箱；隐藏窗口资源治理。
+
+**下一步（路线 A：单节点业务 AgentOS）**
+
+- 能力合约、边界策略（放行 / 审批 / 拒绝）与能力级审计。
+- 执行信封与监督：每 Agent 并发、超时、资源限制、重启可见性。
+- 事件平面正确性与统一调度 / 背压。
+- 覆盖所有 LLM 路径的预算硬闸门。
+- MiniApp 数据历史、引用、查询下推与应用包。
+- 端到端 trace、指标导出、成本核算与 readiness。
+
+**当前不做**
+
+- 多租户 SaaS 集群、分布式调度或通用第三方代码运行时。
+- 通用 EventBus；Octop 刻意使用五类文档化事件平面与至少一次投递。
+
+完整计划与已知缺口见 [docs/agent-os-roadmap.md](docs/agent-os-roadmap.md) 与 [docs/agent-os-status-review.md](docs/agent-os-status-review.md)。
+
+## 开发
+
+**环境要求：** Python 3.12+、Node 18+、[uv](https://docs.astral.sh/uv/)。
+
+```bash
+make install          # 安装后端开发依赖
+make install-hooks    # 启用仓库 pre-commit（make all + dashboard build）
+make all              # format-all + lint + typecheck + test（合并门槛）
+
+make dev              # 后端 + Vite 开发服务器
+make dev-frontend     # 仅 Vite 开发服务器
+make build-frontend   # dashboard/ → src/octop/dashboard/
 cd dashboard && npx tsc -b
 ```
 
-单独执行：`make test`、`make lint`、`make typecheck`、`make format`。
+定向测试：`uv run pytest tests/unit -q -x`、`uv run pytest tests/integration -q -x`。CI 同时覆盖 Linux 与 Windows，测试中不要硬编码 POSIX 路径。
 
+## 文档
 
-## 🔒 安全与隐私
+| 主题 | 入口 |
+|---|---|
+| 架构与 ADR | [docs/architecture.md](docs/architecture.md) |
+| API 参考 | [docs/api.md](docs/api.md) |
+| CLI 参考 | [docs/cli.md](docs/cli.md) |
+| 配置与数据目录 | [docs/configuration.md](docs/configuration.md) |
+| Connector 与 OAuth/MCP | [docs/connectors.md](docs/connectors.md) |
+| MiniApp | [docs/miniapp-overview.md](docs/miniapp-overview.md) |
+| AgentOS 路线图 | [docs/agent-os-roadmap.md](docs/agent-os-roadmap.md) |
+| 当前状态与缺口 | [docs/agent-os-status-review.md](docs/agent-os-status-review.md) |
+| ACP 集成 | [docs/acp.md](docs/acp.md) |
+| 专家团队 | [docs/expert-teams.md](docs/expert-teams.md) |
+| 贡献者约定 | [AGENTS.md](AGENTS.md) |
 
-- **本地优先**：配置、对话、工作区与凭证均存储在 `~/.octop/`。
-- **多用户隔离**：JWT 认证，按用户隔离 Agent 与工作区。
-- **敏感信息脱敏与工具审批**：离开工作区前自动脱敏敏感数据；高风险工具或 Shell 命令需依据护栏规则显式审批。
-- **工具护栏**：可在 `~/.octop/security/tool_guard/` 编辑 Shell 命令规则。
-- **无厂商锁定**：可自由切换 LLM 供应商、存储后端与 IM 通道。
+## 参与贡献
 
-## 🤝 参与贡献
+欢迎贡献：
 
-欢迎贡献代码：
+1. Fork 仓库，从 `develop` 创建分支。
+2. 保持改动聚焦；遵循 [AGENTS.md](AGENTS.md) 的模块边界与 i18n 规则。
+3. 提交 PR 前运行 `make all`（后端）与 `cd dashboard && npx tsc -b`（前端）。
+4. PR 目标分支为 `develop`，不是 `main`。
 
-1. Fork 本仓库
-2. 创建功能分支（`git checkout -b feature/amazing-feature`）
-3. 提交前运行 `make all`（后端）或 `make check-all`（全栈）
-4. 发起 Pull Request
+安全问题见 [SECURITY.md](SECURITY.md)。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
-完整指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题见 [SECURITY.md](SECURITY.md)。
+## 社区
 
-模块边界与编码规范见 [AGENTS.md](AGENTS.md)。
-
-## 📋 更新日志
-
-详见 [CHANGELOG.md](CHANGELOG.md)。
-
-## 🔗 相关项目
-
-| 项目 | 描述 |
-|------|------|
-| [Octop Harness](https://github.com/TencentCloud/octop-harness) | Agent 运行时 — 模型路由、工具、Skill、检查点 |
-| [Octop Gateway](https://github.com/TencentCloud/octop-gateway) | 多平台 IM 通道桥接 |
-| [Octop Memory](https://github.com/TencentCloud/octop-memory) | 层级召回与全文搜索 |
-| [Octop Browser](https://github.com/TencentCloud/octop-browser) | CDP 浏览器自动化，支持 profile 持久登录 |
-
-## 💬 客户企业微信群
-
-如需加入客户企业微信服务群，请扫码：
+- Discord：[discord.gg/QnWdhJxq9h](https://discord.gg/QnWdhJxq9h)
+- 客户企业微信群（中文）：
 
 <p align="center">
-  <img src="docs/assets/qrcode.png" alt="客户企业微信服务群二维码" width="220" />
+  <img src="docs/assets/qrcode.png" alt="企业微信客户群二维码" width="180" />
 </p>
 
-> 请扫码进入工作群，如有任何疑问或需求，请直接联系群管理员对接处理。
+## 许可证
 
-## 📄 许可证
-
-本项目采用 [MIT License](LICENSE)。
-
-## ✨ 贡献者
-
-感谢所有贡献者：
+[MIT](LICENSE)。感谢所有贡献者：
 
 <a href="https://github.com/tencentcloud/octop/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=tencentcloud/octop" />
