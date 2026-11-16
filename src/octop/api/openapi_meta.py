@@ -54,6 +54,10 @@ Text-type dashboard pushes (cron reminders, proactive care) also emit
 `{"type":"dashboard_push", ...}` on `/api/notifications/ws` (same `?token=` auth) so the
 SPA can show a toast even when the chat socket is not subscribed.
 
+MiniApp access requests emit `{"type":"app_access_request", ...}` on the same socket with a
+`deep_link` to `/apps/{app_id}`; dashboard clients show a toast and the desktop notification
+center can jump straight to the approval banner.
+
 HITL resume still uses `POST /api/agents/{agent_id}/chat/hitl/resume` (SSE).
 """
 
@@ -80,6 +84,10 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {
         "name": "chat",
         "description": "Dashboard chat: WebSocket streaming, threads, conversation history, trajectory ledger, and text-push toasts.",
+    },
+    {
+        "name": "notifications",
+        "description": "Per-user durable notification inbox for the dashboard notification center.",
     },
     {
         "name": "slash",

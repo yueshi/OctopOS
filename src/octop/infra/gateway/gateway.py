@@ -38,7 +38,8 @@ from octop.infra.gateway.ws import (
     WebSocketChannel,
     WebSocketHub,
 )
-from octop.infra.utils.locale import DEFAULT_LOCALE, Locale
+from octop.infra.notifications import create_notification
+from octop.infra.utils.locale import DEFAULT_LOCALE, Locale, resolve_user_locale
 
 if TYPE_CHECKING:
     from octop.infra.agents.manager import AgentManager
@@ -636,7 +637,51 @@ class Gateway:
         )
 
     async def notify_hitl_pending(self, user_id: int, frame: dict[str, Any]) -> None:
-        """Push a HITL pause (§7.4-2 ``approval_required``) to one user's sockets."""
+        """Push a HITL pause (§7.4-2 ``approval_required``) to one user's sockets.
+
+        The same event is persisted in the notification inbox so a refresh,
+        another tab, or a closed dashboard does not lose the approval prompt.
+        """
+        try:
+            agent_id = str(frame.get("agent_id") or "")
+            thread_id = str(frame.get("thread_id") or "")
+            pending_id = str(frame.get("pending_id") or "")
+            row = self._agent_manager.get_row(agent_id) if agent_id else None
+            raw_name = getattr(row, "name", None) if row is not None else None
+            agent_name = (
+                str(raw_name) if isinstance(raw_name, str) and raw_name.strip() else agent_id
+            )
+            locale = resolve_user_locale(
+                user_repo=self._repos.user_repo,
+                user_id=user_id,
+            )
+            deep_link = frame.get("deep_link")
+            path = (
+                deep_link
+                if isinstance(deep_link, str) and deep_link
+                else (f"/chat/{agent_id}/{thread_id}" if agent_id and thread_id else None)
+            )
+            dedupe_key = (
+                f"approval:{pending_id}" if pending_id else f"approval:{agent_id}:{thread_id}"
+            )
+            notification = await create_notification(
+                self._repos.notification_repo,
+                user_id=user_id,
+                kind="approval",
+                title=tr("notifications.hitl.title", locale),
+                body=tr(
+                    "notifications.hitl.body",
+                    locale,
+                    name=agent_name or "Octop",
+                ),
+                path=path,
+                dedupe_key=dedupe_key,
+            )
+        except Exception:  # noqa: BLE001 - persistence must not block the push
+            logger.warning("failed to persist HITL notification", exc_info=True)
+            notification = None
+        if notification is not None:
+            await self._ws_hub.push_to_user(user_id, notification)
         await self._ws_hub.push_to_user(user_id, frame)
 
     async def publish_thread_updated(

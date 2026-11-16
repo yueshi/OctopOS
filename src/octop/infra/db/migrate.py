@@ -1874,6 +1874,312 @@ def _ensure_user_groups_schema(db: DatabasePool) -> None:
     _ensure_column(db, "user_group", "avatar_icon", "TEXT")
 
 
+def _ensure_light_app_row_scope(db: DatabasePool) -> None:
+    """Add ``row_scope`` and its lookup index idempotently."""
+    if not _table_exists(db, "light_app_tables"):
+        return
+    _ensure_column(db, "light_app_tables", "row_scope", "TEXT NOT NULL DEFAULT 'app'")
+    if _table_exists(db, "light_app_rows"):
+        with db.connect() as conn:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_light_app_rows_owner "
+                "ON light_app_rows(app_id, table_key, created_by)"
+            )
+
+
+def _ensure_light_app_table_rules(db: DatabasePool) -> None:
+    """Add the v34 ``rules_json`` column idempotently."""
+    if not _table_exists(db, "light_app_tables"):
+        return
+    _ensure_column(db, "light_app_tables", "rules_json", "TEXT NOT NULL DEFAULT '{}'")
+
+
+def _ensure_app_access_request_owners(db: DatabasePool) -> None:
+    """Split the v31 request owner and add the v35 pending unique indexes."""
+    if not _table_exists(db, "app_access_requests"):
+        # A database can record v31 without the table (version was bumped by a
+        # different build). Recreate the final shape so v35 is self-contained.
+        pk = _integer_pk_sql(db)
+        with db.connect() as conn:
+            conn.execute(
+                f"""
+                CREATE TABLE app_access_requests (
+                  id                  {pk},
+                  request_id          TEXT NOT NULL UNIQUE,
+                  app_id              TEXT REFERENCES light_apps(app_id) ON DELETE CASCADE,
+                  agent_id            TEXT NOT NULL,
+                  requester_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  app_owner_user_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                  agent_owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  needed              TEXT NOT NULL,
+                  note                TEXT NOT NULL DEFAULT '',
+                  status              TEXT NOT NULL DEFAULT 'pending',
+                  created_at          INTEGER NOT NULL,
+                  resolved_at         INTEGER,
+                  resolved_by         INTEGER REFERENCES users(id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_app_access_requests_requester "
+                "ON app_access_requests(requester_user_id, created_at)"
+            )
+    _ensure_column(
+        db,
+        "app_access_requests",
+        "app_owner_user_id",
+        "INTEGER REFERENCES users(id) ON DELETE CASCADE",
+    )
+    _ensure_column(
+        db,
+        "app_access_requests",
+        "agent_owner_user_id",
+        "INTEGER REFERENCES users(id) ON DELETE CASCADE",
+    )
+    columns = _table_columns(db, "app_access_requests")
+    if "owner_user_id" in columns:
+        with db.connect() as conn:
+            if _table_exists(db, "agents"):
+                conn.execute(
+                    "UPDATE app_access_requests SET agent_owner_user_id = COALESCE("
+                    "(SELECT user_id FROM agents "
+                    "WHERE agents.agent_id = app_access_requests.agent_id), owner_user_id) "
+                    "WHERE agent_owner_user_id IS NULL"
+                )
+            else:
+                conn.execute(
+                    "UPDATE app_access_requests SET agent_owner_user_id = owner_user_id "
+                    "WHERE agent_owner_user_id IS NULL"
+                )
+            if _table_exists(db, "light_apps"):
+                conn.execute(
+                    "UPDATE app_access_requests SET app_owner_user_id = COALESCE("
+                    "(SELECT owner_user_id FROM light_apps "
+                    "WHERE light_apps.app_id = app_access_requests.app_id), owner_user_id) "
+                    "WHERE app_id IS NOT NULL AND app_owner_user_id IS NULL"
+                )
+            else:
+                conn.execute(
+                    "UPDATE app_access_requests SET app_owner_user_id = owner_user_id "
+                    "WHERE app_id IS NOT NULL AND app_owner_user_id IS NULL"
+                )
+    now = int(time.time())
+    with db.connect() as conn:
+        # Keep the newest pending row per target so the unique indexes can be
+        # created on databases that already raced.
+        conn.execute(
+            "UPDATE app_access_requests SET status = 'rejected', resolved_at = ? "
+            "WHERE status = 'pending' AND app_id IS NOT NULL AND id NOT IN ("
+            "SELECT MAX(id) FROM app_access_requests "
+            "WHERE status = 'pending' AND app_id IS NOT NULL "
+            "GROUP BY requester_user_id, app_id)",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE app_access_requests SET status = 'rejected', resolved_at = ? "
+            "WHERE status = 'pending' AND app_id IS NULL AND id NOT IN ("
+            "SELECT MAX(id) FROM app_access_requests "
+            "WHERE status = 'pending' AND app_id IS NULL "
+            "GROUP BY requester_user_id, agent_id)",
+            (now,),
+        )
+        conn.execute("DROP INDEX IF EXISTS idx_app_access_requests_owner")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_access_requests_app_owner "
+            "ON app_access_requests(app_owner_user_id, status, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_access_requests_agent_owner "
+            "ON app_access_requests(agent_owner_user_id, status, created_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_app_access_requests_pending_app "
+            "ON app_access_requests(requester_user_id, app_id) "
+            "WHERE status = 'pending' AND app_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_app_access_requests_pending_agent "
+            "ON app_access_requests(requester_user_id, agent_id) "
+            "WHERE status = 'pending' AND app_id IS NULL"
+        )
+    _drop_column(db, "app_access_requests", "owner_user_id")
+
+
+def _ensure_light_app_services_schema(db: DatabasePool) -> None:
+    """Create the v36 service declaration/cache tables idempotently."""
+    if not _table_exists(db, "light_apps"):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_services (
+              id                        {pk},
+              service_id                TEXT NOT NULL UNIQUE,
+              app_id                    TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              name                      TEXT NOT NULL,
+              provider                  TEXT NOT NULL DEFAULT 'connector',
+              connector_instance_id     TEXT NOT NULL,
+              allowed_tools_json        TEXT NOT NULL DEFAULT '[]',
+              allowed_url_prefixes_json TEXT NOT NULL DEFAULT '[]',
+              cache_ttl_seconds         INTEGER NOT NULL DEFAULT 300,
+              max_calls_per_minute      INTEGER NOT NULL DEFAULT 30,
+              public_live               INTEGER NOT NULL DEFAULT 0,
+              enabled                   INTEGER NOT NULL DEFAULT 1,
+              created_by                INTEGER NOT NULL REFERENCES users(id),
+              created_at                INTEGER NOT NULL,
+              updated_at                INTEGER NOT NULL,
+              UNIQUE(app_id, name)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_services_app "
+            "ON light_app_services(app_id, name)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS light_app_service_cache (
+              service_id    TEXT NOT NULL REFERENCES light_app_services(service_id) ON DELETE CASCADE,
+              tool          TEXT NOT NULL,
+              args_hash     TEXT NOT NULL,
+              response_json TEXT NOT NULL,
+              expires_at    INTEGER NOT NULL,
+              created_at    INTEGER NOT NULL,
+              PRIMARY KEY(service_id, tool, args_hash)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_service_cache_expiry "
+            "ON light_app_service_cache(expires_at)"
+        )
+
+
+def _ensure_light_app_events_schema(db: DatabasePool) -> None:
+    """Create the v37 event inbox table idempotently."""
+    if not _table_exists(db, "light_apps"):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_events (
+              id              {pk},
+              event_id        TEXT NOT NULL UNIQUE,
+              app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              event_type      TEXT NOT NULL,
+              source          TEXT NOT NULL DEFAULT '',
+              summary         TEXT NOT NULL DEFAULT '',
+              payload_json    TEXT NOT NULL DEFAULT '{{}}',
+              created_at      INTEGER NOT NULL,
+              acknowledged_at INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_events_app ON light_app_events(app_id, id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_events_created "
+            "ON light_app_events(created_at)"
+        )
+
+
+def _ensure_light_app_schedules_schema(db: DatabasePool) -> None:
+    """Create the v38 schedule table and migrate old source intervals once."""
+    if not _table_exists(db, "light_apps"):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_schedules (
+              id               {pk},
+              schedule_id      TEXT NOT NULL UNIQUE,
+              app_id           TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              action           TEXT NOT NULL,
+              target_json      TEXT NOT NULL DEFAULT '{{}}',
+              interval_seconds INTEGER NOT NULL,
+              next_run_at      INTEGER NOT NULL,
+              lease_until      INTEGER,
+              last_run_at      INTEGER,
+              last_status      TEXT NOT NULL DEFAULT '',
+              last_error       TEXT NOT NULL DEFAULT '',
+              failure_count    INTEGER NOT NULL DEFAULT 0,
+              enabled          INTEGER NOT NULL DEFAULT 1,
+              created_by       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              created_at       INTEGER NOT NULL,
+              updated_at       INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_schedules_due "
+            "ON light_app_schedules(enabled, next_run_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_schedules_app ON light_app_schedules(app_id)"
+        )
+        if _table_exists(db, "light_app_sources"):
+            target_expr = (
+                "json_build_object('source_id', source_id)::text"
+                if db.dialect == "postgresql"
+                else "json_object('source_id', source_id)"
+            )
+            conn.execute(
+                "INSERT INTO light_app_schedules("
+                "schedule_id, app_id, action, target_json, interval_seconds, "
+                "next_run_at, lease_until, last_run_at, last_status, last_error, "
+                "failure_count, enabled, created_by, created_at, updated_at"
+                ") SELECT "
+                "'sch_src_' || source_id, app_id, 'sync_source', "
+                f"{target_expr}, schedule_seconds, "
+                "COALESCE(next_run_at, created_at), NULL, last_run_at, "
+                "COALESCE(last_status, ''), COALESCE(last_error, ''), "
+                "COALESCE(fail_count, 0), 1, created_by, created_at, updated_at "
+                "FROM light_app_sources WHERE schedule_seconds > 0 "
+                "AND NOT EXISTS (SELECT 1 FROM light_app_schedules "
+                "WHERE schedule_id = 'sch_src_' || light_app_sources.source_id)"
+            )
+
+
+def _ensure_notifications_schema(db: DatabasePool) -> None:
+    """Create the v39 dashboard notification inbox when a DB skipped the file."""
+    if not _table_exists(db, "users"):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS notifications (
+              id              {pk},
+              notification_id TEXT NOT NULL UNIQUE,
+              user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              kind            TEXT NOT NULL,
+              title           TEXT NOT NULL,
+              body            TEXT NOT NULL DEFAULT '',
+              path            TEXT,
+              dedupe_key      TEXT,
+              read_at         INTEGER,
+              created_at      INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user_created "
+            "ON notifications(user_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user_unread "
+            "ON notifications(user_id, read_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_user_dedupe "
+            "ON notifications(user_id, dedupe_key)"
+        )
+
+
 def _ensure_light_app_rows_schema(db: DatabasePool) -> None:
     """Create the v28 row store when a DB recorded the version without it."""
     if not _table_exists(db, "light_apps") or not _table_exists(db, "light_app_tables"):
@@ -2776,6 +3082,66 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 33:
+            # ADD COLUMN is not replay-safe on SQLite; keep the helper
+            # idempotent so version rewinds and skipped migrations repair.
+            _ensure_light_app_row_scope(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 34:
+            _ensure_light_app_table_rules(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 35:
+            # ADD/DROP COLUMN is not replay-safe on SQLite; the helper also
+            # dedupes pending requests before the unique indexes are created.
+            _ensure_app_access_request_owners(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 36:
+            _ensure_light_app_services_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 37:
+            _ensure_light_app_events_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 38:
+            _ensure_light_app_schedules_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 39:
+            _ensure_notifications_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -2816,8 +3182,12 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_user_groups_schema(db)
     _ensure_light_apps_schema(db)
     _ensure_light_app_rows_schema(db)
+    _ensure_light_app_services_schema(db)
+    _ensure_light_app_events_schema(db)
+    _ensure_light_app_schedules_schema(db)
     _ensure_light_app_table_visibility(db)
     _ensure_light_app_publications_schema(db)
+    _ensure_notifications_schema(db)
     _ensure_miniapp_boards_schema(db)
     _ensure_team_board_schema(db)
     _ensure_goal_deliverables_schema(db)

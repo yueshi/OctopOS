@@ -20,6 +20,7 @@ from octop.api.routers.chat.serialize import (
     _clamp_history_limit,
     _load_projected_thread_messages,
 )
+from octop.i18n import tr
 from octop.infra.agents.security.hitl_session import parse_hitl_session_policy
 from octop.infra.agents.threads.artifact import thread_artifacts_payload
 from octop.infra.agents.threads.context_breakdown import SEGMENT_KEYS, compute_context_breakdown
@@ -30,7 +31,8 @@ from octop.infra.gateway.hitl.coordinator import pending_hitl_payload
 from octop.infra.gateway.threads import ThreadRegistry, thread_row_has_messages
 from octop.infra.history.service import HistoryArchive
 from octop.infra.history.trajectory.service import TrajectoryService
-from octop.infra.utils.locale import resolve_request_locale
+from octop.infra.notifications import create_notification
+from octop.infra.utils.locale import resolve_request_locale, resolve_user_locale
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -392,6 +394,32 @@ async def get_thread_history(
         agent_id=agent_id,
         user_id=effective_uid,
     )
+    if hitl_pending and as_user is None and server.services is not None:
+        # The pause itself lives in the harness store; mirror it into the
+        # durable notification inbox so a reload does not lose the prompt.
+        pending_id = str(hitl_pending.get("pending_id") or "")
+        if pending_id:
+            try:
+                agent_row = server.services.agent_repo.get(agent_id)
+                raw_name = getattr(agent_row, "name", None) if agent_row is not None else None
+                agent_name = (
+                    str(raw_name) if isinstance(raw_name, str) and raw_name.strip() else agent_id
+                )
+                locale = resolve_user_locale(
+                    user_repo=server.services.user_repo,
+                    user_id=user.id,
+                )
+                await create_notification(
+                    server.services.notification_repo,
+                    user_id=user.id,
+                    kind="approval",
+                    title=tr("notifications.hitl.title", locale),
+                    body=tr("notifications.hitl.body", locale, name=agent_name),
+                    path=f"/chat/{agent_id}/{thread_id}",
+                    dedupe_key=f"approval:{pending_id}",
+                )
+            except Exception:  # noqa: BLE001 - history must still render
+                logger.warning("failed to persist HITL notification", exc_info=True)
     workspace_dir = _agent_facing_workspace_dir(server, agent_id)
     return {
         "thread_id": thread_id,

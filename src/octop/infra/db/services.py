@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from octop.config import OctopConfig
 from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos.agents import AgentRepo
+from octop.infra.db.repos.app_access import AppAccessRequestRepo
+from octop.infra.db.repos.app_bindings import LightAppBindingRepo
+from octop.infra.db.repos.app_events import AppEventRepo
+from octop.infra.db.repos.app_schedules import LightAppScheduleRepo
+from octop.infra.db.repos.app_services import LightAppServiceRepo
 from octop.infra.db.repos.apps import LightAppRepo
 from octop.infra.db.repos.audit import AuditRepo
 from octop.infra.db.repos.autonomy_policy import AutonomyPolicyRepo
@@ -25,6 +30,7 @@ from octop.infra.db.repos.goal_deliverables import GoalDeliverableRepo
 from octop.infra.db.repos.hitl import HitlPendingRepo
 from octop.infra.db.repos.invites import InviteRepo
 from octop.infra.db.repos.knowledge import KnowledgeRepo
+from octop.infra.db.repos.notifications import NotificationRepo
 from octop.infra.db.repos.proactive_care_config import ProactiveCareConfigRepo
 from octop.infra.db.repos.providers import ProviderRepo
 from octop.infra.db.repos.published_experts import PublishedExpertRepo
@@ -76,8 +82,14 @@ class RepoBundle:
     skill_package_repo: SkillPackageRepo
     published_expert_repo: PublishedExpertRepo
     knowledge_repo: KnowledgeRepo
+    notification_repo: NotificationRepo
     light_app_repo: LightAppRepo
     light_app_board_repo: LightAppBoardRepo
+    app_access_repo: AppAccessRequestRepo
+    app_binding_repo: LightAppBindingRepo
+    app_service_repo: LightAppServiceRepo
+    app_event_repo: AppEventRepo
+    app_schedule_repo: LightAppScheduleRepo
     voice_provider_repo: VoiceProviderRepo
     care_push_repo: CarePushRepo
     proactive_care_config_repo: ProactiveCareConfigRepo
@@ -123,8 +135,14 @@ class RepoBundle:
             skill_package_repo=SkillPackageRepo(db),
             published_expert_repo=PublishedExpertRepo(db),
             knowledge_repo=KnowledgeRepo(db),
+            notification_repo=NotificationRepo(db),
             light_app_repo=LightAppRepo(db),
             light_app_board_repo=LightAppBoardRepo(db),
+            app_access_repo=AppAccessRequestRepo(db),
+            app_binding_repo=LightAppBindingRepo(db),
+            app_service_repo=LightAppServiceRepo(db),
+            app_event_repo=AppEventRepo(db),
+            app_schedule_repo=LightAppScheduleRepo(db),
             voice_provider_repo=VoiceProviderRepo(db),
             care_push_repo=CarePushRepo(db),
             proactive_care_config_repo=ProactiveCareConfigRepo(db),
@@ -242,12 +260,36 @@ class SharedServices:
         return self.repos.knowledge_repo
 
     @property
+    def notification_repo(self) -> NotificationRepo:
+        return self.repos.notification_repo
+
+    @property
     def light_app_repo(self) -> LightAppRepo:
         return self.repos.light_app_repo
 
     @property
     def light_app_board_repo(self) -> LightAppBoardRepo:
         return self.repos.light_app_board_repo
+
+    @property
+    def app_access_repo(self) -> AppAccessRequestRepo:
+        return self.repos.app_access_repo
+
+    @property
+    def app_binding_repo(self) -> LightAppBindingRepo:
+        return self.repos.app_binding_repo
+
+    @property
+    def app_service_repo(self) -> LightAppServiceRepo:
+        return self.repos.app_service_repo
+
+    @property
+    def app_event_repo(self) -> AppEventRepo:
+        return self.repos.app_event_repo
+
+    @property
+    def app_schedule_repo(self) -> LightAppScheduleRepo:
+        return self.repos.app_schedule_repo
 
     @property
     def voice_provider_repo(self) -> VoiceProviderRepo:

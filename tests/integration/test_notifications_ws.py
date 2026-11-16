@@ -42,6 +42,30 @@ async def test_notifications_ws_missing_token_rejected(env: Any) -> None:
             pass
 
 
+async def test_hitl_push_emits_a_durable_notification_frame(env: Any) -> None:
+    c, srv, alice_auth, _bob_auth = env
+    user = srv.user_manager.get("alice")
+    assert user is not None
+    frame = {
+        "type": "approval_required",
+        "agent_id": "ag1",
+        "thread_id": "thr1",
+        "pending_id": "hitl-1",
+        "deep_link": "/chat/ag1/thr1",
+    }
+
+    async with _notifications_ws(c, alice_auth) as ws:
+        await ws.send_json({"type": "ping"})
+        assert await ws.receive_json() == {"type": "pong"}
+        await srv.app_runtime.gateway.notify_hitl_pending(user.id, frame)
+
+        notification = await ws.receive_json()
+        assert notification["type"] == "notification"
+        assert notification["notification"]["dedupe_key"] == "approval:hitl-1"
+        assert notification["notification"]["path"] == "/chat/ag1/thr1"
+        assert await ws.receive_json() == frame
+
+
 async def test_notifications_ws_receives_user_push(env: Any) -> None:
     c, srv, alice_auth, _bob_auth = env
     user = srv.user_manager.get("alice")
