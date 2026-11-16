@@ -6,11 +6,26 @@ import type { AppSummary } from "../../api/modules/apps";
 import type { OctopThread } from "../../api/modules/octopThreads";
 import type { OctopAgent } from "../../context/AgentContext";
 import DesktopChatWindow from "./DesktopChatWindow";
+import {
+  clearDesktopNotifications,
+  getDesktopNotifications,
+} from "./desktopNotifications";
 
-const { mockList, mockCreate, mockUseChat } = vi.hoisted(() => ({
+const { mockList, mockCreate, mockUseChat, currentUser } = vi.hoisted(() => ({
   mockList: vi.fn(),
   mockCreate: vi.fn(),
   mockUseChat: vi.fn(),
+  currentUser: {
+    value: { id: 1, username: "alice", role: "admin" } as {
+      id: number;
+      username: string;
+      role: string;
+    },
+  },
+}));
+
+vi.mock("../../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => currentUser.value,
 }));
 
 vi.mock("../../api/modules/octopThreads", () => ({
@@ -80,6 +95,9 @@ const agent: OctopAgent = {
   agent_id: "agent_1",
   name: "销售助理",
   description: "跟进客户",
+  user_id: 1,
+  owner_username: "alice",
+  is_owner: true,
   persona_mbti: null,
   default_model: "openai/gpt-5",
   system_prompt: null,
@@ -158,6 +176,8 @@ describe("DesktopChatWindow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    clearDesktopNotifications();
+    currentUser.value = { id: 1, username: "alice", role: "admin" };
     mockList.mockResolvedValue([imThread, dashboardThread]);
     mockCreate.mockResolvedValue({
       thread_id: "thr_new",
@@ -284,5 +304,104 @@ describe("DesktopChatWindow", () => {
     fireEvent.click(screen.getByTestId("desktop-chat-new"));
 
     await waitFor(() => expect(mockCreate).toHaveBeenCalledWith("agent_1"));
+  });
+
+  it("shows an admin proxy banner when using another user's expert", async () => {
+    const sharedAgent: OctopAgent = {
+      ...agent,
+      user_id: 3,
+      owner_username: "jk",
+      is_owner: false,
+    };
+    render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={sharedAgent}
+        apps={[app]}
+      />,
+    );
+
+    await screen.findByText("客户跟进");
+    const banner = screen.getByTestId("desktop-chat-admin-proxy");
+    expect(banner).toHaveTextContent("Admin proxy");
+    expect(banner).toHaveTextContent("jk");
+  });
+
+  it("notifies the desktop when a permission card arrives", async () => {
+    const view = render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+      />,
+    );
+    await screen.findByText("客户跟进");
+
+    mockChat({
+      messages: [
+        {
+          id: "perm_1",
+          role: "tool",
+          content: "",
+          toolData: {
+            name: "app_create",
+            output: JSON.stringify({
+              octop_ui: { renderer: "app_permission_card", version: 1 },
+              data: {
+                app_id: "app_1",
+                agent_owner: "alice",
+                app_owner: "jk",
+              },
+            }),
+          },
+        },
+      ],
+    });
+    view.rerender(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        getDesktopNotifications().some((item) => item.kind === "security"),
+      ).toBe(true),
+    );
+  });
+
+  it("hides the admin proxy banner for owners and non-admins", async () => {
+    const { unmount } = render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+      />,
+    );
+    await screen.findByText("客户跟进");
+    expect(
+      screen.queryByTestId("desktop-chat-admin-proxy"),
+    ).not.toBeInTheDocument();
+    unmount();
+
+    currentUser.value = { id: 1, username: "alice", role: "user" };
+    render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={{ ...agent, user_id: 3, owner_username: "jk", is_owner: false }}
+        apps={[app]}
+      />,
+    );
+    await screen.findByText("客户跟进");
+    expect(
+      screen.queryByTestId("desktop-chat-admin-proxy"),
+    ).not.toBeInTheDocument();
   });
 });

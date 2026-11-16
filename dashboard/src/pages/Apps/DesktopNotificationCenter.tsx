@@ -14,10 +14,12 @@ import { useTranslation } from "react-i18next";
 
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { formatMessageTime } from "../../utils/formatMessageTime";
+import { useNavigate } from "react-router-dom";
 import {
   clearDesktopNotifications,
   markAllDesktopNotificationsRead,
   markDesktopNotificationRead,
+  syncDesktopNotifications,
   useDesktopNotifications,
   type DesktopNotification,
   type DesktopNotificationKind,
@@ -37,6 +39,29 @@ const KIND_ICON = {
   security: ShieldCheck,
   cron: Clock3,
 } satisfies Record<DesktopNotificationKind, typeof Bell>;
+
+/** Only mounted for path notifications, so desktop tests without a Router are safe. */
+function PathNotificationItem({
+  notification,
+  timeZone,
+  onOpen,
+}: {
+  notification: DesktopNotification;
+  timeZone: string;
+  onOpen: (notification: DesktopNotification) => void;
+}) {
+  const navigate = useNavigate();
+  return (
+    <NotificationItem
+      notification={notification}
+      timeZone={timeZone}
+      onOpen={(item) => {
+        onOpen(item);
+        if (item.path) navigate(item.path);
+      }}
+    />
+  );
+}
 
 function NotificationItem({
   notification,
@@ -100,6 +125,10 @@ export default function DesktopNotificationCenter({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const unread = notifications.filter((item) => !item.read).length;
+
+  useEffect(() => {
+    if (open) void syncDesktopNotifications();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -198,14 +227,23 @@ export default function DesktopNotificationCenter({
             </div>
           ) : (
             <div className={styles.desktopNotificationsList}>
-              {notifications.map((notification) => (
-                <NotificationItem
-                  key={notification.id}
-                  notification={notification}
-                  timeZone={timeZone}
-                  onOpen={openNotification}
-                />
-              ))}
+              {notifications.map((notification) =>
+                notification.path ? (
+                  <PathNotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    timeZone={timeZone}
+                    onOpen={openNotification}
+                  />
+                ) : (
+                  <NotificationItem
+                    key={notification.id}
+                    notification={notification}
+                    timeZone={timeZone}
+                    onOpen={openNotification}
+                  />
+                ),
+              )}
             </div>
           )}
         </div>

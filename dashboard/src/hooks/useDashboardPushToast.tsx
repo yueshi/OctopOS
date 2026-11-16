@@ -1,11 +1,14 @@
-import { App } from "antd";
+import { App, Button, Space } from "antd";
 import { Bell } from "lucide-react";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { useDashboardNotifySocket } from "./useDashboardNotifySocket";
 import { useAgent } from "../context/AgentContext";
+import { appsApi } from "../api/modules/apps";
 import { ExpertIcon } from "../pages/Experts/components/iconForName";
+import { message } from "../utils/antdMessage";
+import { apiErrorMessage } from "../utils/apiError";
 import {
   emitSessionEvent,
   invalidateHistory,
@@ -29,6 +32,26 @@ interface ThreadUpdatedFrame {
   thread_id: string;
   turn_active?: boolean;
   unread_count?: number;
+}
+
+interface AppAccessRequestFrame {
+  type: "app_access_request";
+  request_id: string;
+  agent_id: string;
+  app_id?: string | null;
+  app_name?: string;
+  requester?: string;
+  deep_link?: string;
+}
+
+interface AppAccessResolvedFrame {
+  type: "app_access_resolved";
+  request_id: string;
+  agent_id: string;
+  app_id?: string | null;
+  app_name?: string;
+  status: "approved" | "rejected";
+  deep_link?: string;
 }
 
 function PushToastIcon({
@@ -67,7 +90,20 @@ export function useDashboardPushToast(): void {
   refreshRef.current = refresh;
 
   useDashboardNotifySocket((raw) => {
-    const frame = raw as Partial<ApprovalRequiredFrame | ThreadUpdatedFrame>;
+    const frame = raw as Partial<
+      | ApprovalRequiredFrame
+      | ThreadUpdatedFrame
+      | AppAccessRequestFrame
+      | AppAccessResolvedFrame
+    >;
+    if (frame?.type === "app_access_request") {
+      showAccessRequestToast(frame as AppAccessRequestFrame);
+      return;
+    }
+    if (frame?.type === "app_access_resolved") {
+      showAccessResolvedToast(frame as AppAccessResolvedFrame);
+      return;
+    }
     if (frame?.type === "approval_required") {
       showApprovalToast(frame as ApprovalRequiredFrame);
       return;
@@ -144,6 +180,141 @@ export function useDashboardPushToast(): void {
       },
     });
   });
+
+  async function resolveAccessRequest(
+    frame: AppAccessRequestFrame,
+    approve: boolean,
+  ) {
+    const noticeKey = `access-request-${frame.request_id}`;
+    try {
+      const updated = approve
+        ? await appsApi.approveAccessRequest(frame.request_id)
+        : await appsApi.rejectAccessRequest(frame.request_id);
+      notificationRef.current.destroy(noticeKey);
+      if (approve && updated.status === "pending") {
+        message.info(
+          tRef.current(
+            "apps.accessRequests.partiallyApproved",
+            "Your part is done; waiting for the other owner.",
+          ),
+        );
+      } else {
+        message.success(
+          tRef.current(
+            approve
+              ? "apps.accessRequests.approved"
+              : "apps.accessRequests.rejected",
+            approve ? "Access approved" : "Access rejected",
+          ),
+        );
+      }
+    } catch (err) {
+      message.error(
+        apiErrorMessage(
+          err,
+          tRef.current(
+            "apps.accessRequests.failed",
+            "Could not resolve the request",
+          ),
+          tRef.current,
+        ),
+      );
+    }
+  }
+
+  function showAccessRequestToast(frame: AppAccessRequestFrame) {
+    if (!frame.request_id) return;
+    const noticeKey = `access-request-${frame.request_id}`;
+    const detail = [frame.requester, frame.app_name || frame.app_id]
+      .filter(Boolean)
+      .join(" → ");
+    notificationRef.current.open({
+      key: noticeKey,
+      placement: "bottomRight",
+      className: styles.notice,
+      message: (
+        <span className={styles.header}>
+          <PushToastIcon />
+          <span className={styles.title}>
+            {tRef.current("apps.desktop.accessRequestTitle")}
+          </span>
+        </span>
+      ),
+      description: (
+        <div>
+          <div className={styles.body}>{detail}</div>
+          <Space size={8} style={{ marginTop: 8 }}>
+            <Button
+              size="small"
+              type="primary"
+              onClick={(event) => {
+                event.stopPropagation();
+                void resolveAccessRequest(frame, true);
+              }}
+            >
+              {tRef.current("apps.accessRequests.approve", "Approve")}
+            </Button>
+            <Button
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation();
+                void resolveAccessRequest(frame, false);
+              }}
+            >
+              {tRef.current("apps.accessRequests.reject", "Reject")}
+            </Button>
+          </Space>
+        </div>
+      ),
+      duration: null,
+      closable: true,
+      onClick: () => {
+        notificationRef.current.destroy(noticeKey);
+        // The server omits deep_link for owners who cannot open the app page
+        // (for example an expert owner without an app ACL).
+        if (frame.deep_link) navigateRef.current(frame.deep_link);
+      },
+    });
+  }
+
+  function showAccessResolvedToast(frame: AppAccessResolvedFrame) {
+    if (!frame.request_id) return;
+    const noticeKey = `access-resolved-${frame.request_id}`;
+    const name = frame.app_name || frame.app_id || "";
+    const approved = frame.status === "approved";
+    notificationRef.current.open({
+      key: noticeKey,
+      placement: "bottomRight",
+      className: styles.notice,
+      message: (
+        <span className={styles.header}>
+          <PushToastIcon />
+          <span className={styles.title}>
+            {tRef.current("apps.desktop.accessResolvedTitle")}
+          </span>
+        </span>
+      ),
+      description: (
+        <span className={styles.body}>
+          {tRef.current(
+            approved
+              ? "apps.desktop.accessApproved"
+              : "apps.desktop.accessRejected",
+            { name },
+          )}
+        </span>
+      ),
+      duration: 8,
+      closable: true,
+      onClick: () => {
+        notificationRef.current.destroy(noticeKey);
+        const path =
+          frame.deep_link ||
+          (frame.app_id ? `/apps/${encodeURIComponent(frame.app_id)}` : "");
+        if (path) navigateRef.current(path);
+      },
+    });
+  }
 
   function showApprovalToast(frame: ApprovalRequiredFrame) {
     const agent = agentsRef.current.find((a) => a.agent_id === frame.agent_id);

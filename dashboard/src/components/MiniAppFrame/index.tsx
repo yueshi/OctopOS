@@ -11,6 +11,7 @@ import { buildSrcDoc, hasEmbeddedFrame } from "./sdk";
 import { buildWrapperDoc } from "./wrapper";
 import { attachBridge, type AppViolation, type BridgeParams } from "./bridge";
 import { effectiveCapabilities } from "./capabilities";
+import { useMiniAppDataVersion } from "./useMiniAppDataVersion";
 import { fullscreenContainer } from "../../utils/overlayContainer";
 
 const { Text } = Typography;
@@ -25,6 +26,8 @@ interface Props {
   onLaunchGame?: (gameId: string) => Promise<string>;
   /** Page capabilities; omit for legacy payloads (all page actions allowed). */
   capabilities?: readonly string[];
+  /** False while the hosting desktop window is hidden or minimized. */
+  active?: boolean;
   /** Fill the chat composer (never sends automatically). */
   onComposeMessage?: (text: string) => void | Promise<void>;
   /**
@@ -50,6 +53,7 @@ export default function MiniAppFrame({
   fill = false,
   onLaunchGame,
   capabilities,
+  active = true,
   onComposeMessage,
   onOpenExternal,
 }: Props) {
@@ -60,6 +64,11 @@ export default function MiniAppFrame({
   const [error, setError] = useState("");
   const [escaped, setEscaped] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  useMiniAppDataVersion(
+    appId,
+    frameRef,
+    Boolean(html) && !error && !escaped && active,
+  );
 
   useEffect(() => {
     let alive = true;
@@ -172,6 +181,8 @@ export default function MiniAppFrame({
               params.limit,
               params.offset,
               params.table || "main",
+              params.filters,
+              params.sort,
             );
           }
           if (method === "append") {
@@ -179,6 +190,46 @@ export default function MiniAppFrame({
               appId,
               params.row ?? {},
               params.table || "main",
+            );
+          }
+          if (method === "update") {
+            return await appsApi.updateRow(
+              appId,
+              String(params.rowId ?? ""),
+              params.row ?? {},
+              params.expectedVersion,
+            );
+          }
+          if (method === "updateMany") {
+            // One request per row: each write keeps its own CAS check and its
+            // own row scope, so a batch never turns into one big transaction.
+            const items = Array.isArray(params.rows) ? params.rows : [];
+            const failures: { row_id: string; error: string }[] = [];
+            let updated = 0;
+            for (const item of items) {
+              const rowId = String(item?.row_id ?? "");
+              try {
+                await appsApi.updateRow(
+                  appId,
+                  rowId,
+                  item?.row ?? {},
+                  item?.expected_version,
+                );
+                updated += 1;
+              } catch (err) {
+                failures.push({
+                  row_id: rowId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+            return { updated, failed: failures.length, failures };
+          }
+          if (method === "remove") {
+            return await appsApi.deleteRow(
+              appId,
+              String(params.rowId ?? ""),
+              params.expectedVersion,
             );
           }
           if (method === "generate") {
@@ -236,6 +287,32 @@ export default function MiniAppFrame({
               },
             });
             return { opened: true };
+          }
+          if (method === "events") {
+            const since = Number(params.since) || 0;
+            const limit = Number(params.limit) || 100;
+            return appsApi.events(appId, since, limit);
+          }
+          if (method === "ackEvents") {
+            return appsApi.ackEvents(appId, params.event_ids || []);
+          }
+          if (method === "service") {
+            const name = String(params.name ?? "").trim();
+            const tool = String(params.tool ?? "").trim();
+            const args =
+              params.args &&
+              typeof params.args === "object" &&
+              !Array.isArray(params.args)
+                ? params.args
+                : {};
+            const result = await appsApi.callService(appId, name, tool, args);
+            return result.value;
+          }
+          if (method === "serviceImage") {
+            const name = String(params.name ?? "").trim();
+            const url = String(params.url ?? "").trim();
+            const result = await appsApi.serviceImage(appId, name, url);
+            return result.asset;
           }
           if (method === "asset") {
             const name = String(params.name ?? "").trim();

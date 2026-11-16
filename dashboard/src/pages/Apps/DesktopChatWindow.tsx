@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Plus,
   RefreshCw,
+  ShieldAlert,
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -20,6 +21,8 @@ import {
 import type { HitlDecisionHandler } from "../../api/types/hitl";
 import type { OctopAgent } from "../../context/AgentContext";
 import { useAgent } from "../../context/AgentContext";
+import { parseOctopToolOutput } from "../../plugins/toolRenderers/parseToolOutput";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { message } from "../../utils/antdMessage";
 import { isAgentChatReady } from "../../utils/agentError";
@@ -29,7 +32,11 @@ import ChatInput, { type ChatInputHandle } from "../Chat/components/ChatInput";
 import MessageList from "../Chat/components/MessageList";
 import { useChat, type ChatAttachment } from "../Chat/hooks/useChat";
 import { parseConversationMode } from "../Chat/utils/conversationMode";
-import { findPendingAsk, hasPendingHitl } from "../Chat/utils/pendingHitl";
+import {
+  findPendingApproval,
+  findPendingAsk,
+  hasPendingHitl,
+} from "../Chat/utils/pendingHitl";
 import { formatThreadTitle } from "../Chat/utils/threadTitle";
 import { ExpertIcon } from "../Experts/components/iconForName";
 import { addDesktopNotification } from "./desktopNotifications";
@@ -105,6 +112,7 @@ export default function DesktopChatWindow({
 }: DesktopChatWindowProps) {
   const { t } = useTranslation();
   const { agents } = useAgent();
+  const currentUser = useCurrentUser();
   const timeZone = useServerTimezone();
   const tr = useCallback(
     (key: string, fallback: string) => t(key, fallback),
@@ -124,6 +132,22 @@ export default function DesktopChatWindow({
   const wasStreamingRef = useRef(false);
 
   const activeApp = apps.find((app) => app.app_id === activeAppId) ?? null;
+
+  // An admin may chat through another user's expert; make the proxy explicit
+  // and show both owners so write actions are never silently attributed.
+  const adminProxyAgentOwner =
+    currentUser?.role === "admin" &&
+    agent &&
+    agent.user_id != null &&
+    agent.user_id !== currentUser.id
+      ? agent.owner_username || ""
+      : null;
+  const adminProxyAppOwner =
+    adminProxyAgentOwner !== null &&
+    activeApp?.owner_username &&
+    activeApp.owner_username !== currentUser?.username
+      ? activeApp.owner_username
+      : null;
 
   useEffect(() => {
     if (initialAppId) setActiveAppId(initialAppId);
@@ -254,6 +278,49 @@ export default function DesktopChatWindow({
     void loadHistory(threadId);
   }, [loadHistory, threadId]);
 
+  // Surface permission blocks in the desktop notification center. Only cards
+  // that arrive after history hydration notify; opening an old conversation
+  // must not replay notifications for already-recorded errors.
+  const permissionNotifyReadyRef = useRef(false);
+  const notifiedPermissionRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!historyHydrated) return;
+    const blocked = messages.filter((item) => {
+      const output = item.toolData?.output;
+      return (
+        !!output &&
+        parseOctopToolOutput(output).octopUi?.renderer === "app_permission_card"
+      );
+    });
+    if (!permissionNotifyReadyRef.current) {
+      for (const item of blocked) notifiedPermissionRef.current.add(item.id);
+      permissionNotifyReadyRef.current = true;
+      return;
+    }
+    for (const item of blocked) {
+      if (notifiedPermissionRef.current.has(item.id)) continue;
+      notifiedPermissionRef.current.add(item.id);
+      const parsed = parseOctopToolOutput(item.toolData?.output);
+      const data = (parsed.data ?? {}) as {
+        app_id?: string;
+        app_owner?: string;
+      };
+      addDesktopNotification({
+        kind: "security",
+        title: tr(
+          "apps.desktop.permissionNotificationTitle",
+          "Permission required",
+        ),
+        body: tr(
+          "apps.desktop.permissionNotificationBody",
+          "The expert could not modify this MiniApp. Open the conversation to review access.",
+        ),
+        windowId,
+        dedupeKey: `permission:${agentId}:${data.app_id ?? item.id}`,
+      });
+    }
+  }, [messages, historyHydrated, agentId, windowId, tr]);
+
   const refreshThreads = useCallback(async () => {
     try {
       const rows = await octopThreadsApi.list(agentId, 30);
@@ -318,6 +385,12 @@ export default function DesktopChatWindow({
     () => hasPendingHitl(messages) || Boolean(findPendingAsk(messages)),
     [messages],
   );
+  const pendingApprovalId = useMemo(
+    () =>
+      findPendingApproval(messages)?.pendingId ??
+      findPendingAsk(messages)?.pendingId,
+    [messages],
+  );
   const hadPendingApprovalRef = useRef(false);
   useEffect(() => {
     if (pendingApproval && !hadPendingApprovalRef.current) {
@@ -335,11 +408,19 @@ export default function DesktopChatWindow({
           { name: agentName },
         ),
         windowId,
-        dedupeKey: `approval:${windowId ?? agentId}:${threadId ?? ""}`,
+        dedupeKey: `approval:${pendingApprovalId ?? threadId ?? agentId}`,
       });
     }
     hadPendingApprovalRef.current = pendingApproval;
-  }, [agentId, agentName, pendingApproval, threadId, tr, windowId]);
+  }, [
+    agentId,
+    agentName,
+    pendingApproval,
+    pendingApprovalId,
+    threadId,
+    tr,
+    windowId,
+  ]);
 
   const replyStreamingRef = useRef(isStreaming);
   useEffect(() => {
@@ -537,6 +618,35 @@ export default function DesktopChatWindow({
           </Tooltip>
         </div>
       </header>
+
+      {adminProxyAgentOwner !== null && (
+        <div
+          className={styles.desktopChatProxyBanner}
+          data-testid="desktop-chat-admin-proxy"
+          role="note"
+        >
+          <ShieldAlert size={12} />
+          <span className={styles.desktopChatProxyTitle}>
+            {tr("apps.desktop.adminProxy", "Admin proxy")}
+          </span>
+          <span>
+            {tr("apps.desktop.adminProxyAgent", "Expert owner")}:{" "}
+            {adminProxyAgentOwner || "—"}
+          </span>
+          {adminProxyAppOwner && (
+            <span>
+              {tr("apps.desktop.adminProxyApp", "MiniApp owner")}:{" "}
+              {adminProxyAppOwner}
+            </span>
+          )}
+          <span className={styles.desktopChatProxyAudit}>
+            {tr(
+              "apps.desktop.adminProxyAudit",
+              "Writes are recorded in the audit log",
+            )}
+          </span>
+        </div>
+      )}
 
       {panel && (
         <>

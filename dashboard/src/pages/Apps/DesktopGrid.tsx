@@ -8,7 +8,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Tooltip, Typography } from "antd";
+import { Switch, Tooltip, Typography } from "antd";
 import type { LucideIcon } from "lucide-react";
 import {
   AppWindow,
@@ -94,9 +94,22 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { AppSummary } from "../../api/modules/apps";
+import { appsApi, type AppSummary } from "../../api/modules/apps";
+import { request } from "../../api/request";
 import MiniAppFrame from "../../components/MiniAppFrame";
-import { selectEnabledExperts, useAgent } from "../../context/AgentContext";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useDashboardNotifySocket } from "../../hooks/useDashboardNotifySocket";
+import {
+  addDesktopNotification,
+  handleDesktopNotificationFrame,
+  resetDesktopNotifications,
+  syncDesktopNotifications,
+} from "./desktopNotifications";
+import {
+  selectEnabledExperts,
+  useAgent,
+  type OctopAgent,
+} from "../../context/AgentContext";
 import { ExpertIcon } from "../Experts/components/iconForName";
 import DesktopActivityCenter, {
   type DesktopActivityExpert,
@@ -137,6 +150,9 @@ import {
 import styles from "./index.module.less";
 
 const { Text } = Typography;
+
+/** Hidden app/web windows are unloaded after this delay to reclaim memory. */
+export const HIDDEN_WINDOW_SUSPEND_MS = 30 * 60 * 1000;
 
 const PALETTES: ReadonlyArray<readonly [string, string]> = [
   ["#5b8cff", "#7c5cff"],
@@ -340,9 +356,11 @@ const ICON_STYLE_CLASS: Record<AppIconStyle, string> = {
 };
 
 const UNASSIGNED_SPACE = "__unassigned__";
+const SHARED_SPACE = "__shared__";
 const ALL_APPS_SPACE = "__all_apps__";
 const DOCK_APP_LIMIT = 10;
 const ACTIVE_SPACE_KEY = "octop:apps-desktop-space:v1";
+const ADMIN_MODE_KEY = "octop:apps-desktop-admin-mode:v1";
 const EMPTY_APPS: AppSummary[] = [];
 
 interface DesktopSpace {
@@ -360,6 +378,19 @@ interface DesktopSpace {
 
 function spaceIdForApp(app: AppSummary): string {
   return app.agent_id?.trim() || UNASSIGNED_SPACE;
+}
+
+/**
+ * The desktop may only manage experts the viewer owns or that another user
+ * shared (`is_shared`). Bridge experts are provided by a connected peer and
+ * are accessible by definition.
+ */
+function desktopExpertAccessible(agent: OctopAgent): boolean {
+  return (
+    Boolean(agent.bridge) ||
+    agent.is_owner !== false ||
+    Boolean(agent.is_shared)
+  );
 }
 
 interface WindowDrag {
@@ -490,7 +521,60 @@ export default function DesktopGrid({
 }) {
   const { t } = useTranslation();
   const { agents } = useAgent();
+  const currentUser = useCurrentUser();
+  const isAdmin = currentUser?.role === "admin";
+  const [adminMode, setAdminMode] = useState(false);
+  const [allAgents, setAllAgents] = useState<OctopAgent[] | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setAdminMode(false);
+      return;
+    }
+    try {
+      setAdminMode(localStorage.getItem(ADMIN_MODE_KEY) === "1");
+    } catch {
+      setAdminMode(false);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    try {
+      localStorage.setItem(ADMIN_MODE_KEY, adminMode ? "1" : "0");
+    } catch {
+      // Private windows can disable storage; the toggle still works for now.
+    }
+  }, [adminMode, isAdmin]);
+
+  // `/agents` defaults to scope=mine (owned + shared). Admin mode needs the
+  // unshared experts too, so fetch them on demand instead of polluting the
+  // global agent context used by the chat sidebar.
+  useEffect(() => {
+    if (!isAdmin || !adminMode) {
+      setAllAgents(null);
+      return;
+    }
+    let alive = true;
+    request<OctopAgent[]>("/agents?scope=all")
+      .then((rows) => {
+        if (alive) setAllAgents(rows);
+      })
+      .catch(() => {
+        // Keep the owned/shared list when the elevated fetch fails.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [adminMode, isAdmin]);
+
+  const effectiveAgents = useMemo(() => {
+    if (!allAgents) return agents;
+    const byId = new Map(agents.map((agent) => [agent.agent_id, agent]));
+    for (const agent of allAgents) byId.set(agent.agent_id, agent);
+    return [...byId.values()];
+  }, [agents, allAgents]);
   const dragRef = useRef<WindowDrag | null>(null);
   const zRef = useRef(20);
   const seedRef = useRef(0);
@@ -507,6 +591,10 @@ export default function DesktopGrid({
   const [commandOpen, setCommandOpen] = useState(false);
   const [missionOpen, setMissionOpen] = useState(false);
   const notifications = useDesktopNotifications();
+  const [suspendedWindows, setSuspendedWindows] = useState<Set<string>>(
+    new Set(),
+  );
+  const suspendTimersRef = useRef<Map<string, number>>(new Map());
   const toggleCommandPalette = useCallback(() => {
     setSpacesOpen(false);
     setMissionOpen(false);
@@ -622,32 +710,78 @@ export default function DesktopGrid({
     });
   }, [dockInset]);
 
+  // Admin mode is an explicit, opt-in elevation: when off, even admins only
+  // see experts they own or that another user shared.
+  const allowAllExperts = isAdmin && adminMode;
+  const accessibleAgents = useMemo(
+    () =>
+      effectiveAgents.filter(
+        (agent) => allowAllExperts || desktopExpertAccessible(agent),
+      ),
+    [effectiveAgents, allowAllExperts],
+  );
+  const accessibleAgentIds = useMemo(
+    () => new Set(accessibleAgents.map((agent) => agent.agent_id)),
+    [accessibleAgents],
+  );
+  const knownAgentIds = useMemo(
+    () => new Set(effectiveAgents.map((agent) => agent.agent_id)),
+    [effectiveAgents],
+  );
+  // Apps shared from an expert the viewer cannot open must not borrow that
+  // expert's name: they gather in one "Shared with me" desktop instead. Own
+  // apps keep their agent desktop even while the agent list is still loading.
+  const spaceIdForViewer = useCallback(
+    (app: AppSummary) => {
+      const agentId = spaceIdForApp(app);
+      if (agentId === UNASSIGNED_SPACE) return agentId;
+      if (!currentUser || isAdmin || accessibleAgentIds.has(agentId)) {
+        return agentId;
+      }
+      if (app.owner_user_id === currentUser.id) return agentId;
+      return SHARED_SPACE;
+    },
+    [accessibleAgentIds, currentUser, isAdmin],
+  );
+  const visibleApps = useMemo(
+    () =>
+      apps.filter((app) => {
+        const spaceId = spaceIdForApp(app);
+        if (spaceId === UNASSIGNED_SPACE) return true;
+        // Keep apps whose expert is not in the agent list yet (initial load);
+        // only hide apps whose expert is known to be inaccessible.
+        return !knownAgentIds.has(spaceId) || accessibleAgentIds.has(spaceId);
+      }),
+    [accessibleAgentIds, apps, knownAgentIds],
+  );
   const byId = useMemo(
-    () => new Map(apps.map((app) => [app.app_id, app])),
-    [apps],
+    () => new Map(visibleApps.map((app) => [app.app_id, app])),
+    [visibleApps],
   );
   const ordered = useMemo(
     () =>
-      [...apps].sort((left, right) =>
+      [...visibleApps].sort((left, right) =>
         left.name.localeCompare(right.name, undefined, {
           numeric: true,
           sensitivity: "base",
         }),
       ),
-    [apps],
+    [visibleApps],
   );
   const spaces = useMemo(() => {
-    const agentById = new Map(agents.map((agent) => [agent.agent_id, agent]));
+    const agentById = new Map(
+      accessibleAgents.map((agent) => [agent.agent_id, agent]),
+    );
     const groups = new Map<string, AppSummary[]>();
     for (const app of ordered) {
-      const id = spaceIdForApp(app);
+      const id = spaceIdForViewer(app);
       const group = groups.get(id);
       if (group) group.push(app);
       else groups.set(id, [app]);
     }
-    // Every enabled expert gets a persistent workspace even before its first
-    // MiniApp exists; empty desktops offer a direct route into expert chat.
-    for (const agent of selectEnabledExperts(agents, null)) {
+    // Every accessible enabled expert gets a persistent workspace even before
+    // its first MiniApp exists; empty desktops offer a direct route into chat.
+    for (const agent of selectEnabledExperts(accessibleAgents, null)) {
       if (!groups.has(agent.agent_id)) groups.set(agent.agent_id, []);
     }
     const result: DesktopSpace[] = Array.from(groups, ([id, group]) => {
@@ -655,23 +789,27 @@ export default function DesktopGrid({
       const fallback = PALETTES[hashText(id) % PALETTES.length];
       return {
         id,
-        agentId: id === UNASSIGNED_SPACE ? null : id,
+        agentId: id === UNASSIGNED_SPACE || id === SHARED_SPACE ? null : id,
         kind: "expert" as const,
         name:
           id === UNASSIGNED_SPACE
             ? t("apps.desktop.unassigned", "Unassigned MiniApps")
+            : id === SHARED_SPACE
+            ? t("apps.desktop.sharedWithMe", "Shared with me")
             : agent?.name || group[0]?.agent_name || id,
-        accent: agent?.color || fallback[0],
-        iconName: agent?.icon_name ?? null,
-        iconUrl: agent?.icon_url ?? null,
+        accent: id === SHARED_SPACE ? "#0ea5e9" : agent?.color || fallback[0],
+        iconName: id === SHARED_SPACE ? "users" : agent?.icon_name ?? null,
+        iconUrl: id === SHARED_SPACE ? null : agent?.icon_url ?? null,
         state: agent?.state,
         unreadCount: agent?.unread_count ?? 0,
         apps: group,
       };
     });
+    const spaceRank = (id: string) =>
+      id === UNASSIGNED_SPACE ? 2 : id === SHARED_SPACE ? 1 : 0;
     result.sort((left, right) => {
-      if (left.id === UNASSIGNED_SPACE) return 1;
-      if (right.id === UNASSIGNED_SPACE) return -1;
+      const rank = spaceRank(left.id) - spaceRank(right.id);
+      if (rank !== 0) return rank;
       return left.name.localeCompare(right.name, undefined, {
         numeric: true,
         sensitivity: "base",
@@ -690,15 +828,17 @@ export default function DesktopGrid({
       apps: ordered,
     });
     return result;
-  }, [agents, ordered, t]);
+  }, [accessibleAgents, ordered, spaceIdForViewer, t]);
   const space = spaces.find((item) => item.id === spaceId) ?? spaces[0] ?? null;
   const currentApps = space?.apps ?? EMPTY_APPS;
   const selectedApp =
     currentApps.find((app) => app.app_id === selectedAppId) ?? null;
   const appSpace = useMemo(
     () =>
-      new Map(ordered.map((app) => [app.app_id, spaceIdForApp(app)] as const)),
-    [ordered],
+      new Map(
+        ordered.map((app) => [app.app_id, spaceIdForViewer(app)] as const),
+      ),
+    [ordered, spaceIdForViewer],
   );
   const spaceNameById = useMemo(
     () =>
@@ -717,6 +857,88 @@ export default function DesktopGrid({
         ),
       ),
     [byId, spaceNameById, windows],
+  );
+
+  // Server-backed inbox: drop the previous account's snapshot, load this
+  // user's inbox on mount, and reconcile after the tab regains focus.
+  useEffect(() => {
+    resetDesktopNotifications();
+    void syncDesktopNotifications();
+    const onFocus = () => {
+      if (document.visibilityState === "visible") {
+        void syncDesktopNotifications();
+      }
+    };
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [currentUser?.id]);
+
+  // Hidden MiniApp/web windows keep their iframe (and its JS) alive. Pause their
+  // polling immediately via ``active`` and unload the content after a long
+  // hide; reopening remounts the page, whose data is server-backed.
+  useEffect(() => {
+    const visible = new Set(
+      windows
+        .filter(
+          (win) => !win.minimized && windowSpaceId(win, appSpace) === space?.id,
+        )
+        .map((win) => win.id),
+    );
+    setSuspendedWindows((current) => {
+      let changed = false;
+      const next = new Set(current);
+      for (const id of current) {
+        const win = windows.find((item) => item.id === id);
+        if (!win || win.kind === "chat" || visible.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+    for (const win of windows) {
+      if (win.kind === "chat") continue;
+      const timer = suspendTimersRef.current.get(win.id);
+      if (visible.has(win.id)) {
+        if (timer !== undefined) {
+          window.clearTimeout(timer);
+          suspendTimersRef.current.delete(win.id);
+        }
+        continue;
+      }
+      if (timer === undefined) {
+        const next = window.setTimeout(() => {
+          suspendTimersRef.current.delete(win.id);
+          setSuspendedWindows((current) => {
+            if (current.has(win.id)) return current;
+            const updated = new Set(current);
+            updated.add(win.id);
+            return updated;
+          });
+        }, HIDDEN_WINDOW_SUSPEND_MS);
+        suspendTimersRef.current.set(win.id, next);
+      }
+    }
+    for (const [id, timer] of suspendTimersRef.current) {
+      if (!windows.some((win) => win.id === id)) {
+        window.clearTimeout(timer);
+        suspendTimersRef.current.delete(id);
+      }
+    }
+  }, [appSpace, space?.id, windows]);
+
+  useEffect(
+    () => () => {
+      for (const timer of suspendTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      suspendTimersRef.current.clear();
+    },
+    [],
   );
 
   useEffect(() => {
@@ -757,11 +979,104 @@ export default function DesktopGrid({
     [t],
   );
 
+  // Access requests arrive over the dashboard notification socket. Polling is
+  // only a fallback (focus/visibility + 5 min) so owners do not hit the API
+  // every 30 seconds just to discover there is nothing to approve.
+  const accessSeenRef = useRef<Set<string>>(new Set());
+  const accessPollReadyRef = useRef(false);
+  const accessPollingRef = useRef(false);
+  const accessLastPollRef = useRef(0);
+
+  useDashboardNotifySocket((raw) => {
+    if (handleDesktopNotificationFrame(raw)) return;
+    const frame = raw as {
+      type?: string;
+      request_id?: string;
+      app_id?: string | null;
+      app_name?: string;
+      requester?: string;
+      deep_link?: string;
+    };
+    if (frame?.type !== "app_access_request" || !frame.request_id) return;
+    if (accessSeenRef.current.has(frame.request_id)) return;
+    accessSeenRef.current.add(frame.request_id);
+    addDesktopNotification({
+      kind: "approval",
+      title: tr("apps.desktop.accessRequestTitle", "Access request"),
+      body: [frame.requester, frame.app_name || frame.app_id]
+        .filter(Boolean)
+        .join(" → "),
+      path:
+        frame.deep_link ||
+        (frame.app_id
+          ? `/apps/${encodeURIComponent(frame.app_id)}`
+          : undefined),
+      dedupeKey: `access:${frame.request_id}`,
+    });
+  });
+
+  useEffect(() => {
+    if (!currentUser) return;
+    let alive = true;
+    const poll = async (force = false) => {
+      if (accessPollingRef.current) return;
+      const now = Date.now();
+      if (!force && now - accessLastPollRef.current < 55_000) return;
+      accessPollingRef.current = true;
+      accessLastPollRef.current = now;
+      try {
+        const data = await appsApi.accessRequests({ scope: "owner" });
+        if (!alive) return;
+        for (const request of data.requests) {
+          if (accessSeenRef.current.has(request.request_id)) continue;
+          accessSeenRef.current.add(request.request_id);
+          if (!accessPollReadyRef.current) continue;
+          const appName =
+            apps.find((app) => app.app_id === request.app_id)?.name ??
+            request.app_id ??
+            "";
+          addDesktopNotification({
+            kind: "approval",
+            title: tr("apps.desktop.accessRequestTitle", "Access request"),
+            body: `${request.requester_username} → ${appName}`,
+            path: request.app_id
+              ? `/apps/${encodeURIComponent(request.app_id)}`
+              : undefined,
+            dedupeKey: `access:${request.request_id}`,
+          });
+        }
+        accessPollReadyRef.current = true;
+      } catch {
+        // Offline or not an owner; retry on the next tick.
+      } finally {
+        accessPollingRef.current = false;
+      }
+    };
+    const onFocus = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    void poll();
+    const timer = window.setInterval(onFocus, 300_000);
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [apps, currentUser, tr]);
+
   const openChatWindow = useCallback(
     (
       agentId: string,
       options?: { app?: AppSummary | null; prompt?: string },
     ) => {
+      // Never open a chat for a known expert this viewer neither owns nor
+      // shares; an agent missing from the list is left to the API's ACL.
+      if (knownAgentIds.has(agentId) && !accessibleAgentIds.has(agentId)) {
+        return;
+      }
       const id = chatWindowId(agentId);
       const nextSeed = options?.prompt
         ? {
@@ -803,7 +1118,7 @@ export default function DesktopGrid({
         return win ? [...list, win] : list;
       });
     },
-    [appSpace, dockInset],
+    [accessibleAgentIds, appSpace, dockInset, knownAgentIds],
   );
 
   const openExternalWindow = useCallback(
@@ -944,13 +1259,22 @@ export default function DesktopGrid({
   }, [openChatWindow, selectedApp, space?.agentId]);
 
   useEffect(() => {
-    setWindows((list) =>
-      list.filter(
-        (win) =>
-          win.kind === "chat" || (Boolean(win.appId) && byId.has(win.appId!)),
-      ),
-    );
-  }, [byId]);
+    setWindows((list) => {
+      const next = list.filter((win) => {
+        if (win.kind === "chat") {
+          if (!win.agentId) return false;
+          // Unknown agents are kept: the agent list may still be loading and
+          // the API ACL remains the final authority.
+          if (!knownAgentIds.has(win.agentId)) return true;
+          return accessibleAgentIds.has(win.agentId);
+        }
+        return Boolean(win.appId) && byId.has(win.appId!);
+      });
+      // Keep the previous array when nothing was pruned; otherwise a fresh
+      // array on every render would re-trigger this effect forever.
+      return next.length === list.length ? list : next;
+    });
+  }, [accessibleAgentIds, byId, knownAgentIds]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -1175,8 +1499,16 @@ export default function DesktopGrid({
 
   const openWindow = useCallback(
     (app: AppSummary) => {
-      setSelectedAppId(app.app_id);
       const targetSpace = appSpace.get(app.app_id);
+      if (
+        targetSpace &&
+        targetSpace !== UNASSIGNED_SPACE &&
+        knownAgentIds.has(targetSpace) &&
+        !accessibleAgentIds.has(targetSpace)
+      ) {
+        return;
+      }
+      setSelectedAppId(app.app_id);
       // All Apps is a library, not a window space: launching from it jumps to
       // the expert desktop that owns the MiniApp.
       if (space?.kind === "all" && targetSpace) setSpaceId(targetSpace);
@@ -1204,7 +1536,7 @@ export default function DesktopGrid({
         return win ? [...list, win] : list;
       });
     },
-    [appSpace, dockInset, space?.kind],
+    [accessibleAgentIds, appSpace, dockInset, knownAgentIds, space?.kind],
   );
 
   const commandItems = useMemo<DesktopCommandItem[]>(() => {
@@ -1749,6 +2081,25 @@ export default function DesktopGrid({
           </div>
         )}
         <div className={styles.desktopMenuActions}>
+          {isAdmin && (
+            <label
+              className={styles.desktopAdminMode}
+              data-on={adminMode ? "true" : "false"}
+              data-testid="desktop-admin-mode"
+              title={tr(
+                "apps.desktop.adminModeHint",
+                "Operate experts that are not shared (admin only)",
+              )}
+            >
+              <Switch
+                size="small"
+                checked={adminMode}
+                onChange={setAdminMode}
+                aria-label={tr("apps.desktop.adminMode", "Admin mode")}
+              />
+              <span>{tr("apps.desktop.adminMode", "Admin mode")}</span>
+            </label>
+          )}
           <button
             type="button"
             className={styles.desktopMenuButton}
@@ -1930,6 +2281,7 @@ export default function DesktopGrid({
           const title = windowTitles.get(win.id) ?? app?.name ?? "";
           const inSpace = windowSpaceId(win, appSpace) === space?.id;
           const focused = inSpace && win.z === topZ;
+          const suspended = suspendedWindows.has(win.id);
           const titleBarVisible = visibleTitleBars.has(win.id);
           const preview = dragPreview?.id === win.id ? dragPreview : null;
           const resizing = resizePreview?.id === win.id ? resizePreview : null;
@@ -1967,6 +2319,7 @@ export default function DesktopGrid({
               data-url={win.url ?? ""}
               data-minimized={win.minimized ? "true" : "false"}
               data-maximized={win.maximized ? "true" : "false"}
+              data-suspended={suspended ? "true" : "false"}
               data-dragging={preview ? "true" : "false"}
               data-resizing={resizing ? "true" : "false"}
               role="group"
@@ -2053,11 +2406,22 @@ export default function DesktopGrid({
                       : undefined
                   }
                 >
-                  {app ? (
+                  {suspended && win.kind !== "chat" ? (
+                    <div
+                      className={styles.desktopWindowSuspended}
+                      data-testid="desktop-window-suspended"
+                    >
+                      {t(
+                        "apps.desktop.suspendedWindow",
+                        "Sleeping to save resources. This window reloads when you restore it.",
+                      )}
+                    </div>
+                  ) : app ? (
                     <MiniAppFrame
                       appId={app.app_id}
                       title={app.name}
                       fill
+                      active={inSpace && !win.minimized}
                       capabilities={app.capabilities}
                       onComposeMessage={(text) => {
                         const target =

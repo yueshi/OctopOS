@@ -8,7 +8,10 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppSummary } from "../../api/modules/apps";
-import DesktopGrid, { iconSpecForApp } from "./DesktopGrid";
+import DesktopGrid, {
+  HIDDEN_WINDOW_SUSPEND_MS,
+  iconSpecForApp,
+} from "./DesktopGrid";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -342,6 +345,34 @@ describe("DesktopGrid", () => {
         vi.advanceTimersByTime(220);
       });
       expect(header).toHaveAttribute("data-titlebar", "false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unloads a hidden app window after the grace period and reloads it", () => {
+    vi.useFakeTimers();
+    try {
+      render(<DesktopGrid apps={apps} />);
+      openAppWindow("app_1");
+      expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Minimize" }));
+      expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(HIDDEN_WINDOW_SUSPEND_MS);
+      });
+      expect(screen.queryByTestId("mini-app-frame")).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("desktop-window-suspended"),
+      ).toBeInTheDocument();
+
+      const dockIcon = screen
+        .getAllByTestId("desktop-dock-icon")
+        .find((node) => node.getAttribute("data-app-id") === "app_1")!;
+      fireEvent.click(dockIcon);
+      expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

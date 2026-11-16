@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AppSummary } from "../../api/modules/apps";
 import DesktopGrid from "./DesktopGrid";
 
 vi.mock("react-i18next", () => ({
@@ -12,6 +13,10 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("../../hooks/useServerTimezone", () => ({
   useServerTimezone: () => "UTC",
+}));
+
+vi.mock("../../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => ({ id: 2, username: "Test1", role: "user" }),
 }));
 
 vi.mock("../../context/AgentContext", () => ({
@@ -72,5 +77,50 @@ describe("DesktopGrid expert workspaces", () => {
     fireEvent.click(screen.getByTestId("desktop-space-trigger"));
     expect(screen.getAllByTestId("desktop-space-option")).toHaveLength(2);
     expect(screen.getByText("All Apps")).toBeInTheDocument();
+  });
+
+  it("gathers MiniApps shared from an inaccessible expert into Shared with me", () => {
+    const sharedApp: AppSummary = {
+      app_id: "app_shared",
+      name: "共享小程序",
+      description: "",
+      agent_id: "agent_admin",
+      agent_name: "老A",
+      owner_user_id: 1,
+      owner_username: "admin",
+      permission: "view",
+      row_count: 0,
+      html_bytes: 0,
+      data_bytes: 0,
+      has_html: false,
+      has_preview: false,
+      created_at: 0,
+      updated_at: 0,
+    };
+    const ownApp: AppSummary = {
+      ...sharedApp,
+      app_id: "app_own",
+      name: "我的小程序",
+      agent_id: "agent_empty",
+      agent_name: "空桌面专家",
+      owner_user_id: 2,
+      owner_username: "Test1",
+      permission: "edit_structure",
+    };
+
+    render(<DesktopGrid apps={[sharedApp, ownApp]} />);
+
+    fireEvent.click(screen.getByTestId("desktop-space-trigger"));
+    const options = screen.getAllByTestId("desktop-space-option");
+    // The viewer's own expert desktop, the shared bucket, and All Apps.
+    expect(options).toHaveLength(3);
+    expect(screen.getByText("Shared with me")).toBeInTheDocument();
+    expect(screen.queryByText("老A")).not.toBeInTheDocument();
+
+    const sharedOption = options.find(
+      (node) => node.getAttribute("data-space-id") === "__shared__",
+    )!;
+    fireEvent.click(sharedOption);
+    expect(screen.getByText("共享小程序")).toBeInTheDocument();
   });
 });
