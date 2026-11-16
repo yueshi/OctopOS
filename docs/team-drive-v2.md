@@ -201,9 +201,9 @@ waiting → settled
 
 | 列 | 说明 |
 |---|---|
-| `event_id` PK | ULID |
+| `event_id` PK | 当前实现是短随机 id（`new_short_id()`，约 30 bit）；设计目标是 ULID，见 [event-model.md](./event-model.md) §5 |
 | `team_id` | 索引 |
-| `seq` | 每团队递增（DB 事务内分配） |
+| `seq` | 每团队递增（DB 事务内分配）；SQLite 安全，PG 并发写需改用计数器/重试 |
 | `type` | `user.message / member.replied / approval.resolved / task.changed / goal.changed / wait.due / wait.timeout / external.event / budget.threshold / runtime.boot / sweeper.heartbeat` |
 | `actor` | `user / coordinator / host:<decision_id> / member:<agent_id> / external:<source_id> / sweeper` |
 | `payload_json` | 事件体；不放全量房间文本 |
@@ -211,7 +211,8 @@ waiting → settled
 | `created_at` | |
 | `consumed_at` / `decision_id` | 被哪个 decision 消费 |
 
-保留期：默认 30 天；`DONE/CANCELLED` 事件可归档，审计所需字段保留在 `team_decisions`。
+保留期：**设计目标** 30 天；`DONE/CANCELLED` 事件可归档，审计所需字段保留在
+`team_decisions`。当前 `TeamEventRepo` 只有 append/list/mark_consumed，**尚未实现清理**。
 
 ### 4.3 `team_decisions`
 
@@ -307,7 +308,7 @@ PRIMARY KEY (task_id, depends_on_task_id)
 
 ### 5.2 去重与聚合
 
-- `dedupe_key`：`inbox:{inbox_id}`、`task:{task_id}:v{version}`、`goal:{goal_id}:{updated_at}`、`hitl:{pending_id}:{status}`、`wait:{wait_id}:{due|timeout}`、`hb:{team_id}:{bucket}`、`boot:{team_id}:{ts}`。用户消息在入口处没有稳定 id，阶段 1 用 `usermsg:{session_key}:{time_ns}` 占位（不承诺幂等）；阶段 3 接入消息 id 后换成 `msg:{message_id}`。
+- `dedupe_key`：`inbox:{inbox_id}`、`task:{task_id}:v{version}`、`goal:{goal_id}:{updated_at}:{time_ns}`、`hitl:{pending_id}:{status}`、`wait:{wait_id}:{due|timeout}`、`hb:{team_id}:{bucket}`、`boot:{team_id}:{ts}`。用户消息在入口处没有稳定 id，阶段 1 用 `usermsg:{session_key}:{time_ns}` 占位（不承诺幂等）；阶段 3 接入消息 id 后换成 `msg:{message_id}`。`goal` 追加 `time_ns` 是因为 `team_goals.updated_at` 只有秒级精度，同秒两次编辑会撞 UNIQUE 而丢事件。
 - 普通事件在 3–5 秒窗口内按团队聚合；同一团队最多一个 `pending/running` decision，后续事件合并进下一次。
 - 紧急事件（审批被拒、deadline 临近、预算硬阈值）可跳过聚合窗口，但仍受「每团队一个 decision」约束。
 - **self-event 抑制**：决策单元在本轮写看板产生的事件，`actor=host:<decision_id>`，只记录/消费，不触发下一次 decision。否则会回到「每写一次看板醒一次」的自激循环。

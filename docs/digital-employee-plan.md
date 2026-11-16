@@ -557,3 +557,41 @@ task_id 只存在于调用方（dispatcher 的 wait、self-execute 的单元）�
 | V9 | v1 drive cron 行的存量规模（决定 P0.2 保留读取多久） | M3 | — |
 | **V10** | **`usage_owner_id` 统一后，自治员工的每一笔用量都能归到自己的 `team_runtime` 行**（含 self-execute 路径） | M3/M4 | **P0.4a + S2.6 的联合 Gate**；未验证 |
 | **V11** | **agent/team 级预算足以拦住「烧钱」**（粗粒度够用） | M3 | v1 决策，事后用 M5 的 KPI 复盘；若不够再上 task 粒度 |
+
+---
+
+## 17. 2026-11-15 复核：实现现状（以代码为准）
+
+> 本节是对 §3–§10 的补充复核，不改变原计划的 S/M 编号。**结论：M0–M5 的代码主体已落地，M6 未做；M4 的 HITL Gate 实际未达成。**
+> 代码位于 `feature/light-apps` / `feature/miniapp-capabilities`（`3c04ebc8`、`6d43c362`），尚未合入 `upstream/develop` 或 `main`。
+
+### 17.1 已验证
+
+- 定向测试：`tests/integration/test_agent_tasks_api.py` + `test_autonomy_api.py` + `tests/unit/agents/test_team_self_execute.py` + `test_team_budget_gate.py` + `tests/unit/proactive` + `tests/unit/db/test_autonomy_schema.py` → **87 passed**；`test_autonomy_mount` / `test_team_autopilot` / budget / self_execute → **34 passed**；`test_teams_board_api` / `test_boards_api` → **18 passed**。
+- 执行链路可跑通：hire → `team_runtime` autopilot → heartbeat/事件 → solo 跳过 decision → dispatcher → `_submit_self` → board 回写 → `usage_log` + `budget_used`。
+- 已落地：`/agents/{id}/tasks`、`/autonomy`、`/autonomy-policy`、`/inbox`、`/metrics`、`review` 表与接口、`/agents/:agentId/board` 路由、雇用/解雇开关、`responsible_scope` 注入、`tool_scope_allow/deny` 裁剪、预算日/月窗口与原子累加。
+
+### 17.2 需要修正的结论
+
+**M4 Gate 的 HITL 在 self-execute 上不成立。** `_run_self_turn` 收到 `hitl_required` 只设 `paused=True` 并返回（`infra/agents/teams/runtime.py:477-495`），但 self-execute 直接走 `AgentManager.stream()`（`infra/agents/manager.py:1911-1929`），不经过 `GlobalProcessor` 的 `hitl_pending` 注册点（`infra/gateway/process/processor.py:1390-1407`）。后果：无人值守触发的 `ask_creator` **没有审批卡**，dispatch wait 等 sweeper 超时（默认 3600s）后 park 为 `blocked`，**不能答复续跑**。`tests/unit/agents/test_team_self_execute.py` 只断言“暂停不关任务”，未覆盖 pending 注册与恢复。
+
+**「全仓只有一份 `patch_task`」需限定为 HTTP 层。** 共享实现是 `api/common/team_board.py:75`；board 工具的 `task_update`（`infra/agents/teams/board_tools.py:290-355`）是另一条写入路径，但共用 `task_state.py` 状态机与 repo CAS。
+
+### 17.3 仍缺的项（按优先级）
+
+| # | 缺口 | 证据 | 影响 |
+|---|---|---|---|
+| 1 | self-execute 的 HITL 未接线 | 见 §17.2 | 无人值守审批无法答复/续跑 |
+| 2 | 没有目标驱动的规划唤醒 | `runtime.py:175-177,607-610`；`sweeper.py:291-298`；`coordinator.py:311-314`；`goals.py:254-256` | 只有 goal、没有 task 时不会醒来拆解 |
+| 3 | `stop()` 不取消在飞 self 回合 | `runtime.py:240-270`；`_self_tasks` :83,433-435 | 解除雇用后仍在消耗 token/产生副作用 |
+| 4 | `PUT /autonomy-policy` 不 reload | `api/routers/autonomy.py:162-177`；`manager.py:4096-4114,4246-4263` | 职责范围/工具权限改动对运行中 agent 不生效 |
+| 5 | 预算闸门只覆盖 dispatcher 派发 | `dispatcher.py:77-94,212-224`；`cron/delivery.py:161-217`；`decision.py:727-742`；`team_runtime.py:176-187` | cron/external/care/decision 可绕过或未计入；`budget_reserved` 仅审计 |
+| 6 | care 与 autonomy 共用 `active_hours_*` / `min/max_interval_hours` 列 | `autonomy_policy.py:60-71`；`proactive_care_config.py:63-92`；`sweeper.py:263-289` | 保存 care 配置会隐式给自治加 09:00–22:00 值班窗 |
+| 7 | 无 agent 级 drive/waits/decisions HTTP；看板复用不完整 | `TeamBoardPage.tsx:440-458,646-652`；`teams.py:176-182` | 数字员工不能像 team 一样 pause/resume；stop 按钮会打到 team-only 路由 |
+| 8 | `sla_tasks_per_day` / `escalate_to` 只存不读 | `autonomy_policy.py:24-25,49-50,91-92` | SLA 与汇报对象未生效 |
+| 9 | 无状态对账（M6） | 全仓无 reconcile/rebuild | 缓存漂移不可检测 |
+| 10 | `accept_mode` / 工单 / `infra/work/` 仅为设计稿 | `docs/superagent-borrowing-design.md:373-411,782-812` | 主动工作无接受模式与跨轮工单 |
+
+### 17.4 建议顺序
+
+① self-execute HITL 接线（含 pending 卡与答复续跑）→ ② 规划/空闲唤醒 → ③ `stop()` 取消在飞回合 + policy reload → ④ 预算覆盖 cron/external/care/decision → 再评估 `accept_mode` 与工单控制面。

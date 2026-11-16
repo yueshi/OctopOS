@@ -1,8 +1,14 @@
 # MiniApp 平台路线图：多视图、外部集成与分发
 
-> 状态：R1 已实施（2026-11-12）；R2/R3 待实施
+> 状态：R1 已实施（2026-11-12）；R2.0 已实施（2026-11-15）；R2.1 部分实施（2026-11-15）；R2.2 核心实施（2026-11-15，出站事件待做）；R2.3 调度核心实施（2026-11-15，workflow runner 待做）；R2.4+ 待实施
 >
 > **当前实现状态以 [MiniApp 功能与架构现状](./miniapp-overview.md) 为准；本文保留路线图决策与分期。**
+>
+> 收敛后的执行顺序见 [MiniApp 实施落地计划](./miniapp-implementation-plan.md)。
+>
+> **产品定位、取舍与重排后的阶段顺序见 [MiniApp 产品定位与路线图](./miniapp-product-plan.md)。**
+>
+> **2026-11-14 调整**：MiniApp 的数据所有权改为“展示、编排、装配，核心数据归应用服务”；大多数小应用使用平台内置数据集服务 `builtin.dataset`，不需要独立后端。执行顺序调整为 **R2.0 内置数据集 → R2.1 外部服务 → R2.2 事件 → R2.3 调度/工作流 → R2.4 公开看板**；下文 R2 的 I1a 等仍是需求来源，顺序以实施计划为准。
 >
 > 范围：工作台多 Board、实时外部数据、事件进出、统一定时任务、跨主机迁移、IM 全功能与认证。
 >
@@ -54,6 +60,7 @@
 | 7 | 跨主机迁移 | **Bundle v2：内容 + 声明，不带凭据/token**；目标机重新绑定 connector；调度默认停用 |
 | 8 | IM 全功能 | **先 owner 认证链接，后渠道身份绑定**；私聊 owner 发一次性链接，群聊/非 owner 只读；默认 `identity_mode=owner` |
 | 9 | 发布节奏 | **R1 / R2 / R3 三个独立里程碑**，每个阶段可独立合并、验收、回滚 |
+| 10 | R2.0 收尾范围（2026-11-15） | **`published` row_scope 已取消**：公开面只用表级 `public_visible` 表达，`row_scope` 只保留 `app`/`user` 描述内部协作者可见性；需要只公开部分行时使用独立公开表/投影，不再新增 row scope。计算字段延后；触发器（`on_create`/`on_update`）归 R2.2；实际切换到 external 服务归 R2.1。R2.0 以内置数据集、bindings、`app`/`user` 行级范围、状态机规则与 dataset 导出/导入收尾 |
 
 ### 2.1 决策 4 带来的顺序调整
 
@@ -99,7 +106,7 @@
 
 **数据模型**
 
-`light_apps` 新增 `capabilities_json TEXT NOT NULL DEFAULT ''`。空字符串 = 旧应用，按“全部现有能力”解释，避免迁移回填。
+`light_apps` 新增 `capabilities_json TEXT NOT NULL DEFAULT ''`。空字符串 = 旧应用，按 **R1 能力集合**解释，避免迁移回填；后续新增能力不会自动授予旧应用。
 
 **能力目录**
 
@@ -113,9 +120,9 @@
 | `events.read` | `events/onEvent`（R2） | 开 | 开 | bridge + 服务端 |
 | `ai.generate` | `generate` | **关** | 开 | bridge + 服务端 `/generate` |
 | `game.launch` | `launchGame` | **关** | 开 | bridge + 服务端 `/game-sessions` |
-| `external.fetch` | service 调用（R2） | **关** | 开（无旧方法，实际不可用） | bridge + 服务端 |
-| `events.emit` | `emitEvent`（R2） | **关** | 开（无旧方法） | bridge + 服务端 |
-| `schedules.manage` | 调度 CRUD（R2） | **关** | 开（无旧方法） | 服务端 |
+| `external.fetch` | service 调用（R2） | **关** | 关（新增能力，显式开启） | bridge + 服务端 |
+| `events.emit` | `emitEvent`（R2） | **关** | 关（新增能力，显式开启） | bridge + 服务端 |
+| `schedules.manage` | 调度 CRUD（R2） | **关** | 关（新增能力，显式开启） | 服务端 |
 
 **API 与错误**
 
@@ -137,7 +144,7 @@
 **语义**
 
 - 发布 = 冻结 HTML + 公开表结构（表清单、列定义、标签、公开可见性）。
-- 数据行继续实时读；PII 脱敏和 `public_visible` 永远用实时值（隐藏表立即失效）。
+- 数据行继续实时读；`public_visible` 用实时值（隐藏表立即失效）；PII 脱敏取 **快照 PII ∪ 实时 PII**：新增标记立即生效，解除标记需重新发布。
 - 已发布链接在重新发布前不随 `app_write_html`/schema 变化而改变。
 - 旧发布（快照为空）公开读回退实时，状态提示“尚未固定内容”。
 
@@ -256,7 +263,7 @@ miniapp_boards (
 
 - 旧应用（空 capabilities）所有现有 SDK 方法正常。
 - 新应用关掉 `ai.generate`/`data.write` 后，页面被拒；详情页数据面板不受影响。
-- 发布后改 HTML/schema，公开页不变；重新发布后更新；隐藏表/PII 立即生效。
+- 发布后改 HTML/schema，公开页不变；重新发布后更新；隐藏表与新增 PII 标记立即生效，解除 PII 标记需重新发布。
 - composeMessage 在详情页和聊天侧栏都能预填，不自动发送。
 - 多 Board 可创建/切换/拖拽/缩放；每个 Board 可在独立 Tab 全屏。
 - `make all` 全绿；`cd dashboard && npx tsc -b` 通过。
@@ -334,27 +341,29 @@ light_app_service_cache (
 
 ### 6.3 I2 事件收件箱
 
-复用 `infra/events`，新增 app 目标模式 `app.inbox`：
+复用 `infra/events`，新增 app 目标模式 `app.inbox`。当前已落地的表（v37）：
 
 ```sql
 light_app_events (
-  id           INTEGER PRIMARY KEY,
-  event_id     TEXT NOT NULL UNIQUE,
-  app_id       TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
-  direction    TEXT NOT NULL,          -- 'in' | 'out'
-  event_type   TEXT NOT NULL,
-  payload_json TEXT NOT NULL DEFAULT '{}',
-  source_id    TEXT,
-  dedupe_key   TEXT,
-  created_at   INTEGER NOT NULL,
-  seen_at      INTEGER,
-  UNIQUE(app_id, dedupe_key)
+  id              INTEGER PRIMARY KEY,
+  event_id        TEXT NOT NULL UNIQUE,
+  app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+  event_type      TEXT NOT NULL,
+  source          TEXT NOT NULL DEFAULT '',
+  summary         TEXT NOT NULL DEFAULT '',
+  payload_json    TEXT NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL,
+  acknowledged_at INTEGER
 )
 ```
 
+> 目标设计里的 `direction`、`dedupe_key`（以及 `UNIQUE(app_id, dedupe_key)`）留给出站事件；
+> 当前入站幂等键是 `event_id`，作用域修复见 [event-model.md](./event-model.md) §5。
+
 - 入站：`app.inbox` 投递写一行；页面轮询/宿主推送。
-- API：`GET /api/apps/{id}/events?since=`、`POST /api/apps/{id}/events/{event_id}/ack`。
-- SDK：`octopApp.events({since, limit})`、`octopApp.onEvent(cb)`；宿主在 app 打开时每 5–10 秒轮询并推送。
+- API：`GET /api/apps/{id}/events?since=`、`POST /api/apps/{id}/events/ack`（批量 body）。
+- SDK：`octopApp.events({since, limit})`、`octopApp.ackEvents(ids)`；`onEvent(cb)` 尚未实现。
+  宿主可以推送 `app_event` 帧，但 dashboard 消费端尚未接入，页面应以轮询为准。
 - 保留：每 app 最多 500 条 / 30 天。
 - 公开链接不提供事件接口。
 

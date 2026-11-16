@@ -1,6 +1,9 @@
 # MiniApp 对外开放事件机制：评估与设计建议
 
-> 状态：讨论稿，未实施（2026-11-11）
+> 状态：讨论稿（2026-11-11）。**2026-11-15 更新：`app.inbox` 已落地**
+> （见 [miniapp-overview.md](./miniapp-overview.md)）；本文的 app-scoped ingress key、
+> CloudEvents、事件契约、per-target ordering、egress 仍未实施。术语与投递保证以
+> [event-model.md](./event-model.md) 为准。
 >
 > **当前实现状态以 [MiniApp 功能与架构现状](./miniapp-overview.md) 为准；本文保留事件模型评估与协议对照。**
 >
@@ -16,7 +19,7 @@
 
 1. **target 身份与 target 级授权**——现在是 source 中心：source 属于用户，订阅由 owner 预先配置，发布方不能寻址某个 MiniApp。
 2. **事件契约**——`event_type` 是自由字符串，没有 schema、版本、目录；开放 API 的事件类型就是接口契约。
-3. **MiniApp 语义**——`app` target 只有 `refresh/import`，且 import 固定 `replace`（`src/octop/infra/events/worker.py:628-633`），没有 append/upsert、UI 通知、agent turn。
+3. **MiniApp 语义**——`app` target 已有 `refresh/import/inbox`；import 支持 `append`/`upsert_key`（`src/octop/infra/events/worker.py`）。仍缺 app-scoped ingress、实时 `onEvent`、`app.agent_turn`，且 `replace` 没有快照水位。
 4. **顺序与幂等**——outbox 是 at-least-once，app 并发 4（`worker.py:42`），没有 per-target 串行；`replace` 在乱序/重试下会覆盖新数据。
 
 `eventtype@host:agent:miniapp` 作为**人读别名**可以，但不建议作为规范 wire format。它把 type、target、source 三个正交维度塞进一个字符串，分隔符会和 `host:port`、IPv6、名字中的 `:`/`@` 冲突；`host` 在单实例下冗余，在多实例下是联邦问题；`agent` 是可变绑定（`src/octop/infra/db/repos/apps.py:324` 可改），`name` 不唯一，只有 `app_id` 是稳定身份。
@@ -50,11 +53,11 @@
 | 缺口 | 证据 | 影响 |
 |---|---|---|
 | **source 中心，不是 target 中心** | `service.py:117-146` 创建 source；`279-314` 由 owner 配 subscription | 发布方不能寻址 MiniApp；`eventtype@...:miniapp` 没有授权落点 |
-| **app adapter 语义太窄** | `worker.py:585-637`；import 强制 `mode="replace"`（631） | 事件只能全量覆盖，不能幂等追加/更新 |
+| **app adapter 语义仍有限** | 当前支持 refresh/import/inbox；import 默认 `append` + `client_request_id`，支持 `upsert_key` | 已能幂等追加/更新；`replace` 仍无快照水位，旧事件可能覆盖新数据；PII 列默认置空 |
 | **没有事件契约** | `service.py:79-98` 只做 exact/equals/contains；`MAX_EVENT_TYPE_CHARS=100` | 开放 API 无 schema/版本/目录，集成方无法自描述 |
 | **没有 per-target 顺序** | `worker.py:42` `MAX_CONCURRENT_APP=4`；`tick` 一次 claim 多条 | 同一 app 的事件可并发/乱序，replace 会倒退 |
 | **没有 target 级凭证** | `create_source` 只返回一个 source secret；`verify_webhook` 按 source 验签 | 泄漏一个 secret 影响该 source 全部订阅；无法只给单个 app 发 key |
-| **没有 app 级事件日志/通知** | 管理 API 全是 `/api/external/*`，按 source 查 | 集成方无法按 app 调试；MiniApp UI 收不到事件 |
+| **app 级事件日志/通知不完整** | 已有 `light_app_events` + `GET /api/apps/{id}/events`；`app_event` WS 帧没有 dashboard 消费者 | 页面可轮询，但没有统一的按 app 调试视图；实时 `onEvent` 未做 |
 | **非标准信封/签名** | `X-Octop-*` + hex HMAC over `timestamp.body` | 生态 SDK 不兼容，集成成本高（不是功能缺陷，是采用成本） |
 | **只能入站** | 没有 webhook egress target；cleanup 30 天 | 外部系统无法订阅 MiniApp 事件，也无法回放 |
 | **dedupe 并发竞态** | `external_events.py:85-110` 先 SELECT 再 INSERT | PG 并发重复请求可能撞 UNIQUE 返回 500，而不是幂等 202 |
@@ -192,7 +195,7 @@ app-scoped event log / dead-letter / replay
 
 关键点：
 
-- **append/upsert 是 P0**。`import_rows` 已支持 `mode="append"` 和 `upsert_key`（`src/octop/infra/apps/service.py:2404-2420`、`2576-2610`），`append_data_row` 也已支持 `client_request_id`（`src/octop/infra/db/repos/apps.py:334-343`）。但 worker 强制 `replace`，这两条能力在事件路径上等于没用。把 `event_id` 作为 `client_request_id`（单行）或 `source_key`（批量）传进去，重试就天然幂等。
+- **append/upsert 是 P0**。`import_rows` 已支持 `mode="append"` 和 `upsert_key`（`src/octop/infra/apps/service.py:2404-2420`、`2576-2610`），`append_data_row` 也已支持 `client_request_id`（`src/octop/infra/db/repos/apps.py:334-343`）。worker 现已改为 `append` + `client_request_id`，`upsert_key` 也已接通；仍需补 `replace` 水位和 `ImportResult` 可见性。
 - **replace 必须加保护**。当前 `_records` 只拒绝空列表（`worker.py:84-93`），但一个“部分快照”仍会覆盖全表。要求 `snapshot_version` 单调，或按 `(app, table, source)` 存 `last_event_at` 水位；旧事件直接 ignore + metric，不要静默覆盖。
 - **notify 不需要新 broker**。事件已经落在 `external_events`；加 `GET /api/apps/{app_id}/events?after_id=...`，dashboard 按现有 `data_version` 轮询模式转发给 iframe；公开页走 token-scoped SSE/轮询。MiniApp SDK 增加 `onEvent(cb)`。低延迟再上 WS/SSE，不要一上来做完整 AG-UI。
 - **agent_turn 的身份是 app owner，不是发布方**。事件是数据，不是用户指令；prompt 明确“外部内容只作数据”，预算记在 app owner，失败通知 owner。不要用只读的 app assistant 做动作类事件。
@@ -227,10 +230,10 @@ app-scoped event log / dead-letter / replay
 
 1. `POST /api/apps/{app_id}/events` + app-scoped key；内部映射到 bound source，复用 outbox。
 2. CloudEvents 解析（structured + binary），legacy 兼容；`Ce-Id` 必填。
-3. `app.append` / `app.upsert`：传 `client_request_id` / `source_key`；停止强制 `replace`。
+3. ✅（已落地）`app.append` / `app.upsert`：传 `client_request_id` / `source_key`；不再强制 `replace`。
 4. `replace` 加 `snapshot_version`/`occurred_at` 水位保护。
 5. 每 app 的 `ordering_key` / 单飞；修 dedupe 并发竞态。
-6. `GET /api/apps/{app_id}/events`（owner 可查，含 delivery 状态/错误）。
+6. ◐（部分）`GET /api/apps/{app_id}/events` 已有；尚不含 delivery 状态/错误。
 7. 最小事件类型 allowlist + JSON Schema。
 
 **P1：MiniApp 运行时与生态**

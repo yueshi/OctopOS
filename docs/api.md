@@ -424,6 +424,26 @@ same `ping`/`pong` protocol as chat) carries, among others:
   — a cron-driven turn hit a HITL pause (tool approval or `ask_creator`
   question); `deep_link` opens the paused conversation.
 
+## Notifications
+
+Durable, per-user notification inbox behind the desktop notification center.
+Approval and access-request rows survive a refresh, another tab, and a device
+switch; chat reply hints remain client-local and ephemeral.
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| `GET` | `/notifications?limit=50&unread_only=false` | user | Newest first; returns `{notifications, unread}` |
+| `POST` | `/notifications/{notification_id}/read` | owner | Idempotent; returns `{ok: true}` |
+| `POST` | `/notifications/read-all` | user | Returns `{updated}` |
+| `DELETE` | `/notifications` | user | Clears the caller's inbox; returns `{deleted}` |
+
+Rows are scoped to the signed-in user. `dedupe_key` is unique per user, so a
+repeated approval or access request updates the existing row instead of
+creating a duplicate. The notification socket also emits
+`{"type":"notification","notification":{...}}` after a row is persisted, and
+`notification.read` / `notification.read_all` / `notification.cleared` when one
+tab changes read state.
+
 ## External events (webhooks & connector polls)
 
 | Method | Path | Auth | Notes |
@@ -451,6 +471,12 @@ Webhook headers:
 
 Bodies are capped at 256 KiB; the event is stored before any agent work.
 Events and their deliveries are retained for 30 days.
+
+Delivery is **at-least-once**: a failed delivery is retried with backoff, and a
+consumer that already ran may be invoked again after a crash. The event
+`status` reports fan-out at ingest (`no_subscribers` / `dispatched`), not the
+final delivery outcome; use `/external/deliveries` for that. See
+[event-model.md](./event-model.md) for the per-target guarantees.
 
 `connector_poll` source config:
 
@@ -485,9 +511,21 @@ Subscription modes:
   the decision snapshot includes the event summary.
 - `team.notify` — dashboard toast only; no decision.
 - `app.refresh` — requires `mapping.source_id` (a MiniApp data source).
-- `app.import` — replaces rows from `payload.records` (or
-  `mapping.records_path`); `mapping.columns` maps source → destination. An
-  empty/missing record list is rejected so an event cannot wipe the table.
+- `app.import` — writes rows from `payload.records` (or `mapping.records_path`)
+  into the app table named by `mapping.table`. `mapping.columns` maps source →
+  destination. `mapping.mode` defaults to `append`; pass `"replace"` to
+  overwrite the whole table. In append mode, `mapping.upsert_key` switches to
+  upsert semantics; without it, `client_request_id` derived from the event id
+  makes retries idempotent. An empty/missing record list is rejected so an
+  event cannot wipe the table. PII-looking column values are blanked by
+  default (`include_pii` is not exposed on the event path yet), and the
+  resulting warning is not surfaced in the delivery record.
+- `app.inbox` — appends the event to the app's inbox (`light_app_events`).
+  The page reads it with `GET /api/apps/{app_id}/events?since=` and
+  acknowledges with `POST /api/apps/{app_id}/events/ack`; the SDK exposes
+  `octopApp.events()` / `ackEvents(ids)`. Delivery also pushes an `app_event`
+  frame to the app owner, but the dashboard consumer for that frame is not
+  wired yet — polling remains the source of truth.
 
 ## Workspace, skills, subagents, memory, files
 

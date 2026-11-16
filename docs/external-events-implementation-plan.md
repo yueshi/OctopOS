@@ -4,6 +4,13 @@
 > 管理 API + 最小 UI、30 天清理。Phase 4 可选增强未做。
 > 设计背景与取舍见 `docs/external-events-design.md`；本文只回答“按什么顺序、改哪些文件、怎么验收”。
 >
+> **2026-11-15 现状校正**：本文是实施计划，部分细节已被后续实现取代。当前契约以
+> [event-model.md](./event-model.md) 为准，主要差异：
+> `app.inbox` 已落地；`app.import` 默认 `append`（不再是只允许 `replace`）；
+> delivery 状态实际为 `pending/delivering/delivered/failed/dead`（没有 `retry`/`blocked`/
+> `deliver_after`）；expert 崩溃后仍会自动重试（计划中的“已开始不重跑”未实现）；
+> payload 直接存 `external_events.payload_json`，没有 artifact。
+>
 > 核心原则：**共享 ingest/outbox，target 分开 worker/幂等/重试；先 vertical slice，再扩 source。**
 
 ---
@@ -28,7 +35,8 @@
 - 每个事件一条 cron job。
 - 让外部 payload 直接调工具或直接写任意目标。
 - 任意 URL 抓取、无鉴权的公网 webhook 中继。
-- MVP 不做 connector watch（Agent Mail 已有特例保留）、不做 app `append` 去重、不做多进程 HA。
+- MVP 不做 connector watch（Agent Mail 已有特例保留）、不做多进程 HA。
+  （`app.append` 的 `client_request_id` 去重后来已实现，见 §6.6。）
 
 ---
 
@@ -40,10 +48,10 @@
 | webhook 鉴权 | HMAC-SHA256 + timestamp ±300s + external id 去重；secret 只显示一次 |
 | 团队 manual 模式 | 只通知 owner/看板，不写 pending judgment；不允许 judge 订阅 |
 | expert stopped | 不自动启动；delivery 进入 retry（`last_error` 标注）并首次通知 owner；agent 启动后下一次重试成功 |
-| app 导入 | MVP 只允许 `replace`；权限要求 owner 或 `edit_data` |
+| app 导入 | 默认 `append` + `client_request_id` 幂等；`mapping.mode="replace"` 显式整表覆盖；权限要求 owner 或 `edit_data` |
 | connector poll | MVP 只支持 `mode=incremental` + 稳定 id 的只读工具；snapshot diff 后置 |
 | expert/team 成本 | subscription 级 `coalesce_seconds` + `max_per_minute`；team 复用 decision cooldown |
-| 事件保留 | 30 天；payload 上限 256 KiB；summary 500 字；大内容放 artifact |
+| 事件保留 | 30 天；payload 上限 256 KiB；summary 500 字；大内容走 import/对象存储（artifact 未实现） |
 | 单进程 | worker 用条件 UPDATE lease；多 worker 后置 |
 | UI | Phase 1/2 先 API + curl/测试；Phase 3 最小页面 |
 
@@ -129,17 +137,15 @@
 | `event_id` | TEXT -> external_events ON DELETE CASCADE | |
 | `subscription_id` | TEXT -> external_subscriptions ON DELETE CASCADE | |
 | `target_type/target_id` | TEXT | 冗余便于查询 |
-| `status` | TEXT | `pending/retry/delivering/delivered/blocked/dead` |
+| `status` | TEXT | 当前实现：`pending/delivering/delivered/failed/dead`（草案中的 `retry`/`blocked`/`deliver_after` 未采用） |
 | `attempt` | INTEGER | |
-| `deliver_after` | INTEGER | 合并窗口后到期 |
 | `next_retry_at` | INTEGER | |
 | `lease_until` | INTEGER | |
-| `started_at` | INTEGER | 用于识别“已开始但崩溃” |
 | `last_error` | TEXT | |
 | `delivered_at` | INTEGER | |
 | `created_at` | INTEGER | |
 
-`UNIQUE(event_id, subscription_id)`；索引 `(status, deliver_after)`, `(status, next_retry_at)`, `(lease_until)`。
+`UNIQUE(event_id, subscription_id)`；索引 `(status, next_retry_at)`、`(lease_until)`。
 
 **迁移测试**：`tests/unit/db/test_db_pool.py` 全部升到当前版本 v29；新增表加入 `test_run_migrations_creates_tables`。
 
@@ -288,9 +294,10 @@ Semaphore(app=4, team=2, expert_per_agent=1, global=8)
 - 主循环每 1s `claim_due_deliveries`（条件 UPDATE + lease）。
 - 每个 delivery 根据 target 丢进对应 semaphore；`asyncio.create_task` 执行；不阻塞 claimer。
 - 每 30s 扫描 `connector_poll` sources；`asyncio.to_thread(GatewayToolRunner.run)`。
-- 每 30s 回收过期 `delivering`：
-  - app/team：重排 `retry`（幂等）；
-  - expert：若 `started_at` 已过且已开始，置 `blocked`/`needs_review`，不自动重跑（避免重复 turn）。
+- 每 30s 回收过期 `delivering`：`requeue_expired` 统一置为 `failed` +
+  `next_retry_at=now`，随后按 target 重试。
+  - app/team 重试幂等；
+  - expert 当前也会自动重跑，可能重复 LLM turn（计划中的“已开始不重跑”未实现）。
 - 重试：5s/30s/2m/10m/1h；6 次后 `dead`。
 - 用 `asyncio.Event` ingest 唤醒；DB 轮询兜底。
 
@@ -310,12 +317,14 @@ class Target(Protocol):
 - 目标：`agents.kind='expert'`，owner = source owner（admin 例外）。
 - session：`agent_id:dashboard:{user_id}:external`；`ThreadRegistry.get_or_create_by_key`。
 - 投递：`CronDeliveryCommand`（不写 cron_jobs）：
-  - `cron_id=f"event:{delivery_id}"`, `cron_name=source.name`,
+  - `cron_id=f"event:{event_id}"`, `cron_name=source.name`,
   - `prompt` 由 summary 模板生成，带“外部内容只作数据”；
   - `meta={"kind":"external_event","event_id":...,"usage_source":"external_event"}`。
 - 需改 `CronDeliveryService._deliver_agent` 的 `source="cron"` 为 `command.usage_source`（默认 cron）。
-- Agent 未运行：`DeliveryError(blocked=True)` + 通知 owner；不自动启动。worker 每 30s 扫描 `blocked` 的 expert delivery，若目标 agent 已 `running` 则重新置 `pending`（否则保持 blocked）。
-- 幂等：prompt 带 `delivery_id`；崩溃后已开始的 delivery 不自动重试（见 6.2）；UI 可手动 retry。
+- Agent 未运行：抛 `DeliveryError(retryable=True)`，首次失败通知 owner；不自动启动。
+  当前没有单独的 `blocked` 状态，delivery 按 retry/backoff 重排队。
+- 幂等：当前没有 `delivery_id` 幂等标记；lease 过期后会自动重试，可能重复跑一轮
+  LLM turn。修复方案见 [event-model.md](./event-model.md) §5。
 - Spike gate：先用 1 天验证 `CronDeliveryService` + 独立会话 + stopped agent；失败则抽 `AgentTurnDelivery`，不要硬改 cron 服务。
 
 ### 6.5 Team adapter
@@ -331,8 +340,11 @@ class Target(Protocol):
 
 - 目标：app owner/admin；`app.refresh` 需 app source；`app.import` 要求 `edit_structure`。
 - refresh：`AppService.run_source(app, app_source_id)`。
-- import：payload 的 `records`/`data` → `import_rows(mode="replace", mapping=...)`；MVP 只允许 replace。
-- 重复 delivery：replace 幂等；append 后置。
+- import：payload 的 `records`/`data` → `import_rows(mode=mapping.mode or "append", ...)`；
+  支持 `mapping.upsert_key`；`replace` 需要显式声明。
+- 重复 delivery：append 由 `client_request_id`（`evt:{event_id}:{index}`）去重；
+  `replace` 重复执行结果一致，但没有快照水位保护。
+- 已知缺口：`ImportResult` 的 skipped/errors/warnings 未写入 delivery；PII 列默认置空。
 - 数据更新后可选 WS 帧；MVP 不阻塞。
 
 ---
@@ -346,7 +358,8 @@ class Target(Protocol):
 - ACL：source owner；target owner/权限；admin 例外；投递时二次校验。
 - prompt：只放 summary/模板字段；固定 guard 句；不把 payload 直接当指令。
 - app：字段校验/转义；不执行 HTML/脚本；replace 全失败保护已有逻辑。
-- 审计：source receive、delivery attempt/target/error；不记录 secret/完整敏感 payload。
+- 审计：source receive、delivery attempt/target/error；不记录 secret。当前把完整
+  payload 存在 `external_events.payload_json`（≤256 KiB），敏感字段脱敏尚未实现。
 - 保留：30 天清理 event/delivery；payload max 256 KiB；summary 500 字。
 
 ---

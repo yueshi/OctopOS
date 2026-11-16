@@ -152,9 +152,11 @@ JWT、邀请码、OIDC SSO、LDAP；管理员/普通用户；资源级 ACL
 ### 3.6 外部事件
 
 webhook（HMAC）+ connector_poll（30 秒扫描）；订阅支持过滤/模板/合并窗口/限流；
-目标为专家 turn / 团队 judge / MiniApp 刷新；
+目标为专家 turn / 团队 judge / MiniApp refresh / import / inbox；
 投递走 DB outbox + 条件 UPDATE 租约 + 指数退避 + 死信；保留 30 天。
-详见 `docs/external-events-design.md`。
+投递是 at-least-once，消费方必须幂等；实时 WS 帧只是加速。
+术语与各平面保证见 [`docs/event-model.md`](./event-model.md)，
+实现细节与已知缺口见 `docs/external-events-design.md` §14。
 
 ### 3.7 MiniApp
 
@@ -162,7 +164,7 @@ webhook（HMAC）+ connector_poll（30 秒扫描）；订阅支持过滤/模板/
 （dashboard / ledger / board，自包含 HTML）、生成（模板 / 无 LLM 快速模式 / LLM）、
 数据源（CSV 导入 + MCP 快照同步）、只读发布链接（token hash + 发布快照）、
 应用内只读问答助手（含图表）、外部游戏接入、个人多 Board、能力清单与双层沙箱、
-20 个 `app_*` agent 工具。
+24 个 `app_*` agent 工具。
 
 **定位见 §7；完整功能、架构与实现缺口见 [MiniApp 功能与架构现状](./miniapp-overview.md)。**
 
@@ -254,7 +256,7 @@ Setup 向导、TLS 自动签发、systemd 服务、备份、在线更新、i18n�
 | 多用户与认证 | ★★★★★ | JWT / SSO / LDAP / 邀请码 / 角色 / ACL 齐全 |
 | 通道接入 | ★★★★☆ | 10 个 IM + 插件机制；企微只有扫码绑定 |
 | 团队编排 | ★★★★☆ | 目标/任务/派发/审批/预算齐全；缺独立验收人 |
-| 外部事件 | ★★★★☆ | inbox/outbox/租约/退避/死信完整；缺语义级过滤 |
+| 外部事件 | ★★★★☆ | inbox/outbox/租约/退避/死信完整；缺语义级过滤、顺序保证与投递结果可见性 |
 | MiniApp | ★★★★☆ | 数据+视图+发布+数据源+助手完整；2 万行上限 |
 | 技能/插件/连接器 | ★★★★☆ | 30 连接器 + 市场 + 上传 |
 | 运维自托管 | ★★★★☆ | setup / TLS / backup / update 齐全 |
@@ -296,7 +298,7 @@ MiniApp 不是一个平级模块，而是一条**穿透三层**的纵向链路�
 
 | 层 | 触点 |
 |---|---|
-| 执行层 | 20 个 `app_*` agent 工具 |
+| 执行层 | 24 个 `app_*` agent 工具 |
 | 数据层 | `light_apps` / `light_app_rows` / `light_app_tables` / `light_app_sources` / `light_app_publications` / `miniapp_boards` |
 | 交互层 | iframe `srcDoc` 渲染 + publication 只读公开链接 + 个人工作台看板 |
 
@@ -342,6 +344,14 @@ MiniApp 不是一个平级模块，而是一条**穿透三层**的纵向链路�
 | B4 | 主动工作跑在人类 DM 线程 | `infra/cron/manager.py:129`、`infra/agents/teams/runtime.py:376` | 抢 session lock、污染转录 |
 
 合计约 **3–4 人日**（B4 含面板分组）。
+
+事件平面另有已确认缺口（不在上述四条内，详见
+[`docs/event-model.md`](./event-model.md) §5）：
+
+- `light_app_events` 的幂等键没有按 app 作用域；同一事件 fan-out 到两个 app 会串数据。
+- PG 下 `external_events` 去重与 `team_events.seq` 分配有并发竞态；后者会静默丢事件。
+- `app.import` / `app.refresh` 的 `ImportResult` 未写入 delivery；部分失败仍显示 `delivered`。
+- 事件平面使用 6 字符随机 id（约 30 bit）；高频事件下 UNIQUE 冲突概率上升。
 
 ---
 
@@ -489,7 +499,8 @@ Super-agent 提供这层的设计模式（`docs/superagent-borrowing-design.md`�
 | 技术细节（分层、进程、存储、i18n） | `docs/architecture.md` |
 | 模块边界、改动规则、硬性禁令 | `AGENTS.md` §5 |
 | 单进程决策 | `docs/adr/001-single-process-model.md` |
-| 外部事件平面 | `docs/external-events-design.md` |
+| 事件模型与投递契约（术语、保证、已知缺口） | `docs/event-model.md` |
+| 外部事件平面（实现细节） | `docs/external-events-design.md` |
 | 团队 L3 路线图 | `docs/team-l3-roadmap.md` |
 | MiniApp 功能、架构与实现现状 | `docs/miniapp-overview.md` |
 | MiniApp 数据与协作（历史设计） | `docs/light-apps-architecture.md` |

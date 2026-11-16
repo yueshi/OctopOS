@@ -274,3 +274,8 @@ MCP Apps 规范把同样的结构写成 MUST：
 
 本次的 wrapper 就是这套结构的最小实现。未来若支持 MCP Apps 的 `ui://`
 资源，wrapper、CSP 构造和能力校验可以直接复用，只需再加一层 JSON-RPC 桥。
+
+**优先级（2026-11-15）**：做 **MCP 门面**（把 MiniApp 暴露为 MCP server + `ui://` 资源），
+**不要**把 MiniApp 重写成 MCP Apps 客户端 —— 前者数据模型不变、复用 `internal_mcp.py` 骨架；
+后者要重画「应用 = 资源 + tool」的语义。宿主覆盖、WorkBuddy 的 256 KB 门槛与授权语义，
+见 [miniapp-product-plan.md §1.4](./miniapp-product-plan.md#14-mcp-apps分发面不是地基)。

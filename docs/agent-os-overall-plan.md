@@ -1,7 +1,8 @@
 # 业务 Agent OS：整体方案
 
-Status: design record / draft
+Status: design record / adopted Route A (2026-11-15)
 Date: 2026-11-09
+Implementation roadmap: `docs/agent-os-roadmap.md`
 Scope: 把前面几轮讨论收敛成一份可执行的整体方案——内核与应用层的分层、
 业务总控的正确形态、解释 Worker 的引入、双模执行、治理平面、分布式形态、
 美业 MVP 与实施阶段。
