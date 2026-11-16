@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="#what-is-octop">What is OctopOS</a> ·
+  <a href="#what-is-octopos">What is OctopOS</a> ·
   <a href="#highlights">Highlights</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -54,36 +54,9 @@ The current focus is a **single-node business AgentOS**: agents and teams execut
 
 **Prerequisites:** macOS, Linux, or Windows; no system Python required. The installer provisions Python 3.12 in an isolated environment under `~/.octop/`. A modern multi-core machine with a few GB of RAM is recommended.
 
-### Install
+### Start
 
-**macOS / Linux**
-
-```bash
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
-```
-
-**Windows (PowerShell)**
-
-```powershell
-irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
-```
-
-**PyPI** (if you manage Python yourself)
-
-```bash
-pip install octop
-```
-
-See [scripts/README.md](scripts/README.md) for `--version`, `--from-source`, `--mirror`, browser extras, and Windows options.
-
-### Initialize and run
-
-```bash
-octop init     # creates ~/.octop/, the SQLite database, JWT secret, and the first admin
-octop run      # serves the API and Web dashboard
-```
-
-Open **http://127.0.0.1:8088**. Use a custom host/port with `octop run --host 0.0.0.0 --port 8088`, or register a service with `octop service start`.
+Start OctopOS, open **http://127.0.0.1:8088**, and complete the first-run wizard.
 
 ### Docker
 
@@ -136,7 +109,7 @@ Users / teams
         SQLite (default) or PostgreSQL
 ```
 
-The agent loop, IM gateway, memory, and browser runtime are separate packages — [Octop Harness](https://github.com/TencentCloud/octop-harness), [Octop Gateway](https://github.com/TencentCloud/octop-gateway), [Octop Memory](https://github.com/TencentCloud/octop-memory), and [Octop Browser](https://github.com/TencentCloud/octop-browser). OctopOS composes them into one process and rebuilds runtime state from the control-plane database on boot.
+Single process. `OctopServer.start()` wires the runtime tree in dependency order; a restart rebuilds state from the control-plane database. The agent loop, IM gateway, memory, and browser runtime are separate packages — [Octop Harness](https://github.com/TencentCloud/octop-harness), [Octop Gateway](https://github.com/TencentCloud/octop-gateway), [Octop Memory](https://github.com/TencentCloud/octop-memory), and [Octop Browser](https://github.com/TencentCloud/octop-browser). OctopOS composes them into one process.
 
 See [docs/architecture.md](docs/architecture.md) and the ADRs for the single-process and dual-database decisions:
 [docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md),
@@ -258,19 +231,6 @@ Contributions are welcome:
 
 Security issues: see [SECURITY.md](SECURITY.md). Release history: [CHANGELOG.md](CHANGELOG.md).
 
-## Community
-
-- Discord: [discord.gg/QnWdhJxq9h](https://discord.gg/QnWdhJxq9h)
-- WeCom customer group (CN):
-
-<p align="center">
-  <img src="docs/assets/qrcode.png" alt="WeCom customer group QR code" width="180" />
-</p>
-
 ## License
 
-[MIT](LICENSE). Thanks to all contributors:
-
-<a href="https://github.com/yueshi/OctopOS/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=yueshi/OctopOS" />
-</a>
+[MIT](LICENSE).

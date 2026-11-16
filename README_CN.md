@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="#什么是-octop">什么是 OctopOS</a> ·
+  <a href="#什么是-octopos">什么是 OctopOS</a> ·
   <a href="#亮点">亮点</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#架构">架构</a> ·
@@ -54,36 +54,9 @@ OctopOS 是一个开源、自托管的 AI 平台，面向个人、团队与小�
 
 **环境要求：** macOS、Linux 或 Windows；无需预装 Python。安装脚本会在 `~/.octop/` 下创建隔离环境并准备 Python 3.12。建议使用现代多核 CPU 与数 GB 内存。
 
-### 安装
+### 启动
 
-**macOS / Linux**
-
-```bash
-curl -fsSL https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.sh | bash
-```
-
-**Windows（PowerShell）**
-
-```powershell
-irm https://finnie-1258344699.cos.ap-guangzhou.myqcloud.com/octop/install.ps1 | iex
-```
-
-**PyPI**（自行管理 Python 时）
-
-```bash
-pip install octop
-```
-
-`--version`、`--from-source`、`--mirror`、浏览器扩展与 Windows 选项见 [scripts/README.md](scripts/README.md)。
-
-### 初始化并启动
-
-```bash
-octop init     # 创建 ~/.octop/、SQLite 数据库、JWT 密钥与首个管理员
-octop run      # 启动 API 与 Web 控制台
-```
-
-打开 **http://127.0.0.1:8088**。可用 `octop run --host 0.0.0.0 --port 8088` 指定监听地址，或用 `octop service start` 注册为系统服务。
+启动 OctopOS，打开 **http://127.0.0.1:8088**，完成首启向导。
 
 ### Docker
 
@@ -125,7 +98,8 @@ Windows / macOS / Linux 原生桌面客户端与飞牛（FnOS）安装包见 [Gi
        │                 │                  │
   AgentManager       Gateway             Cron / events
   （octop-harness，   （IM 通道、          （调度、
-   每 Agent 运行时）    WS hub）             投递）
+   每 Agent           WS hub）             投递）
+   运行时）
        │
        ├─ Provider / 工具 / 技能 / 记忆
        └─ 每 Agent 工作区（本地 / Docker / COS / S3）
@@ -135,7 +109,7 @@ Windows / macOS / Linux 原生桌面客户端与飞牛（FnOS）安装包见 [Gi
         SQLite（默认）或 PostgreSQL
 ```
 
-Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harness](https://github.com/TencentCloud/octop-harness)、[Octop Gateway](https://github.com/TencentCloud/octop-gateway)、[Octop Memory](https://github.com/TencentCloud/octop-memory)、[Octop Browser](https://github.com/TencentCloud/octop-browser)。OctopOS 把它们组合进一个进程，并在启动时从控制面数据库重建运行时状态。
+单进程。`OctopServer.start()` 按依赖顺序装配运行时树；重启时从控制面数据库重建状态。Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harness](https://github.com/TencentCloud/octop-harness)、[Octop Gateway](https://github.com/TencentCloud/octop-gateway)、[Octop Memory](https://github.com/TencentCloud/octop-memory)、[Octop Browser](https://github.com/TencentCloud/octop-browser)。OctopOS 把它们组合进一个进程。
 
 详见 [docs/architecture.md](docs/architecture.md) 与 ADR：
 [docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md)、
@@ -257,19 +231,6 @@ cd dashboard && npx tsc -b
 
 安全问题见 [SECURITY.md](SECURITY.md)。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 社区
-
-- Discord：[discord.gg/QnWdhJxq9h](https://discord.gg/QnWdhJxq9h)
-- 客户企业微信群（中文）：
-
-<p align="center">
-  <img src="docs/assets/qrcode.png" alt="企业微信客户群二维码" width="180" />
-</p>
-
 ## 许可证
 
-[MIT](LICENSE)。感谢所有贡献者：
-
-<a href="https://github.com/yueshi/OctopOS/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=yueshi/OctopOS" />
-</a>
+[MIT](LICENSE)。
