@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "智总管",
-  "short_name": "智总管",
+  "name": "OctopOS",
+  "short_name": "OctopOS",
   "description": "小微企业的智能管理助手 — 多用户、多专家",
   "start_url": "/",
   "scope": "/",

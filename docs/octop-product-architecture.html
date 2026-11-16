@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="智总管（开源项目 Octop）产品与架构全景：功能地图、应用场景、产品与技术架构、成熟度与销售边界。">
+<meta name="description" content="OctopOS 产品与架构全景：功能地图、应用场景、产品与技术架构、成熟度与销售边界。">
 <meta name="theme-color" content="#0b2434">
-<title>智总管 产品与架构全景 · 销售 / 产品 / 研发共用版</title>
+<title>OctopOS 产品与架构全景 · 销售 / 产品 / 研发共用版</title>
 <style>
   :root {
     --bg: #f5f7fb;
@@ -383,7 +383,7 @@
 <div class="progress" id="progress"></div>
 
 <header class="topbar">
-  <a class="brand" href="#top"><span class="brand-mark">Z</span> 智总管</a>
+  <a class="brand" href="#top"><span class="brand-mark">Z</span> OctopOS</a>
   <span class="tagline">自托管 · 多用户 · 多 Agent · 从对话到交付</span>
   <div class="spacer"></div>
   <div class="top-actions">
@@ -424,7 +424,7 @@
     </nav>
     <div class="side-note">
       <strong>品牌口径</strong><br>
-      对外品牌 / 产品名称：<b>智总管</b>。开源项目、代码标识与命令仍为 <code>Octop</code> / <code>octop</code>（仓库 <code>TencentCloud/Octop</code>、<code>octop run</code>、<code>~/.octop/</code>）。<br><br>
+      对外品牌 / 产品名称：<b>OctopOS</b>。Python 包与 CLI 命令仍为 <code>octop</code>（仓库 <code>yueshi/OctopOS</code>、<code>octop run</code>、<code>~/.octop/</code>）。<br><br>
       <strong>文档口径</strong><br>
       基于仓库 <code>v1.0.2</code>（2026-11-13）代码与文档整理。能力数量为当前仓库实测；路线图不代表交付承诺。对外引用前请确认版本、授权与商务条款。
     </div>
@@ -435,8 +435,8 @@
     <section class="hero" id="top">
       <div class="hero-inner">
         <div class="hero-copy">
-          <div class="hero-kicker">智总管 · PRODUCT &amp; ARCHITECTURE BRIEF</div>
-          <h1>智总管 产品与架构全景</h1>
+          <div class="hero-kicker">OctopOS · PRODUCT &amp; ARCHITECTURE BRIEF</div>
+          <h1>OctopOS 产品与架构全景</h1>
           <p class="hero-sub">
             一个自托管、多用户、多 Agent 的 AI 工作平台：把 Web / CLI / IM / API 入口、专家与团队、连接器、知识库、自动化、MiniApp 交付面，放进一个可以自己掌控的进程里。
           </p>
@@ -446,11 +446,11 @@
             <span>研发：架构、模块、约束</span>
           </div>
           <div class="hero-actions">
-            <a class="btn primary" href="#summary">30 秒读懂 智总管</a>
+            <a class="btn primary" href="#summary">30 秒读懂 OctopOS</a>
             <a class="btn" href="#scenarios">看 8 个应用场景</a>
             <a class="btn" href="#tech-arch">看技术架构</a>
           </div>
-          <div class="hero-meta">v1.0.2 · 2026-11-13 · 对外品牌：智总管 · 单进程 · SQLite / PostgreSQL · MIT</div>
+          <div class="hero-meta">v1.0.2 · 2026-11-13 · 对外品牌：OctopOS · 单进程 · SQLite / PostgreSQL · MIT</div>
         </div>
         <div class="hero-panel">
           <div class="panel-title">一个进程，七个能力平面</div>
@@ -478,9 +478,9 @@
       <div class="container">
         <div class="section-head">
           <span class="eyebrow">01 · 30 秒读懂</span>
-          <h2>智总管不是“另一个聊天机器人”，而是可自托管的 AI 工作平台</h2>
+          <h2>OctopOS不是“另一个聊天机器人”，而是可自托管的 AI 工作平台</h2>
           <p class="lede">
-            智总管把“人和 AI 对话”升级为“每个用户拥有自己的 Agent，团队拥有可编排的专家，业务结果以应用、看板、文档和交付物的形式落地”。所有状态默认放在自己的机器上，模型、存储、通道和连接器都可以替换。
+            OctopOS把“人和 AI 对话”升级为“每个用户拥有自己的 Agent，团队拥有可编排的专家，业务结果以应用、看板、文档和交付物的形式落地”。所有状态默认放在自己的机器上，模型、存储、通道和连接器都可以替换。
           </p>
           <div class="audience"><span class="badge sales">销售</span><span class="badge product">产品</span><span class="badge dev">研发</span></div>
         </div>
@@ -505,7 +505,7 @@
 
         <div class="callout">
           <strong>一句话理解</strong>
-          <p>智总管 = <b>多用户 Agent 运行时</b> + <b>IM 网关</b> + <b>专家/团队编排</b> + <b>连接器/知识库</b> + <b>自动化/事件</b> + <b>MiniApp 交付面</b> + <b>自托管运维</b>。它用一个 Python 进程把这些能力装在一起，除 LLM provider 外不依赖外部队列或必需服务。</p>
+          <p>OctopOS = <b>多用户 Agent 运行时</b> + <b>IM 网关</b> + <b>专家/团队编排</b> + <b>连接器/知识库</b> + <b>自动化/事件</b> + <b>MiniApp 交付面</b> + <b>自托管运维</b>。它用一个 Python 进程把这些能力装在一起，除 LLM provider 外不依赖外部队列或必需服务。</p>
         </div>
 
         <div class="two-col" style="margin-top:18px">
@@ -541,7 +541,7 @@
           <span class="eyebrow">02 · 定位与边界</span>
           <h2>它的位置：Agent 交付物的着陆场，而不是业务数据库</h2>
           <p class="lede">
-            智总管的强项是“把 AI 能力组装成一个可运行、可协作、可交付的平台”。理解它“是什么”和“不是什么”，比记住功能列表更重要。
+            OctopOS的强项是“把 AI 能力组装成一个可运行、可协作、可交付的平台”。理解它“是什么”和“不是什么”，比记住功能列表更重要。
           </p>
           <div class="audience"><span class="badge sales">销售</span><span class="badge product">产品</span></div>
         </div>
@@ -563,7 +563,7 @@
             <ul>
               <li><b>不是纯云端 SaaS</b>：默认自托管，数据和密钥在本地；也不是开箱即用的多租户云服务。</li>
               <li><b>不是 RPA / BPM 工作流引擎</b>：Agent 擅长灵活判断与工具调用，不擅长严格确定性的流程编排。</li>
-              <li><b>不是分布式集群</b>：单进程、单节点设计；跨节点请用“每节点一个智总管 + 外部协调层”。</li>
+              <li><b>不是分布式集群</b>：单进程、单节点设计；跨节点请用“每节点一个OctopOS + 外部协调层”。</li>
               <li><b>不是业务数据库的权威源</b>：MiniApp 是投影层；任务实体、审计、审批仍落原生表。</li>
               <li><b>不是零配置的行业 SaaS</b>：需要配置模型、通道、连接器、权限和运维。</li>
             </ul>
@@ -572,7 +572,7 @@
 
         <div class="callout product">
           <strong>产品经理提示</strong>
-          <p>对外表达时，建议把智总管描述为“<b>可自托管的 AI 工作平台</b>”，而不是“万能 Agent”或“企业级分布式 AI 中台”。前者准确且可验证；后者会带来多租户、分布式、SLA 等不必要的高预期。</p>
+          <p>对外表达时，建议把OctopOS描述为“<b>可自托管的 AI 工作平台</b>”，而不是“万能 Agent”或“企业级分布式 AI 中台”。前者准确且可验证；后者会带来多租户、分布式、SLA 等不必要的高预期。</p>
         </div>
 
         <div class="table-wrap" style="margin-top:18px">
@@ -718,7 +718,7 @@
           <span class="eyebrow">04 · 应用场景</span>
           <h2>8 个可落地的参考场景</h2>
           <p class="lede">
-            每个场景都按“痛点 → 智总管组合 → 交付结果 → 衡量指标”展开，并注明当前边界。它们不是行业模板的替代品，而是销售做方案、产品做需求、研发做集成的共同语言。
+            每个场景都按“痛点 → OctopOS组合 → 交付结果 → 衡量指标”展开，并注明当前边界。它们不是行业模板的替代品，而是销售做方案、产品做需求、研发做集成的共同语言。
           </p>
           <div class="audience"><span class="badge sales">销售</span><span class="badge product">产品</span></div>
         </div>
@@ -733,7 +733,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>信息散落在 IM、文档、网页和本地文件</li><li>重复写周报、整理资料、设提醒</li><li>通用聊天机器人不记得长期偏好</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>专属 Agent + 长期记忆</li><li>知识库 + 浏览器 + 文件工具</li><li>Cron 提醒 + IM 推送</li><li>可选 MiniApp 个人台账</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>专属 Agent + 长期记忆</li><li>知识库 + 浏览器 + 文件工具</li><li>Cron 提醒 + IM 推送</li><li>可选 MiniApp 个人台账</li></ul></div>
             <div><h4>交付结果</h4><ul><li>每日简报 / 周报</li><li>个人资料库与问答</li><li>日程、提醒、订阅</li><li>家庭多用户共享</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>每日节省时间</li><li>周报生成耗时</li><li>提醒到达率</li><li>资料命中率</li></ul></div>
           </div>
@@ -750,7 +750,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>知识和决策淹没在群聊里</li><li>新人重复问同样的问题</li><li>任务跟进靠人肉提醒</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>多用户 + 多专家</li><li>IM 通道 + slash 命令 + 审批</li><li>知识库 + 连接器</li><li>Cron 提醒 + 团队看板</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>多用户 + 多专家</li><li>IM 通道 + slash 命令 + 审批</li><li>知识库 + 连接器</li><li>Cron 提醒 + 团队看板</li></ul></div>
             <div><h4>交付结果</h4><ul><li>群内可用的专家</li><li>会议纪要 / 周报</li><li>制度与产品问答</li><li>任务提醒与升级</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>群内响应时间</li><li>知识命中率</li><li>任务按时率</li><li>人工转接率</li></ul></div>
           </div>
@@ -767,7 +767,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>文档找不到、版本乱</li><li>回答不可追溯、不敢信</li><li>权限边界不清</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>知识库 + RAG + 引用</li><li>本地 ONNX embedding（可选）</li><li>连接器：腾讯文档 / Notion / Obsidian / 语雀 / Dify / WeKnora</li><li>ACL + 审计</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>知识库 + RAG + 引用</li><li>本地 ONNX embedding（可选）</li><li>连接器：腾讯文档 / Notion / Obsidian / 语雀 / Dify / WeKnora</li><li>ACL + 审计</li></ul></div>
             <div><h4>交付结果</h4><ul><li>可引用的企业问答</li><li>培训 / 客服助手</li><li>文档摘要与对比</li><li>按用户/部门隔离</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>回答命中率</li><li>引用可追溯率</li><li>搜索时间下降</li><li>重复提问下降</li></ul></div>
           </div>
@@ -784,7 +784,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>客户信息散落在表格、聊天、邮件</li><li>跟进靠记忆，容易漏</li><li>话术不统一，新人上手慢</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>连接器：企查查、腾讯文档、邮箱、CRM/MCP</li><li>记忆 + 知识库（产品/话术）</li><li>Cron 跟进提醒</li><li>MiniApp 客户跟进台账 / 漏斗</li><li>只读公开链接</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>连接器：企查查、腾讯文档、邮箱、CRM/MCP</li><li>记忆 + 知识库（产品/话术）</li><li>Cron 跟进提醒</li><li>MiniApp 客户跟进台账 / 漏斗</li><li>只读公开链接</li></ul></div>
             <div><h4>交付结果</h4><ul><li>客户 360 台账</li><li>每日跟进清单</li><li>话术与方案草稿</li><li>周报 / 漏斗看板</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>跟进及时率</li><li>人均客户数</li><li>转化率</li><li>新人上手时间</li></ul></div>
           </div>
@@ -801,7 +801,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>Excel 多、版本乱、汇总慢</li><li>数据只有少数人会做透视表</li><li>分享靠截图，无法实时更新</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>工作台「创建」：上传 Excel/CSV → 确认字段 → 生成看板/台账/进度板</li><li>多表 + 行级 CAS + 导入/导出</li><li>应用内数据助手（含图表）</li><li>发布快照 + 只读公开链接</li><li>多 Board 工作台</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>工作台「创建」：上传 Excel/CSV → 确认字段 → 生成看板/台账/进度板</li><li>多表 + 行级 CAS + 导入/导出</li><li>应用内数据助手（含图表）</li><li>发布快照 + 只读公开链接</li><li>多 Board 工作台</li></ul></div>
             <div><h4>交付结果</h4><ul><li>分钟级生成台账/看板</li><li>手机可看的公开链接</li><li>多人协作与数据维护</li><li>门店/项目大屏</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>报表制作时间</li><li>数据更新频率</li><li>查看人数</li><li>手工汇总工时</li></ul></div>
           </div>
@@ -818,7 +818,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>排障要在日志、终端、浏览器、文档间切换</li><li>重复巡检、重复命令</li><li>告警响应慢、知识不沉淀</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>ACP：OpenCode / Claude Code / CodeBuddy / Codex</li><li>终端 + 浏览器 + 文件工具</li><li>Cron 巡检 + 外部事件（告警 webhook）</li><li>知识库 + 记忆</li><li>Shell 防护 + HITL 审批</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>ACP：OpenCode / Claude Code / CodeBuddy / Codex</li><li>终端 + 浏览器 + 文件工具</li><li>Cron 巡检 + 外部事件（告警 webhook）</li><li>知识库 + 记忆</li><li>Shell 防护 + HITL 审批</li></ul></div>
             <div><h4>交付结果</h4><ul><li>IDE/终端里的 AI 搭档</li><li>自动巡检与告警处置</li><li>排障知识库</li><li>浏览器自动化</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>MTTR</li><li>重复任务自动化率</li><li>告警一次解决率</li><li>人工审批次数</li></ul></div>
           </div>
@@ -835,7 +835,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>任务多、跨角色协作、跟进难</li><li>目标定了但没人拆解和追踪</li><li>AI 只回答问题，不交付结果</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>团队主持人 + 成员</li><li>目标 / 任务 / 看板 / 交付物</li><li>Autopilot（Beta）+ 预算 + HITL</li><li>数字员工（Beta）</li><li>Cron + 外部事件触发</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>团队主持人 + 成员</li><li>目标 / 任务 / 看板 / 交付物</li><li>Autopilot（Beta）+ 预算 + HITL</li><li>数字员工（Beta）</li><li>Cron + 外部事件触发</li></ul></div>
             <div><h4>交付结果</h4><ul><li>目标驱动的任务看板</li><li>成员派工与汇总</li><li>文件/链接/MiniApp 交付物</li><li>审批与预算闭环</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>任务完成率</li><li>人工介入率</li><li>成本 / 任务</li><li>交付准时率</li></ul></div>
           </div>
@@ -852,7 +852,7 @@
           </div>
           <div class="scenario-grid">
             <div><h4>痛点</h4><ul><li>数据不能出内网</li><li>需要 SSO/LDAP、权限、审计</li><li>需要可控的备份、升级与运维</li></ul></div>
-            <div><h4>智总管组合</h4><ul><li>自托管单进程 + SQLite/PG</li><li>OIDC / LDAP / 邀请码 / ACL</li><li>PII 脱敏 + HITL + Shell 防护</li><li>审计、usage、日志、备份、TLS</li><li>本地模型（Ollama）/ 本地 embedding</li></ul></div>
+            <div><h4>OctopOS组合</h4><ul><li>自托管单进程 + SQLite/PG</li><li>OIDC / LDAP / 邀请码 / ACL</li><li>PII 脱敏 + HITL + Shell 防护</li><li>审计、usage、日志、备份、TLS</li><li>本地模型（Ollama）/ 本地 embedding</li></ul></div>
             <div><h4>交付结果</h4><ul><li>内网多用户 AI 平台</li><li>统一入口与权限</li><li>数据不出域</li><li>可备份、可升级</li></ul></div>
             <div><h4>衡量指标</h4><ul><li>合规检查通过</li><li>数据出域事件为 0</li><li>可用性</li><li>审计覆盖率</li></ul></div>
           </div>
@@ -995,9 +995,9 @@
       <div class="container">
         <div class="section-head">
           <span class="eyebrow">06 · 技术架构</span>
-          <h2>单进程、分层、可重建：研发视角的智总管</h2>
+          <h2>单进程、分层、可重建：研发视角的OctopOS</h2>
           <p class="lede">
-            智总管的技术选择非常克制：一个 Python 进程、两个数据库选项、三个外部运行时库、没有外部队列。理解这一点，就能理解它的部署优势与扩展边界。
+            OctopOS的技术选择非常克制：一个 Python 进程、两个数据库选项、三个外部运行时库、没有外部队列。理解这一点，就能理解它的部署优势与扩展边界。
           </p>
           <div class="audience"><span class="badge dev">研发</span><span class="badge product">产品</span></div>
         </div>
@@ -1090,7 +1090,7 @@
               <tr><td><code>infra/apps/</code></td><td>MiniApp 数据、生成、发布、看板、沙箱</td><td>详见 <code>docs/miniapp-overview.md</code></td></tr>
               <tr><td><code>infra/history/</code></td><td>版本化历史、轨迹、消息投影</td><td>读写分离</td></tr>
               <tr><td><code>infra/backend/</code></td><td>工作区存储适配、解析、探测</td><td>本地 / Docker / PG / COS / S3 / OSS / OBS</td></tr>
-              <tr><td><code>infra/bridge/</code></td><td>智总管 ↔ 智总管 跨实例连接</td><td>WebSocket 联邦 + HTTP 隧道</td></tr>
+              <tr><td><code>infra/bridge/</code></td><td>OctopOS ↔ OctopOS 跨实例连接</td><td>WebSocket 联邦 + HTTP 隧道</td></tr>
               <tr><td><code>infra/auth/</code> <code>users/</code></td><td>OIDC/LDAP/SSO、用户、角色</td><td>JWT / ACL</td></tr>
               <tr><td><code>infra/setup/</code></td><td>首启向导、服务安装、TLS</td><td>Let's Encrypt</td></tr>
               <tr><td><code>infra/backup/</code></td><td>手动/自动备份</td><td>配置 + 工作区 + 知识库</td></tr>
@@ -1377,7 +1377,7 @@
           <span class="eyebrow">09 · 部署与交付</span>
           <h2>从安装到可交付：一份落地清单</h2>
           <p class="lede">
-            智总管的部署形态很轻：一个进程、一个数据目录、一个 LLM provider。真正的交付工作量在账号、权限、连接器、知识库和场景配置上。
+            OctopOS的部署形态很轻：一个进程、一个数据目录、一个 LLM provider。真正的交付工作量在账号、权限、连接器、知识库和场景配置上。
           </p>
           <div class="audience"><span class="badge sales">销售</span><span class="badge dev">研发</span></div>
         </div>
@@ -1413,7 +1413,7 @@
               <tr><td>个人 / 家庭 / 小团队 POC</td><td>SQLite（默认，WAL）</td><td>零依赖、单文件、备份简单</td></tr>
               <tr><td>较大团队 / 多用户 / 数据量增长</td><td>PostgreSQL</td><td>并发、运维、备份、扩展更稳</td></tr>
               <tr><td>远程工作区 / 对象存储</td><td>SQLite/PG + COS/S3/OSS/OBS</td><td>控制面与工作区解耦</td></tr>
-              <tr><td>跨节点</td><td>每节点一个智总管 + Bridge/外部协调</td><td>智总管不做分布式集群</td></tr>
+              <tr><td>跨节点</td><td>每节点一个OctopOS + Bridge/外部协调</td><td>OctopOS不做分布式集群</td></tr>
             </tbody>
           </table>
         </div>
@@ -1549,7 +1549,7 @@
               <tr><td><b>MiniApp</b></td><td>数据表 + 单文件 HTML 界面</td><td>不是微信小程序；是平台内交付面</td></tr>
               <tr><td><b>HITL</b></td><td>Human-in-the-loop，人工审批/中断</td><td>不是“人工客服”</td></tr>
               <tr><td><b>ACP</b></td><td>Agent Client Protocol</td><td>入站/出站两种方向</td></tr>
-              <tr><td><b>Bridge</b></td><td>智总管 ↔ 智总管 跨实例连接</td><td>不是集群；是联邦/隧道</td></tr>
+              <tr><td><b>Bridge</b></td><td>OctopOS ↔ OctopOS 跨实例连接</td><td>不是集群；是联邦/隧道</td></tr>
             </tbody>
           </table>
         </div>
@@ -1609,16 +1609,16 @@
 
         <div class="callout" style="margin-top:18px">
           <strong>口径与假设</strong>
-          <p><b>品牌口径：</b>对外品牌 / 产品名称为“智总管”；开源项目名、代码标识、CLI 命令与数据目录仍为 <code>Octop</code> / <code>octop</code> / <code>~/.octop/</code>。本文在产品语境使用“智总管”，在代码与仓库语境保留 Octop。</p>
+          <p><b>品牌口径：</b>对外品牌 / 产品名称为“OctopOS”；开源项目名、代码标识、CLI 命令与数据目录仍为 <code>OctopOS</code> / <code>octop</code> / <code>~/.octop/</code>。本文在产品语境使用“OctopOS”，在代码与仓库语境保留 OctopOS。</p>
           <p>本文基于仓库 <code>v1.0.2</code>（2026-11-13）整理。能力数量为当前仓库实测：30 个连接器、20+ 专家模板、60+ 内置工具位、27 个内置插件、10 个 IM/消息通道、约 60 张控制面表、14 个 Dashboard 页面、60+ API 路由模块。未包含定价、客户案例、合规认证与商业承诺；这些需按实际版本、合同与 POC 单独确认。路线图项不代表交付承诺。</p>
-          <p style="margin-bottom:0">开源仓库：<a href="https://github.com/TencentCloud/Octop">TencentCloud/Octop</a>（MIT） · PyPI：<a href="https://pypi.org/project/octop/">octop</a></p>
+          <p style="margin-bottom:0">开源仓库：<a href="https://github.com/yueshi/OctopOS">yueshi/OctopOS</a>（MIT） · PyPI：<a href="https://pypi.org/project/octop/">octop</a></p>
         </div>
       </div>
     </section>
 
     <footer class="footer">
-      <div class="brandline">智总管</div>
-      <div>智总管（开源项目 Octop）· 产品与架构全景 · 销售 / 产品 / 研发共用版 · v1.0.2 · 2026-11-13</div>
+      <div class="brandline">OctopOS</div>
+      <div>OctopOS（开源项目 OctopOS）· 产品与架构全景 · 销售 / 产品 / 研发共用版 · v1.0.2 · 2026-11-13</div>
       <div style="margin-top:6px">自托管 · 多用户 · 多 Agent · 从对话到交付</div>
     </footer>
   </main>

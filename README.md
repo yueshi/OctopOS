@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-banner.png" alt="Octop Banner" width="600" />
+  <img src="docs/assets/readme-banner.png" alt="OctopOS Banner" width="600" />
 </p>
 
 <p align="center">
@@ -8,15 +8,15 @@
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white" /></a>
-  <a href="https://github.com/TencentCloud/Octop/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green" /></a>
-  <a href="https://github.com/TencentCloud/Octop/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
+  <a href="https://github.com/yueshi/OctopOS/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green" /></a>
+  <a href="https://github.com/yueshi/OctopOS/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
   <a href="https://pypi.org/project/octop/"><img src="https://img.shields.io/pypi/v/octop" alt="PyPI" /></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/code%20style-ruff-000000?logo=ruff&logoColor=white" /></a>
   <a href="https://discord.gg/QnWdhJxq9h"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
-  <a href="#what-is-octop">What is Octop</a> ·
+  <a href="#what-is-octop">What is OctopOS</a> ·
   <a href="#highlights">Highlights</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -31,11 +31,13 @@
 
 ---
 
-## What is Octop?
+## What is OctopOS?
 
-Octop is an open-source, self-hosted AI platform for individuals, teams, and small businesses. One Python process serves the Web dashboard, CLI, IM channels, cron jobs, and the agent runtime. SQLite is the default control-plane database; PostgreSQL is optional. There is no external queue or required service beyond the LLM provider you configure.
+OctopOS is an open-source, self-hosted AI platform for individuals, teams, and small businesses. One Python process serves the Web dashboard, CLI, IM channels, cron jobs, and the agent runtime. SQLite is the default control-plane database; PostgreSQL is optional. There is no external queue or required service beyond the LLM provider you configure.
 
 The current focus is a **single-node business AgentOS**: agents and teams execute bounded goals with approvals and guardrails, MiniApps turn their output into usable data interfaces, and the desktop shell gives users a shared workspace. This is a deliberate scope: **one instance per team or customer**, not a multi-tenant SaaS cluster.
+
+**Naming note:** the product name is OctopOS. The Python package, CLI command (`octop`), data directory (`~/.octop/`), and `OCTOP_*` environment variables keep their existing names for compatibility.
 
 ## Highlights
 
@@ -47,10 +49,6 @@ The current focus is a **single-node business AgentOS**: agents and teams execut
 - **Self-hosted operations** — setup wizard, TLS / Let's Encrypt, systemd/launchd services, backups, in-place updates, and `~/.octop/` as the single data root.
 - **Pluggable workspace backends** — local disk, Docker sandbox, COS/S3, and other remote stores behind one `BackendWorkspace` abstraction.
 - **ACP in both directions** — expose an agent to IDE/terminal clients, or delegate coding work to external runners such as Claude Code and OpenCode.
-
-<p align="center">
-  <img src="docs/assets/readme-chat.png" alt="Octop Web Dashboard" width="800" />
-</p>
 
 ## Quick Start
 
@@ -97,11 +95,11 @@ docker compose -f docker/docker-compose.cn.yml up -d
 
 With Docker, a valid `OCTOP_DEFAULT_PASSWORD` creates the admin on first boot and writes credentials to `/data/.octop/credential.txt`; otherwise complete the setup wizard using the unlock password in `/data/.octop/octop-login.txt`. See [`.env.example`](.env.example) for `OCTOP_PORT`, `OCTOP_DATA`, PostgreSQL, and other variables.
 
-Native desktop clients (Windows / macOS / Linux) and FnOS packages are available from [GitHub Releases](https://github.com/TencentCloud/Octop/releases/latest).
+Native desktop clients (Windows / macOS / Linux) and FnOS packages are available from [GitHub Releases](https://github.com/yueshi/OctopOS/releases/latest).
 
 ## What you can do
 
-| Scenario | What Octop provides |
+| Scenario | What OctopOS provides |
 |---|---|
 | Personal assistant | A persistent agent with memory, scheduled jobs, and IM access |
 | Team / business operations | Experts and teams that plan, dispatch, execute, and record work |
@@ -114,7 +112,11 @@ Native desktop clients (Windows / macOS / Linux) and FnOS packages are available
 ## Architecture
 
 ```text
-Dashboard / CLI / IM channels / cron / external events
+Users / teams
+  ├─ Web dashboard: desktop shell + MiniApps + notifications
+  ├─ CLI
+  ├─ IM channels
+  └─ HTTP / WebSocket / webhooks
                          │
                   FastAPI + WebSocket
                          │
@@ -122,18 +124,19 @@ Dashboard / CLI / IM channels / cron / external events
        ┌─────────────────┼──────────────────┐
        │                 │                  │
   AgentManager       Gateway             Cron / events
-  (per-agent         (IM channels,       (schedules,
-   harness runtime)   WS hub)             deliveries)
-       │                 │                  │
-       └─────────────────┼──────────────────┘
+  (octop-harness,    (IM channels,       (schedules,
+   per-agent         WS hub)             deliveries)
+   runtime)
+       │
+       ├─ providers / tools / skills / memory
+       └─ per-agent workspace (local / Docker / COS / S3)
                          │
              SharedServices / RepoBundle
                          │
         SQLite (default) or PostgreSQL
-        + per-agent workspaces (local / Docker / COS / S3)
 ```
 
-The agent loop, IM gateway, memory, and browser runtime are separate packages — [Octop Harness](https://github.com/TencentCloud/octop-harness), [Octop Gateway](https://github.com/TencentCloud/octop-gateway), [Octop Memory](https://github.com/TencentCloud/octop-memory), and [Octop Browser](https://github.com/TencentCloud/octop-browser). Octop composes them into one process and rebuilds runtime state from the control-plane database on boot.
+The agent loop, IM gateway, memory, and browser runtime are separate packages — [Octop Harness](https://github.com/TencentCloud/octop-harness), [Octop Gateway](https://github.com/TencentCloud/octop-gateway), [Octop Memory](https://github.com/TencentCloud/octop-memory), and [Octop Browser](https://github.com/TencentCloud/octop-browser). OctopOS composes them into one process and rebuilds runtime state from the control-plane database on boot.
 
 See [docs/architecture.md](docs/architecture.md) and the ADRs for the single-process and dual-database decisions:
 [docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md),
@@ -182,11 +185,11 @@ PostgreSQL can replace SQLite for the control plane via `config.json`, `OCTOP_DA
 - **Approvals and guardrails** — tool-level HITL approval, shell command guard rules, and PII redaction for outbound/read-only surfaces.
 - **No credential exposure to MiniApp pages** — page code runs in a sandboxed iframe without a JWT; external I/O is proxied by the host under a capability manifest.
 - **Optional isolation** — Docker sandbox backends are available per agent; the default single-user setup is optimized for a trusted machine.
-- **Deployment boundary** — Octop is a single-node platform. It does not provide multi-tenant process isolation, a distributed kernel, or an external queue. Run one instance per customer or team when isolation is required.
+- **Deployment boundary** — OctopOS is a single-node platform. It does not provide multi-tenant process isolation, a distributed kernel, or an external queue. Run one instance per customer or team when isolation is required.
 
 ## Status and roadmap
 
-Current release: **1.0.2**. Octop is a usable single-node agent platform; the **business AgentOS** direction is still in progress in the current source tree.
+Current release: **1.0.2**. OctopOS is a usable single-node agent platform; the **business AgentOS** direction is still in progress in the current source tree.
 
 **In the current source tree**
 
@@ -207,7 +210,7 @@ Current release: **1.0.2**. Octop is a usable single-node agent platform; the **
 **Not in current scope**
 
 - Multi-tenant SaaS clusters, distributed scheduling, or a general-purpose plugin runtime.
-- A universal event bus; Octop deliberately uses five documented event planes with at-least-once delivery.
+- A universal event bus; OctopOS deliberately uses five documented event planes with at-least-once delivery.
 
 See [docs/agent-os-roadmap.md](docs/agent-os-roadmap.md) and [docs/agent-os-status-review.md](docs/agent-os-status-review.md) for the full plan and known gaps.
 
@@ -268,6 +271,6 @@ Security issues: see [SECURITY.md](SECURITY.md). Release history: [CHANGELOG.md]
 
 [MIT](LICENSE). Thanks to all contributors:
 
-<a href="https://github.com/tencentcloud/octop/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=tencentcloud/octop" />
+<a href="https://github.com/yueshi/OctopOS/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=yueshi/OctopOS" />
 </a>

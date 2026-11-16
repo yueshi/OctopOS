@@ -79,7 +79,7 @@ export default function Header({ onToggle, isMobile }: HeaderProps) {
         )}
         <img
           src={mobileLogoSrc}
-          alt="智总管"
+          alt="OctopOS"
           style={{
             height: 36,
             width: "auto",

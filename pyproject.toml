@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "octop"
 version = "1.0.2"
-description = "Smarter self-hosted AI assistant for multiple users and agents, built on octop-harness"
+description = "OctopOS — self-hosted AI platform for multiple users and agents, built on the Octop runtime stack"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
-authors = [{name = "octop contributors"}]
+authors = [{name = "OctopOS contributors"}]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",

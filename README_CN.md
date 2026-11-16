@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme-banner-zh.png" alt="Octop Banner" width="600" />
+  <img src="docs/assets/readme-banner-zh.png" alt="OctopOS Banner" width="600" />
 </p>
 
 <p align="center">
@@ -8,15 +8,15 @@
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=white" /></a>
-  <a href="https://github.com/TencentCloud/Octop/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green" /></a>
-  <a href="https://github.com/TencentCloud/Octop/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
+  <a href="https://github.com/yueshi/OctopOS/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green" /></a>
+  <a href="https://github.com/yueshi/OctopOS/releases"><img alt="Version" src="https://img.shields.io/badge/version-1.0.2-orange" /></a>
   <a href="https://pypi.org/project/octop/"><img src="https://img.shields.io/pypi/v/octop" alt="PyPI" /></a>
   <a href="https://github.com/astral-sh/ruff"><img alt="Code Style: Ruff" src="https://img.shields.io/badge/code%20style-ruff-000000?logo=ruff&logoColor=white" /></a>
   <a href="https://discord.gg/QnWdhJxq9h"><img alt="Discord" src="https://img.shields.io/badge/Discord-%E5%8A%A0%E5%85%A5-5865F2?logo=discord&logoColor=white" /></a>
 </p>
 
 <p align="center">
-  <a href="#什么是-octop">什么是 Octop</a> ·
+  <a href="#什么是-octop">什么是 OctopOS</a> ·
   <a href="#亮点">亮点</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#架构">架构</a> ·
@@ -31,11 +31,13 @@
 
 ---
 
-## 什么是 Octop？
+## 什么是 OctopOS？
 
-Octop 是一个开源、自托管的 AI 平台，面向个人、团队与小企业。一个 Python 进程同时提供 Web 控制台、CLI、IM 通道、定时任务与 Agent 运行时。控制面默认使用 SQLite，可选 PostgreSQL；除你配置的 LLM 供应商外，不依赖外部队列或必需服务。
+OctopOS 是一个开源、自托管的 AI 平台，面向个人、团队与小企业。一个 Python 进程同时提供 Web 控制台、CLI、IM 通道、定时任务与 Agent 运行时。控制面默认使用 SQLite，可选 PostgreSQL；除你配置的 LLM 供应商外，不依赖外部队列或必需服务。
 
 当前聚焦的是**单节点业务 AgentOS**：Agent 与团队在边界内执行目标，经过审批与防护规则；MiniApp 把交付物变成可用的数据界面；桌面 Shell 提供统一工作台。这个边界是刻意的：**每个团队/客户一个实例**，不是多租户 SaaS 集群。
+
+**命名说明：** 产品名为 OctopOS；Python 包、CLI 命令（`octop`）、数据目录（`~/.octop/`）与 `OCTOP_*` 环境变量为兼容性保留原名。
 
 ## 亮点
 
@@ -47,10 +49,6 @@ Octop 是一个开源、自托管的 AI 平台，面向个人、团队与小企�
 - **自托管运维** — 首启向导、TLS / Let's Encrypt、systemd/launchd 服务、备份、原地升级，数据统一放在 `~/.octop/`。
 - **可插拔工作区后端** — 本地磁盘、Docker 沙箱、COS/S3 等远程存储，统一走 `BackendWorkspace` 抽象。
 - **ACP 双向集成** — 把 Agent 暴露给 IDE/终端客户端，或在对话中委派 Claude Code、OpenCode 等外部编码 Agent。
-
-<p align="center">
-  <img src="docs/assets/readme-chat-zh.png" alt="Octop Web 控制台" width="800" />
-</p>
 
 ## 快速开始
 
@@ -97,11 +95,11 @@ docker compose -f docker/docker-compose.cn.yml up -d
 
 Docker 下，有效的 `OCTOP_DEFAULT_PASSWORD` 会在首次启动时创建管理员，凭据写入 `/data/.octop/credential.txt`；否则打开首启向导，使用 `/data/.octop/octop-login.txt` 中的解锁密码完成初始化。`OCTOP_PORT`、`OCTOP_DATA`、PostgreSQL 等变量见 [`.env.example`](.env.example)。
 
-Windows / macOS / Linux 原生桌面客户端与飞牛（FnOS）安装包见 [GitHub Releases](https://github.com/TencentCloud/Octop/releases/latest)。
+Windows / macOS / Linux 原生桌面客户端与飞牛（FnOS）安装包见 [GitHub Releases](https://github.com/yueshi/OctopOS/releases/latest)。
 
 ## 你可以用它做什么
 
-| 场景 | Octop 提供什么 |
+| 场景 | OctopOS 提供什么 |
 |---|---|
 | 个人助理 | 带记忆、定时任务与 IM 入口的长期 Agent |
 | 团队 / 业务经营 | 专家与团队规划、派发、执行并记录工作 |
@@ -114,7 +112,11 @@ Windows / macOS / Linux 原生桌面客户端与飞牛（FnOS）安装包见 [Gi
 ## 架构
 
 ```text
-Dashboard / CLI / IM 通道 / 定时任务 / 外部事件
+用户 / 团队
+  ├─ Web 控制台：桌面 Shell + MiniApp + 通知
+  ├─ CLI
+  ├─ IM 通道
+  └─ HTTP / WebSocket / webhook
                          │
                   FastAPI + WebSocket
                          │
@@ -122,18 +124,18 @@ Dashboard / CLI / IM 通道 / 定时任务 / 外部事件
        ┌─────────────────┼──────────────────┐
        │                 │                  │
   AgentManager       Gateway             Cron / events
-  （每 Agent          （IM 通道、          （调度、
-   harness 运行时）    WS hub）             投递）
-       │                 │                  │
-       └─────────────────┼──────────────────┘
+  （octop-harness，   （IM 通道、          （调度、
+   每 Agent 运行时）    WS hub）             投递）
+       │
+       ├─ Provider / 工具 / 技能 / 记忆
+       └─ 每 Agent 工作区（本地 / Docker / COS / S3）
                          │
              SharedServices / RepoBundle
                          │
         SQLite（默认）或 PostgreSQL
-        + 每 Agent 工作区（本地 / Docker / COS / S3）
 ```
 
-Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harness](https://github.com/TencentCloud/octop-harness)、[Octop Gateway](https://github.com/TencentCloud/octop-gateway)、[Octop Memory](https://github.com/TencentCloud/octop-memory)、[Octop Browser](https://github.com/TencentCloud/octop-browser)。Octop 把它们组合进一个进程，并在启动时从控制面数据库重建运行时状态。
+Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harness](https://github.com/TencentCloud/octop-harness)、[Octop Gateway](https://github.com/TencentCloud/octop-gateway)、[Octop Memory](https://github.com/TencentCloud/octop-memory)、[Octop Browser](https://github.com/TencentCloud/octop-browser)。OctopOS 把它们组合进一个进程，并在启动时从控制面数据库重建运行时状态。
 
 详见 [docs/architecture.md](docs/architecture.md) 与 ADR：
 [docs/adr/001-single-process-model.md](docs/adr/001-single-process-model.md)、
@@ -182,11 +184,11 @@ Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harn
 - **审批与防护** — 工具级 HITL 审批、Shell 命令防护规则，以及对外/只读面的 PII 脱敏。
 - **MiniApp 不接触凭据** — 页面运行在无 JWT 的沙箱 iframe 中，外部 I/O 由宿主按能力清单代理。
 - **可选隔离** — 每个 Agent 可配置 Docker 沙箱；默认单用户环境面向可信机器优化。
-- **部署边界** — Octop 是单节点平台，不提供多租户进程隔离、分布式内核或外部队列。需要隔离时，每个客户/团队部署一个实例。
+- **部署边界** — OctopOS 是单节点平台，不提供多租户进程隔离、分布式内核或外部队列。需要隔离时，每个客户/团队部署一个实例。
 
 ## 状态与路线图
 
-当前版本：**1.0.2**。Octop 已是可用的单节点 Agent 平台；**业务 AgentOS** 方向在当前源码中继续推进。
+当前版本：**1.0.2**。OctopOS 已是可用的单节点 Agent 平台；**业务 AgentOS** 方向在当前源码中继续推进。
 
 **当前源码已具备**
 
@@ -207,7 +209,7 @@ Agent 循环、IM 网关、记忆与浏览器运行时是独立包：[Octop Harn
 **当前不做**
 
 - 多租户 SaaS 集群、分布式调度或通用第三方代码运行时。
-- 通用 EventBus；Octop 刻意使用五类文档化事件平面与至少一次投递。
+- 通用 EventBus；OctopOS 刻意使用五类文档化事件平面与至少一次投递。
 
 完整计划与已知缺口见 [docs/agent-os-roadmap.md](docs/agent-os-roadmap.md) 与 [docs/agent-os-status-review.md](docs/agent-os-status-review.md)。
 
@@ -268,6 +270,6 @@ cd dashboard && npx tsc -b
 
 [MIT](LICENSE)。感谢所有贡献者：
 
-<a href="https://github.com/tencentcloud/octop/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=tencentcloud/octop" />
+<a href="https://github.com/yueshi/OctopOS/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=yueshi/OctopOS" />
 </a>
