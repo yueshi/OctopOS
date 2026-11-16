@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import zh from "../../../locales/zh.json";
@@ -51,7 +52,11 @@ const app = {
 
 describe("AppCard", () => {
   it("only offers opening the app in the side panel", () => {
-    render(<AppCard {...base} data={app} />);
+    render(
+      <MemoryRouter>
+        <AppCard {...base} data={app} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText("客户跟进台账")).toBeInTheDocument();
     expect(screen.getByText("12 条记录")).toBeInTheDocument();
     expect(
@@ -70,7 +75,11 @@ describe("AppCard", () => {
   });
 
   it("renders only the app frame inside the dock", () => {
-    render(<AppCard {...base} data={app} docked />);
+    render(
+      <MemoryRouter>
+        <AppCard {...base} data={app} docked />
+      </MemoryRouter>,
+    );
     expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
     expect(screen.queryByText("客户跟进台账")).not.toBeInTheDocument();
     expect(
@@ -79,7 +88,11 @@ describe("AppCard", () => {
   });
 
   it("does not offer the sidebar before the UI exists", () => {
-    render(<AppCard {...base} data={{ ...app, has_html: false }} />);
+    render(
+      <MemoryRouter>
+        <AppCard {...base} data={{ ...app, has_html: false }} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText("界面还没有生成")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /侧栏打开/ })).toBeDisabled();
   });

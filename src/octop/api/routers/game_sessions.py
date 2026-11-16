@@ -13,6 +13,7 @@ from octop.api.deps import get_server
 from octop.infra.apps.game_sessions import decode_game_token
 from octop.infra.apps.models import MAIN_TABLE_KEY
 from octop.infra.apps.service import AppService
+from octop.infra.apps.wiring import build_app_service
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 
@@ -46,12 +47,9 @@ class GameResultOut(BaseModel):
 def _service(server: OctopServer) -> AppService:
     if server.services is None or server.app_runtime is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
-    return AppService(
-        app_repo=server.services.light_app_repo,
-        agent_repo=server.services.agent_repo,
-        user_repo=server.services.user_repo,
+    return build_app_service(
+        repos=server.services.repos,
         workspaces=server.app_runtime.agent_registry,
-        secret_repo=server.services.secret_repo,
     )
 
 
@@ -155,6 +153,12 @@ async def write_game_results(
                             table=operation.table,
                         )
                     )
+                    if (
+                        existing is not None
+                        and service.table_row_scope(app, operation.table) == "user"
+                        and existing.created_by != user_id
+                    ):
+                        existing = None
                     if existing is None:
                         await service.append_row(
                             app,
@@ -171,6 +175,7 @@ async def write_game_results(
                             existing.row_id,
                             values,
                             table=operation.table,
+                            viewer_user_id=user_id,
                         )
                         updated += 1
                 except OctopError as exc:

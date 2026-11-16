@@ -8,14 +8,18 @@
 | --- | --- | --- |
 | `app_inspect_file` | 检查工作区里的表格文件 | 只读；返回 sheet、表头、列统计、样本行；**不要自己读 xlsx** |
 | `app_list` | 列出本 agent 拥有的应用 | 只返回你自己的应用；每项带表清单 |
+| `app_list_bindings` | 列出应用的服务绑定 | 只读；包含内置数据集和外部/连接器绑定；不要尝试自行改绑定 |
+| `app_add_service` | 声明只读外部服务 | owner/admin；需已有 connector 实例；页面仍要 owner 开启 `external.fetch` |
+| `app_list_services` | 列出外部服务声明 | 只读 |
+| `app_remove_service` | 删除外部服务声明 | owner/admin；会清缓存和同名 binding |
 | `app_open` | 在对话中打开应用 | 返回 app_card；**首个完整可用版本完成后调用一次**；后续编辑/优化不要再调用 |
-| `app_create` | 建应用并定义字段 | 1-50 个字段；名称 ≤100 字；同时创建主表 `main`；可传 `capabilities` 声明页面能力 |
+| `app_create` | 建应用并定义字段 | 1-50 个字段；名称 ≤100 字；同时创建主表 `main`；可传低风险 `capabilities` 声明页面能力 |
 | `app_create_from_template` | 从模板建空应用 | 模板来自 agent 的 `app_templates/` 或系统模板（`source="system"`）；只带 schema+界面，不带数据 |
 | `app_add_table` | 给应用新增一张附加表 | key 应用内唯一；每个应用最多 12 张表；建了不能删；默认不公开 |
 | `app_update_schema` | 追加字段 | 只能加不能改；已有数据时不能加必填字段；可传 `table` |
 | `app_alter_schema` | 改名/删除/改类型/标 PII | 会迁移所有已有行；有行不符合新结构时整次拒绝；`pii` 可给已有列补标或清除；可传 `table` |
-| `app_set_table_visibility` | 设置表是否出现在公开链接 | 主表默认公开，附加表默认私有；可传 `table` |
-| `app_set_capabilities` | 替换页面能力清单 | 只约束 iframe 页面；`[]` 表示页面不能做任何操作；不影响你自己的工具 |
+| `app_set_table_visibility` | 设置整张表是否出现在公开链接 | 仅 owner/admin；主表默认公开，附加表默认私有；可传 `table`。行级公开用独立公开表，不要靠页面过滤 |
+| `app_set_capabilities` | 替换页面能力清单 | 仅 owner/admin；只能设置低风险能力；高风险能力由 Owner 在应用详情页开启；`[]` 表示页面不能做任何操作 |
 | `app_write_html` | 写完整界面 | 整页覆盖；必须自包含单文件；内部写入，不产生聊天卡片 |
 | `app_read_data` | 读一页数据 | `limit` 1-500，`offset` 分页；每行带 `row_id` / `version`；可传 `table` |
 | `app_append_row` | 追加一行 | 未知字段、类型不符会被拒；可传 `client_request_id` 幂等；可传 `table` |
@@ -24,7 +28,7 @@
 | `app_import_rows` | 从工作区文件批量导入 | 支持 CSV/TSV/JSON/xlsx；可传 `table` 和列映射；先 `dry_run` |
 | `app_save_asset` | 把图片存到应用目录 | PNG/JPEG/WebP/GIF，≤5MB；来源可以是 URL 或工作区路径 |
 | `app_set_preview` | 画小程序的预览图（封面） | 自己写一段 SVG；工作台和模板画廊用它当缩略图 |
-| `app_delete` | 删除应用 | 需要用户批准 |
+| `app_delete` | 删除应用 | 仅 owner/admin；需要用户批准 |
 
 工具都返回 JSON 字符串：成功是结果对象，失败是 `{"error": "..."}`。出错先读 error 再改参数，别瞎试。
 
@@ -33,11 +37,13 @@
 `app_create(..., capabilities=[...])` 声明页面能向宿主请求什么。省略时使用安全默认集：
 `data.read` / `data.write` / `asset.read` / `external.open` / `chat.compose` / `events.read`。
 高风险能力（`ai.generate`、`game.launch`、`external.fetch`、`events.emit`、
-`schedules.manage`）必须在 `capabilities` 里显式声明，否则页面调用会被拒绝。
+`schedules.manage`）由 Owner 在应用详情页开启；`app_create` / `app_set_capabilities`
+会拒绝它们，不要尝试绕过。
 
-- 页面确实需要 `octopApp.generate()` 时才加 `ai.generate`；需要外部游戏时才加 `game.launch`。
-- `app_set_capabilities` 可以随时替换清单；传 `[]` 表示页面只能展示、不能读写或调用任何宿主能力。
+- 页面确实需要 `octopApp.generate()` 或外部游戏时，告诉用户在应用详情页开启对应能力。
+- `app_set_capabilities` 可以替换低风险清单，但仅 owner/admin 可调用；传 `[]` 表示页面只能展示、不能读写或调用任何宿主能力。
 - 能力只约束 iframe 页面；你自己的 `app_*` 工具和 Dashboard 数据面板不受影响。
+- 管理动作（`app_share_link`、表可见性、能力、删除）仅 owner/admin；`edit_structure` 协作者只能改 schema、数据和 HTML。
 
 ### 把上下文交给 Agent
 
@@ -116,18 +122,73 @@ const orderColumns = await octopApp.schema('orders');   // 指定表
 const { rows, total } = await octopApp.listRows({ limit: 200, offset: 0 });
 const orders = await octopApp.listRows({ table: 'orders', limit: 200 });
 
+// 筛选 + 排序（服务端做，filter 可重复；sort 加前缀 - 表示倒序）
+const pending = await octopApp.listRows({
+  filters: { status: 'pending' },
+  sort: '-created_at'
+});
+
 // 追加一行 → { row_index, row, table }
 const saved = await octopApp.appendRow({ title: '写周报', done: false });
 const order = await octopApp.appendRow({ item: '纸杯' }, { table: 'orders' });
+
+// 改一行 → { row_id, row, version }；row_id 来自 listRows 的 row_meta
+const changed = await octopApp.updateRow(rowId, { status: 'done' });
+// 带版本号可以挡住并发覆盖（版本过期会 reject）
+const guarded = await octopApp.updateRow(rowId, { status: 'done' }, {
+  expectedVersion: version
+});
+// 批量改 → { updated, failed, failures }；每行各自校验，失败的行不阻塞其它行
+const batch = await octopApp.updateRows([
+  { row_id: 'row_a', row: { status: 'done' } },
+  { row_id: 'row_b', row: { status: 'done' } }
+]);
+// 删一行
+await octopApp.deleteRow(rowId);
+
+// 其它窗口 / Agent 改了数据：宿主轮询 data_version 后触发
+const off = octopApp.onDataChange(function (detail) {
+  // detail.tables: [{ table_key, data_version, row_count }]
+  // 重新读当前表并局部刷新；不要假设事件里带了行数据
+  reloadCurrentTable();
+});
+// 页面卸载前调用 off() 取消订阅
+
+// 调用 owner 声明的只读外部服务（需要 external.fetch 能力）
+const book = await octopApp.service("douban").call("fetch_json", {
+  url: "https://api.example.com/books"
+});
+
+// 拉取公开图片并转成 asset 名，再用 asset() 渲染
+const cover = await octopApp.service("douban").image("https://api.example.com/cover.png");
+document.querySelector("img").src = await octopApp.asset(cover);
+
+// 读取事件收件箱（需要 events.read）；用 latest_id 作为下一次的 since
+let cursor = 0;
+async function pollEvents() {
+  const page = await octopApp.events({ since: cursor, limit: 100 });
+  cursor = page.latest_id;
+  if (page.events.length) {
+    await octopApp.ackEvents(page.events.map((item) => item.event_id));
+    renderEvents(page.events);
+  }
+}
 ```
 
 要点：
 
 - 页面加载时 `listRows()` 一次把 rows 渲染出来，之后改动再读一次。
 - `appendRow` 成功后把新行本地加进列表，不要整页刷新。
+- `updateRow` / `deleteRow` 需要行 id（版本可选）；`listRows()` 返回的 `row_meta` 里就有
+  （`row_meta[i].row_id` / `row_meta[i].version`，与 `rows[i]` 一一对应）。
+- 改状态时优先写 `expectedVersion`，冲突会 reject（409），这时重新读行再提示用户。
 - 追加失败会 reject（必填没填、枚举值不合法），catch 住给用户一句人话提示。
-- 只有有编辑权限的查看者能追加；只读的人看到的是列表，追加入口要禁用。
+- 只有有编辑权限的查看者能写；只读的人看到的是列表，写入口要禁用。
 - `schema()` / `listRows()` / `appendRow()` 的 `table` 都缺省为 `main`，只有多表应用才需要传。
+- `onDataChange` 只在页面可见时由宿主每 5 秒检查一次；收到事件后重新 `listRows()`，不要假设事件里带行数据。也可以用 `window.addEventListener("octop:data-changed", ...)`。
+- `service(name)` 只能调用 owner 在服务声明里允许的只读工具；URL 必须落在声明的前缀内。页面拿不到 connector 凭据，也不要在 HTML 里写凭据。缓存/限流由宿主处理；调用失败要 catch 并给用户提示。
+- 公开链接不会 live 调用外部服务：只有 owner 开启 `public_live` 且缓存里已有命中时，公开页的 `service(name).call()` 才能读到数据。
+- 事件收件箱只在登录态页面可用；公开链接没有事件接口。`ackEvents()` 只标记已处理，不会删除事件。
 
 页面里要跳转到站外链接时，不要写 `<a href="https://…">`（会被当成外链拒绝），改用：
 
@@ -208,7 +269,7 @@ document.querySelector("#cover").src = asset.data_url;  // data: URL，CSP 允�
 
 ### 发布快照
 
-`app_share_link` 会把当前 HTML 和公开表结构冻结成发布快照；之后改 HTML / schema
+`app_share_link`（仅 owner/admin 可调用）会把当前 HTML 和公开表结构冻结成发布快照；之后改 HTML / schema
 不会影响已经分享出去的链接。要让外部看到新版本，再次调用 `app_share_link`
 （默认复用同一个链接），或让 owner 在详情页点「发布更新」。
 
@@ -249,7 +310,7 @@ document.querySelector("#cover").src = asset.data_url;  // data: URL，CSP 允�
 4. 问三个问题再动手：**以后还会按月更新吗？谁会一起用？哪些列敏感？**
 5. 用户确认后 `app_create` / `app_add_table` 定字段。
 6. `app_import_rows(path, table=..., mapping=..., sheet=..., header_row=..., dry_run=True)`
-   先试跑一次：报告里的 `header_row` 直接传进去，多 sheet 用 `sheet="9月"` 指定。
+   先试跑一次：报告里的 `header_row` 直接传进去，多 sheet 用 `sheet="9月"` 指定；快速创建省略时后端会用检查报告检测到的表头行。合计/小计行不会被导入。
    把 `would_import` / `skipped` / `errors` / `blocked_pii` / `failed_rows` 报给用户看，
    确认无误再去掉 `dry_run` 正式导入。列名对不上就传 `mapping`（源列名 → 目标列名）。
    敏感列默认不写（`blocked_pii`）；只有用户明确同意后才传 `include_pii=true`。
@@ -312,6 +373,21 @@ document.querySelector("#cover").src = asset.data_url;  // data: URL，CSP 允�
 
 界面上有多张表时，用 `octopApp.tables()` 渲染 tab / 下拉切换器；切表后重新
 `schema(key)` + `listRows({ table: key })`，不要缓存别的表的数据当当前表用。
+
+### 只公开部分行：独立公开表
+
+`app_set_table_visibility` 控制的是**整张表**；公开链接会返回公开表的全部行。页面里用
+`listRows` 再过滤只是显示层，不是访问控制，不能用来隐藏数据。
+
+需要只公开一部分行（例如审核通过后才对外）时：
+
+1. `app_add_table` 建一张公开表（如 `orders_public`），只放可公开的列；
+2. `app_set_table_visibility(app_id, table="orders_public", public_visible=True)`，内部表保持私有；
+3. 审核通过后用 `app_append_row` / `app_update_row` 把选中行写入公开表；`app_append_row`
+   可带 `client_request_id` 保证重试不重复（导入/同步路径可用 `source_id` / `source_key`）；撤回时删除或标记；
+4. `app_share_link` 发布/重新发布。公开表的数据行实时读取；隐藏表立即生效；新增公开表需要重新发布。
+
+不要为行级公开新增 row scope，也不要把内部行放进公开表后再指望 PII 标记保护整行——PII 只脱敏列。
 
 ## 沙箱红线
 

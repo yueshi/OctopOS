@@ -39,6 +39,7 @@ class _Window:
 _APP_WINDOWS: dict[str, _Window] = {}
 _PUBLIC_WINDOWS: dict[str, _Window] = {}
 _CSP_WINDOWS: dict[str, _Window] = {}
+_SERVICE_WINDOWS: dict[str, _Window] = {}
 
 
 def _enter(window: _Window, *, concurrency: int, per_minute: int, metric: str) -> None:
@@ -95,6 +96,27 @@ async def public_slot(key: str) -> AsyncIterator[None]:
         concurrency=PUBLIC_CONCURRENCY,
         per_minute=PUBLIC_PER_MINUTE,
         metric="light_app_public_rate_limited_total",
+    )
+    try:
+        yield
+    finally:
+        _leave(window)
+
+
+@asynccontextmanager
+async def service_slot(
+    service_id: str,
+    *,
+    per_minute: int,
+    concurrency: int = 2,
+) -> AsyncIterator[None]:
+    """Hold one slot for a declared external service call."""
+    window = _SERVICE_WINDOWS.setdefault(service_id, _Window())
+    _enter(
+        window,
+        concurrency=concurrency,
+        per_minute=per_minute,
+        metric="light_app_service_rate_limited_total",
     )
     try:
         yield

@@ -9,6 +9,7 @@ export const APP_SDK = `(function () {
   var pending = new Map();
   var seq = 0;
   var TIMEOUT_MS = 30000;
+  var dataListeners = [];
   // Captured before any app script runs; the freeze installs first.
   var find = Document.prototype.querySelector;
   function intact() {
@@ -57,9 +58,21 @@ export const APP_SDK = `(function () {
       );
     });
   }
+  function emitDataChange(detail) {
+    for (var i = 0; i < dataListeners.length; i++) {
+      try { dataListeners[i](detail); } catch (e) {}
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("octop:data-changed", { detail: detail }));
+    } catch (e) {}
+  }
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (!data || data.source !== "octop-app-host") return;
+    if (data.type === "data-changed") {
+      emitDataChange(data.data || {});
+      return;
+    }
     var entry = pending.get(data.id);
     if (!entry) return;
     pending.delete(data.id);
@@ -90,6 +103,30 @@ export const APP_SDK = `(function () {
     appendRow: function (row, options) {
       return call("append", { row: row, table: (options || {}).table || null });
     },
+    updateRow: function (rowId, values, options) {
+      var opts = options || {};
+      return call("update", {
+        rowId: rowId || "",
+        row: values || {},
+        table: opts.table || null,
+        expectedVersion: opts.expectedVersion
+      });
+    },
+    updateRows: function (rows, options) {
+      var opts = options || {};
+      return call("updateMany", {
+        rows: rows || [],
+        table: opts.table || null
+      });
+    },
+    deleteRow: function (rowId, options) {
+      var opts = options || {};
+      return call("remove", {
+        rowId: rowId || "",
+        table: opts.table || null,
+        expectedVersion: opts.expectedVersion
+      });
+    },
     generate: function (prompt, options) {
       return call("generate", {
         prompt: prompt || "",
@@ -102,8 +139,30 @@ export const APP_SDK = `(function () {
     composeMessage: function (text) {
       return call("composeMessage", { text: text || "" });
     },
+    onDataChange: function (callback) {
+      if (typeof callback !== "function") return function () {};
+      dataListeners.push(callback);
+      return function () {
+        var index = dataListeners.indexOf(callback);
+        if (index >= 0) dataListeners.splice(index, 1);
+      };
+    },
     openExternal: function (url) { return call("openExternal", { url: url || "" }); },
-    asset: function (name) { return call("asset", { name: name || "" }); }
+    asset: function (name) { return call("asset", { name: name || "" }); },
+    events: function (options) { return call("events", options || {}); },
+    ackEvents: function (eventIds) {
+      return call("ackEvents", { event_ids: eventIds || [] });
+    },
+    service: function (name) {
+      return {
+        call: function (tool, args) {
+          return call("service", { name: name || "", tool: tool || "", args: args || {} });
+        },
+        image: function (url) {
+          return call("serviceImage", { name: name || "", url: url || "" });
+        }
+      };
+    }
   };
 })();`;
 

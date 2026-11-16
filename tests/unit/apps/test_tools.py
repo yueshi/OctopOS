@@ -19,6 +19,7 @@ from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.repos.agents import AgentRepo
 from octop.infra.db.repos.apps import LightAppRepo
+from octop.infra.db.repos.audit import AuditRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo
 from octop.infra.utils.ulid import new_ulid
@@ -45,6 +46,8 @@ class World:
     agent_id: str
     alice_id: int
     bob_id: int
+    admin_id: int
+    audit_repo: AuditRepo
 
 
 class _Workspaces:
@@ -63,12 +66,14 @@ def world(tmp_path: Path) -> World:
     user_repo = UserRepo(db)
     alice_id = user_repo.create(username="alice", password_hash="h", role="user")
     bob_id = user_repo.create(username="bob", password_hash="h", role="user")
+    admin_id = user_repo.create(username="root", password_hash="h", role="admin")
     agent_repo = AgentRepo(db)
     agent_id = new_ulid()
     agent_repo.create(agent_id=agent_id, user_id=alice_id, name="bot")
     root = tmp_path / "ws"
     root.mkdir()
     workspace = BackendWorkspace(FilesystemBackend(root_dir=str(root), virtual_mode=True), root)
+    audit_repo = AuditRepo(db)
     return World(
         service=AppService(
             app_repo=LightAppRepo(db),
@@ -76,11 +81,14 @@ def world(tmp_path: Path) -> World:
             user_repo=user_repo,
             workspaces=_Workspaces(agent_id, workspace),
             secret_repo=SecretRepo(db),
+            audit_repo=audit_repo,
         ),
         agent_repo=agent_repo,
         agent_id=agent_id,
         alice_id=alice_id,
         bob_id=bob_id,
+        admin_id=admin_id,
+        audit_repo=audit_repo,
     )
 
 
@@ -96,6 +104,10 @@ def test_build_app_tools_names(world: World) -> None:
     assert names == {
         "app_inspect_file",
         "app_list",
+        "app_list_bindings",
+        "app_add_service",
+        "app_list_services",
+        "app_remove_service",
         "app_open",
         "app_share_link",
         "app_create",
@@ -183,22 +195,106 @@ async def test_tool_capabilities(world: World) -> None:
                 {
                     "name": "Tracker",
                     "columns": COLUMNS,
-                    "capabilities": ["data.read", "ai.generate"],
+                    "capabilities": ["data.read", "chat.compose"],
                 }
             )
         )
         app_id = created["app_id"]
-        assert created["capabilities"] == ["ai.generate", "data.read"]
+        assert created["capabilities"] == ["chat.compose", "data.read"]
 
         updated = json.loads(
             await set_capabilities.ainvoke({"app_id": app_id, "capabilities": ["data.read"]})
         )
         assert updated["capabilities"] == ["data.read"]
 
+        # High-risk capabilities are an owner decision, not an agent decision.
+        denied = json.loads(
+            await create.ainvoke(
+                {
+                    "name": "AI app",
+                    "columns": COLUMNS,
+                    "capabilities": ["data.read", "ai.generate"],
+                }
+            )
+        )
+        assert "error" in denied
+        assert "owner approval" in denied["error"]
+
+        denied = json.loads(
+            await set_capabilities.ainvoke(
+                {"app_id": app_id, "capabilities": ["data.read", "external.fetch"]}
+            )
+        )
+        assert "error" in denied
+        assert "owner approval" in denied["error"]
+
         rejected = json.loads(
             await set_capabilities.ainvoke({"app_id": app_id, "capabilities": ["not.a.capability"]})
         )
         assert "error" in rejected
+
+
+async def test_app_list_bindings_is_read_only(world: World) -> None:
+    tools = build_app_tools(world.service)
+    create = _tool_by_name(tools, "app_create")
+    list_bindings = _tool_by_name(tools, "app_list_bindings")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        created = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))
+        result = json.loads(await list_bindings.ainvoke({"app_id": created["app_id"]}))
+
+    assert result["bindings"][0]["binding_id"] == "dataset"
+    assert result["bindings"][0]["builtin"] is True
+    assert result["bindings"][0]["service_id"] == "builtin.dataset"
+
+
+async def test_agent_tools_keep_admin_actions_to_owner(world: World) -> None:
+    tools = build_app_tools(world.service)
+    create = _tool_by_name(tools, "app_create")
+    write_html = _tool_by_name(tools, "app_write_html")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        created = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))
+        app_id = created["app_id"]
+        world.service.set_collaborators(
+            world.service.get(app_id), [(world.bob_id, "edit_structure")]
+        )
+
+    world.agent_repo.set_shared(world.agent_id, True)
+
+    blocked = {
+        "app_share_link": {"app_id": app_id},
+        "app_set_table_visibility": {"app_id": app_id, "public": False},
+        "app_set_capabilities": {
+            "app_id": app_id,
+            "capabilities": ["data.read"],
+        },
+        "app_delete": {"app_id": app_id},
+    }
+    with _configurable(agent_id=world.agent_id, user=str(world.bob_id)):
+        for name, args in blocked.items():
+            result = json.loads(await _tool_by_name(tools, name).ainvoke(args))
+            assert "error" in result, name
+            assert "owner or an admin" in result["error"], name
+
+        # edit_structure still covers schema/UI editing, not app management.
+        result = json.loads(
+            await write_html.ainvoke(
+                {
+                    "app_id": app_id,
+                    "html": "<!doctype html><html><body>ok</body></html>",
+                }
+            )
+        )
+        assert "error" not in result
+
+    with _configurable(agent_id=world.agent_id, user=str(world.admin_id)):
+        allowed = json.loads(
+            await _tool_by_name(tools, "app_set_capabilities").ainvoke(
+                {"app_id": app_id, "capabilities": ["data.read"]}
+            )
+        )
+        assert "error" not in allowed
 
 
 async def test_tool_write_html_rejects_external_resources(world: World) -> None:
@@ -300,9 +396,40 @@ async def test_tools_reject_non_owner(world: World) -> None:
     with _configurable(agent_id=world.agent_id, user=str(world.bob_id)):
         denied = json.loads(await create.ainvoke({"name": "Theirs", "columns": COLUMNS}))
         assert "cannot use this agent" in denied["error"]
+        assert denied["octop_ui"]["renderer"] == "app_permission_card"
+        assert denied["data"]["acting_user"] == "bob"
+        assert denied["data"]["agent_owner"] == "alice"
         assert json.loads(await list_tool.ainvoke({})) == {"apps": []}
         hidden = json.loads(await read_data.ainvoke({"app_id": app_id}))
         assert "not accessible" in hidden["error"]
+        assert hidden["octop_ui"]["renderer"] == "app_permission_card"
+
+
+async def test_admin_can_use_another_users_agent_and_writes_are_audited(
+    world: World,
+) -> None:
+    """Admins match the HTTP routes: any agent/app, with cross-owner writes audited."""
+    tools = build_app_tools(world.service)
+    create = _tool_by_name(tools, "app_create")
+    list_tool = _tool_by_name(tools, "app_list")
+    append = _tool_by_name(tools, "app_append_row")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        created = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))
+        app_id = created["app_id"]
+
+    with _configurable(agent_id=world.agent_id, user=str(world.admin_id)):
+        listed = json.loads(await list_tool.ainvoke({}))
+        assert [item["app_id"] for item in listed["apps"]] == [app_id]
+        appended = json.loads(await append.ainvoke({"app_id": app_id, "row": {"title": "x"}}))
+        assert appended["row_id"]
+
+    events = world.audit_repo.query(action="miniapp.admin_override", limit=10)
+    assert len(events) == 1
+    payload = json.loads(events[0].payload or "{}")
+    assert payload["agent_id"] == world.agent_id
+    assert payload["needed"] == "edit_data"
+    assert payload["via"] == "agent_tool"
 
 
 async def test_tools_follow_the_app_acl_not_the_owning_agent(world: World) -> None:

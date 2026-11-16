@@ -90,8 +90,22 @@ class FakeAppService:
         table: str = "main",
         mode: str = "append",
         mapping: Any = None,
+        upsert_key: Any = None,
+        source: str = "import",
+        client_request_id_prefix: str | None = None,
     ) -> Any:
-        self.calls.append(("import", records, table, mode, mapping))
+        self.calls.append(
+            (
+                "import",
+                records,
+                table,
+                mode,
+                mapping,
+                upsert_key,
+                source,
+                client_request_id_prefix,
+            )
+        )
         if self.fail_first:
             self.fail_first = False
             raise RuntimeError("transient upstream")
@@ -100,6 +114,23 @@ class FakeAppService:
     async def run_source(self, row: Any, source_id: str) -> Any:
         self.calls.append(("refresh", source_id))
         return SimpleNamespace(imported=1, skipped=0, errors=[])
+
+    def append_event(
+        self,
+        row: Any,
+        *,
+        event_type: str,
+        payload: dict[str, Any],
+        source: str,
+        summary: str,
+        external_event_id: str,
+    ) -> Any:
+        self.calls.append(("inbox", event_type, payload, source, summary, external_event_id))
+        return SimpleNamespace(
+            event_id=f"ext_{external_event_id}",
+            event_type=event_type,
+            summary=summary,
+        )
 
 
 class FakeCoordinator:
@@ -162,17 +193,64 @@ async def test_app_import_delivery(repos: RepoBundle, service: ExternalEventServ
         mode="app.import",
         mapping={"table": "main", "columns": {"name": "title"}},
     )
-    _ingest(service, source, {"summary": "two rows", "records": [{"name": "A"}]})
+    ingested = _ingest(service, source, {"summary": "two rows", "records": [{"name": "A"}]})
     app = FakeAppService()
     worker = _worker(repos, app_service=app)
 
     assert await worker.tick() == 1
     await worker.drain()
 
-    assert app.calls == [("import", [{"name": "A"}], "main", "replace", {"name": "title"})]
+    assert app.calls == [
+        (
+            "import",
+            [{"name": "A"}],
+            "main",
+            "append",
+            {"name": "title"},
+            None,
+            f"external:{source.source_id}",
+            f"evt:{ingested.event.event_id}",
+        )
+    ]
     delivery = repos.external_delivery_repo.list_for_owner(1)[0]
     assert delivery.status == "delivered"
     assert delivery.attempt == 1
+
+
+async def test_app_inbox_delivery(repos: RepoBundle, service: ExternalEventService) -> None:
+    source = _source(service)
+    _subscription(
+        repos,
+        source_id=source.source_id,
+        target_type="app",
+        target_id="app-1",
+        mode="app.inbox",
+    )
+    ingested = _ingest(service, source, {"summary": "new order"})
+    app = FakeAppService()
+    pushed: list[tuple[int, dict[str, Any]]] = []
+
+    async def push(user_id: int, frame: dict[str, Any]) -> None:
+        pushed.append((user_id, frame))
+
+    worker = _worker(repos, app_service=app, push_user=push)
+    assert await worker.tick() == 1
+    await worker.drain()
+
+    assert app.calls == [
+        (
+            "inbox",
+            "order.created",
+            {"summary": "new order"},
+            source.source_id,
+            "new order",
+            ingested.event.event_id,
+        )
+    ]
+    assert pushed[0][0] == 1
+    assert pushed[0][1]["type"] == "app_event"
+    delivery = repos.external_delivery_repo.list_for_owner(1)[0]
+    assert delivery.status == "delivered"
 
 
 async def test_app_refresh_uses_mapping_source(

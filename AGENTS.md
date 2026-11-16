@@ -224,7 +224,7 @@ New agents additionally keep system-scoped files under `{workspace}/.octop/` (e.
 
 **Database:** SQLite and PostgreSQL share one schema. Add or change tables via a numbered pair
 `infra/db/migrations/00N_description.sql` **and** `00N_description.pg.sql`, then bump the
-version assertion in `tests/unit/db/test_db_pool.py` (currently `v == 29`). Rebuilds that SQLite
+version assertion in `tests/unit/db/test_db_pool.py` (currently `v == 38`). Rebuilds that SQLite
 cannot express as `ALTER` live in `infra/db/migrate.py` helpers and must stay idempotent.
 
 Unreleased schema work on `develop` **folds into the current unreleased `00N`**, not a new
@@ -316,6 +316,8 @@ User-facing datetime display and cron/scheduling defaults MUST use the server ti
 
 **Metrics:** `from octop.infra.metrics import METRICS` — lazy-import inside functions to avoid circular imports.
 
+**Events:** There are five event planes — external inbox/outbox (`external_events` / `external_deliveries`), per-app inbox (`light_app_events`), team ledger (`team_events`), trajectory log (`trajectory_events`), and best-effort WS/SSE frames. New event work must pick a plane per `docs/event-model.md`; do **not** add a platform-wide EventBus or a second delivery engine. Durable events are at-least-once — targets must be idempotent. Payload never selects target/mode/table.
+
 **API docs:** Interactive docs live at `/api/docs` (Scalar, backed by `/api/openapi.json`). When adding or changing API routes, keep the generated docs readable for humans:
 
 - Use existing `tags` from `api/openapi_meta.py`; add a tag description there when introducing a new group.
@@ -364,6 +366,7 @@ Boundary rules are in [§5](#5-module-boundaries). Additionally:
 | How are agents started/stopped? | `infra/agents/manager.py` |
 | How does cron work? | `infra/cron/manager.py`, `infra/cron/job.py` |
 | How do external events work? | `infra/events/service.py`, `infra/events/worker.py`, `infra/events/connector_poll.py`, `infra/events/expert_target.py` |
+| Event model, delivery guarantees, known gaps | `docs/event-model.md`; planes: `external_events`/`external_deliveries`, `light_app_events`, `team_events`, `trajectory_events`, WS/SSE frames |
 | What DB tables exist? | `infra/db/migrations/` + `infra/db/repos/` |
 | What env vars are supported? | `config.py` |
 | How does the frontend call the API? | `dashboard/src/api/request.ts` |

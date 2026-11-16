@@ -13,14 +13,14 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 
 from octop.api.common.client_ip import resolve_client_ip
 from octop.api.deps import get_server
 from octop.api.routers.apps import _columns, _service
 from octop.infra.apps.limits import public_slot
-from octop.infra.apps.models import MAIN_TABLE_KEY
+from octop.infra.apps.models import MAIN_TABLE_KEY, PII_MASK
 from octop.infra.apps.sandbox import APP_CSP, build_app_doc, build_wrapper_doc
 from octop.infra.errors import ErrorCode, OctopError
 
@@ -40,6 +40,16 @@ class PublicAppOut(BaseModel):
     description: str
     html: str
     tables: list[dict[str, Any]]
+
+
+class PublicServiceCallBody(BaseModel):
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class PublicServiceCallOut(BaseModel):
+    value: Any
+    cached: bool
 
 
 class PublicRowsOut(BaseModel):
@@ -84,7 +94,7 @@ async def _public_payload(service: Any, row: Any) -> tuple[str, list[dict[str, A
         return str(frozen_html), list(frozen_tables)
     tables: list[dict[str, Any]] = []
     for table in service.list_tables(row):
-        if not table.public_visible:
+        if not table.public_visible or table.row_scope == "user":
             continue
         schema = await service.read_schema(row, table.table_key)
         tables.append(
@@ -164,14 +174,27 @@ async def get_public_rows(
         snapshot_columns = snapshot_table.get("columns")
         if not isinstance(snapshot_columns, list):
             snapshot_columns = []
-        live_pii = {column.name: column.pii for column in schema.columns}
+        live_pii = {column.name: bool(column.pii) for column in schema.columns}
         columns = [
-            {**column, "pii": live_pii.get(column.get("name"), column.get("pii"))}
+            {
+                **column,
+                # Tightening PII takes effect immediately; declassifying a
+                # column requires republishing the snapshot.
+                "pii": bool(column.get("pii")) or live_pii.get(column["name"], False),
+            }
             for column in snapshot_columns
             if isinstance(column, dict) and isinstance(column.get("name"), str)
         ]
         allowed = {column["name"] for column in columns}
-        rows = [{key: value for key, value in row.items() if key in allowed} for row in rows]
+        pii_columns = {column["name"] for column in columns if column.get("pii")}
+        rows = [
+            {
+                key: PII_MASK if key in pii_columns else value
+                for key, value in row.items()
+                if key in allowed
+            }
+            for row in rows
+        ]
     else:
         columns = [column.model_dump() for column in _columns(schema)]
     payload = PublicRowsOut(
@@ -184,6 +207,52 @@ async def get_public_rows(
         pii_columns=[column["name"] for column in columns if column.get("pii")],
     )
     return JSONResponse(payload.model_dump(), headers=_NO_STORE)
+
+
+@router.post(
+    "/{token}/services/{name}/call",
+    response_model=PublicServiceCallOut,
+    summary="Read a cached external service response",
+    description=(
+        "Public links never call a connector live. This endpoint only returns a "
+        "cached response for a service whose declaration has public_live enabled."
+    ),
+)
+async def public_service_call(
+    token: str,
+    name: str,
+    body: PublicServiceCallBody,
+    _limit: None = Depends(_public_limit),
+    server: Any = Depends(get_server),
+) -> PublicServiceCallOut:
+    service, row = _public_app(server, token)
+    result = service.read_cached_service(
+        row,
+        name=name,
+        tool=body.tool,
+        args=body.args,
+    )
+    return PublicServiceCallOut(value=result.value, cached=result.cached)
+
+
+@router.get(
+    "/{token}/assets/{name}",
+    summary="Read a public app asset",
+)
+async def get_public_asset(
+    token: str,
+    name: str,
+    _limit: None = Depends(_public_limit),
+    server: Any = Depends(get_server),
+) -> Response:
+    service, row = _public_app(server, token)
+    try:
+        media_type, data = await service.read_asset(row, name)
+    except OctopError as exc:
+        if exc.code == ErrorCode.APP_SOURCE_INVALID:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND) from exc
+        raise
+    return Response(content=data, media_type=media_type, headers=_NO_STORE)
 
 
 _SDK = """
@@ -214,7 +283,24 @@ _SDK = """
     tables: function () { return call("tables"); },
     listRows: function (options) { return call("rows", options || {}); },
     me: function () { return Promise.resolve({ permission: "view" }); },
+    asset: function (name) { return call("asset", { name: name || "" }); },
+    service: function (name) {
+      return {
+        call: function (tool, args) {
+          return call("service", { name: name || "", tool: tool || "", args: args || {} });
+        }
+      };
+    },
     appendRow: function () {
+      return Promise.reject(new Error("This is a read-only public link"));
+    },
+    updateRow: function () {
+      return Promise.reject(new Error("This is a read-only public link"));
+    },
+    updateRows: function () {
+      return Promise.reject(new Error("This is a read-only public link"));
+    },
+    deleteRow: function () {
       return Promise.reject(new Error("This is a read-only public link"));
     },
     generate: function () {
@@ -276,6 +362,29 @@ window.addEventListener("message", async function (event) {{
       const body = await res.json();
       if (data.method === "schema") reply({{ok: true, data: {{table: table, columns: body.columns}}}});
       else reply({{ok: true, data: body}});
+    }} else if (data.method === "service") {{
+      const name = String(data.params?.name || "");
+      const res = await fetch("/api/public/apps/" + encodeURIComponent(token) + "/services/" + encodeURIComponent(name) + "/call", {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{tool: data.params?.tool || "", args: data.params?.args || {{}}}}),
+        cache: "no-store"
+      }});
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const body = await res.json();
+      reply({{ok: true, data: body.value}});
+    }} else if (data.method === "asset") {{
+      const name = String(data.params?.name || "");
+      const res = await fetch("/api/public/apps/" + encodeURIComponent(token) + "/assets/" + encodeURIComponent(name), {{cache: "no-store"}});
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const blob = await res.blob();
+      const dataUrl = await new Promise((resolve, reject) => {{
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      }});
+      reply({{ok: true, data: dataUrl}});
     }} else {{
       reply({{ok: false, error: "unsupported method"}});
     }}

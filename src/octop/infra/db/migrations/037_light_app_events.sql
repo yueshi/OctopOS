@@ -1,0 +1,21 @@
+-- Schema v37: R2.2 MiniApp event inbox.
+-- External events delivered to an app are stored here; the page reads them
+-- with a cursor and acknowledges what it has processed.
+
+CREATE TABLE IF NOT EXISTS light_app_events (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id        TEXT NOT NULL UNIQUE,
+  app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+  event_type      TEXT NOT NULL,
+  source          TEXT NOT NULL DEFAULT '',
+  summary         TEXT NOT NULL DEFAULT '',
+  payload_json    TEXT NOT NULL DEFAULT '{}',
+  created_at      INTEGER NOT NULL,
+  acknowledged_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_light_app_events_app
+  ON light_app_events(app_id, id);
+CREATE INDEX IF NOT EXISTS idx_light_app_events_created
+  ON light_app_events(created_at);
+
+UPDATE _schema_version SET version = 37;

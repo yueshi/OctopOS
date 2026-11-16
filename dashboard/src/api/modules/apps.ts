@@ -32,13 +32,55 @@ export interface AppSummary {
   updated_at: number;
 }
 
+export type AppAccessPermission = "view" | "edit_data" | "edit_structure";
+
+export interface AppAccessRequest {
+  request_id: string;
+  app_id: string | null;
+  agent_id: string;
+  requester_username: string;
+  app_owner_username: string | null;
+  agent_owner_username: string;
+  needed: AppAccessPermission;
+  note: string;
+  status: "pending" | "approved" | "rejected";
+  created_at: number;
+  resolved_at: number | null;
+}
+
+export interface AppAccessRequestInput {
+  agent_id: string;
+  app_id?: string | null;
+  needed: AppAccessPermission;
+  note?: string;
+}
+
 export interface AppTable {
   table_key: string;
   label: string;
   row_count: number;
+  data_version?: number;
   is_main: boolean;
   public_visible: boolean;
+  row_scope?: "app" | "user";
+  rules?: Record<string, unknown>;
   columns: AppColumn[];
+}
+
+export interface AppTableVersion {
+  table_key: string;
+  data_version: number;
+  row_count: number;
+}
+
+export interface AppEvent {
+  event_id: string;
+  event_type: string;
+  source: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at: number;
+  acknowledged_at: number | null;
 }
 
 export interface AppDetail extends AppSummary {
@@ -176,12 +218,12 @@ export interface AppShare {
   user_id: number;
   username: string;
   display_name: string;
-  permission: "view" | "edit_data";
+  permission: AppAccessPermission;
 }
 
 export interface AppShareInput {
   username: string;
-  permission: "view" | "edit_data";
+  permission: AppAccessPermission;
 }
 
 export interface AppAssistantCitation {
@@ -337,6 +379,78 @@ export interface AppSourceInput {
   mapping?: Record<string, string>;
 }
 
+export type AppScheduleAction = "sync_source" | "snapshot_publication";
+
+export interface AppSchedule {
+  schedule_id: string;
+  action: AppScheduleAction;
+  target: Record<string, unknown>;
+  interval_seconds: number;
+  next_run_at: number;
+  last_run_at: number | null;
+  last_status: string;
+  last_error: string;
+  failure_count: number;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AppScheduleInput {
+  action: AppScheduleAction;
+  interval_seconds: number;
+  enabled?: boolean;
+  target?: Record<string, unknown>;
+}
+
+export interface AppScheduleUpdate {
+  interval_seconds: number;
+  enabled: boolean;
+}
+
+export interface AppBinding {
+  binding_id: string;
+  provider: "builtin" | "connector" | "external";
+  service_id: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  version: number;
+  builtin: boolean;
+}
+
+export interface AppBindingInput {
+  provider: "builtin" | "connector" | "external";
+  service_id: string;
+  config?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface AppServiceDeclaration {
+  service_id: string;
+  name: string;
+  provider: "connector" | "external";
+  connector_instance_id: string;
+  allowed_tools: string[];
+  allowed_url_prefixes: string[];
+  cache_ttl_seconds: number;
+  max_calls_per_minute: number;
+  public_live: boolean;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AppServiceInput {
+  provider: "connector" | "external";
+  connector_instance_id: string;
+  allowed_tools: string[];
+  allowed_url_prefixes?: string[];
+  cache_ttl_seconds?: number;
+  max_calls_per_minute?: number;
+  public_live?: boolean;
+  enabled?: boolean;
+}
+
 function encodeId(appId: string): string {
   return encodeURIComponent(appId);
 }
@@ -484,6 +598,46 @@ export const appsApi = {
   tables: (appId: string) =>
     request<{ tables: AppTable[] }>(`/apps/${encodeId(appId)}/tables`),
 
+  dataVersion: (appId: string) =>
+    request<{ tables: AppTableVersion[] }>(
+      `/apps/${encodeId(appId)}/data-version`,
+    ),
+
+  events: (appId: string, since = 0, limit = 100) =>
+    request<{ events: AppEvent[]; latest_id: number }>(
+      `/apps/${encodeId(appId)}/events?since=${since}&limit=${limit}`,
+    ),
+
+  ackEvents: (appId: string, eventIds: string[]) =>
+    request<{ acknowledged: number }>(`/apps/${encodeId(appId)}/events/ack`, {
+      method: "POST",
+      body: JSON.stringify({ event_ids: eventIds }),
+    }),
+
+  callService: (
+    appId: string,
+    name: string,
+    tool: string,
+    args: Record<string, unknown>,
+  ) =>
+    request<{
+      value: unknown;
+      cached: boolean;
+      expires_at: number | null;
+    }>(`/apps/${encodeId(appId)}/services/${encodeURIComponent(name)}/call`, {
+      method: "POST",
+      body: JSON.stringify({ tool, args }),
+    }),
+
+  serviceImage: (appId: string, name: string, url: string) =>
+    request<{ asset: string }>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(name)}/image`,
+      {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      },
+    ),
+
   setTableVisibility: (
     appId: string,
     tableKey: string,
@@ -497,14 +651,26 @@ export const appsApi = {
       },
     ),
 
-  rows: (appId: string, limit = 200, offset = 0, table = "main") =>
-    request<AppRowsResponse>(
-      `/apps/${encodeId(
-        appId,
-      )}/rows?limit=${limit}&offset=${offset}&table=${encodeURIComponent(
-        table,
-      )}`,
-    ),
+  rows: (
+    appId: string,
+    limit = 200,
+    offset = 0,
+    table = "main",
+    filters?: Record<string, string>,
+    sort?: string,
+  ) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    params.set("table", table);
+    for (const [column, value] of Object.entries(filters ?? {})) {
+      params.append("filter", `${column}=${value}`);
+    }
+    if (sort) params.set("sort", sort);
+    return request<AppRowsResponse>(
+      `/apps/${encodeId(appId)}/rows?${params.toString()}`,
+    );
+  },
 
   appendRow: (
     appId: string,
@@ -655,6 +821,66 @@ export const appsApi = {
       body: JSON.stringify({ shares }),
     }),
 
+  accessRequests: (params?: { scope?: "owner" | "mine"; app_id?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.scope) query.set("scope", params.scope);
+    if (params?.app_id) query.set("app_id", params.app_id);
+    const suffix = query.toString();
+    return request<{ requests: AppAccessRequest[] }>(
+      `/apps/access-requests${suffix ? `?${suffix}` : ""}`,
+    );
+  },
+
+  createAccessRequest: (body: AppAccessRequestInput) =>
+    request<AppAccessRequest>("/apps/access-requests", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  approveAccessRequest: (requestId: string) =>
+    request<AppAccessRequest>(
+      `/apps/access-requests/${encodeURIComponent(requestId)}/approve`,
+      { method: "POST" },
+    ),
+
+  rejectAccessRequest: (requestId: string) =>
+    request<AppAccessRequest>(
+      `/apps/access-requests/${encodeURIComponent(requestId)}/reject`,
+      { method: "POST" },
+    ),
+
+  listBindings: (appId: string) =>
+    request<{ bindings: AppBinding[] }>(`/apps/${encodeId(appId)}/bindings`),
+
+  saveBinding: (appId: string, bindingId: string, body: AppBindingInput) =>
+    request<AppBinding>(
+      `/apps/${encodeId(appId)}/bindings/${encodeURIComponent(bindingId)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
+  deleteBinding: (appId: string, bindingId: string) =>
+    request<{ deleted: string }>(
+      `/apps/${encodeId(appId)}/bindings/${encodeURIComponent(bindingId)}`,
+      { method: "DELETE" },
+    ),
+
+  listServices: (appId: string) =>
+    request<{ services: AppServiceDeclaration[] }>(
+      `/apps/${encodeId(appId)}/services`,
+    ),
+
+  saveService: (appId: string, name: string, body: AppServiceInput) =>
+    request<AppServiceDeclaration>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(name)}`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+
+  deleteService: (appId: string, name: string) =>
+    request<{ deleted: string }>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
+
   listSources: (appId: string) =>
     request<{ sources: AppSource[] }>(`/apps/${encodeId(appId)}/sources`),
 
@@ -674,6 +900,33 @@ export const appsApi = {
     request<AppImportResult>(
       `/apps/${encodeId(appId)}/sources/${encodeURIComponent(sourceId)}/run`,
       { method: "POST" },
+    ),
+
+  listSchedules: (appId: string) =>
+    request<{ schedules: AppSchedule[] }>(`/apps/${encodeId(appId)}/schedules`),
+
+  saveSchedule: (appId: string, body: AppScheduleInput) =>
+    request<AppSchedule>(`/apps/${encodeId(appId)}/schedules`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateSchedule: (
+    appId: string,
+    scheduleId: string,
+    body: AppScheduleUpdate,
+  ) =>
+    request<AppSchedule>(
+      `/apps/${encodeId(appId)}/schedules/${encodeURIComponent(scheduleId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  deleteSchedule: (appId: string, scheduleId: string) =>
+    request<void>(
+      `/apps/${encodeId(appId)}/schedules/${encodeURIComponent(scheduleId)}`,
+      {
+        method: "DELETE",
+      },
     ),
 
   sourceTools: (appId: string, instanceId: string) =>

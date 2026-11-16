@@ -27,11 +27,18 @@ const METHOD_CAPABILITY: Record<string, string> = {
   tables: CAP.DATA_READ,
   rows: CAP.DATA_READ,
   append: CAP.DATA_WRITE,
+  update: CAP.DATA_WRITE,
+  updateMany: CAP.DATA_WRITE,
+  remove: CAP.DATA_WRITE,
   generate: CAP.AI_GENERATE,
   launchGame: CAP.GAME_LAUNCH,
   asset: CAP.ASSET_READ,
   openExternal: CAP.EXTERNAL_OPEN,
   composeMessage: CAP.CHAT_COMPOSE,
+  service: CAP.EXTERNAL_FETCH,
+  serviceImage: CAP.EXTERNAL_FETCH,
+  events: CAP.EVENTS_READ,
+  ackEvents: CAP.EVENTS_READ,
 };
 
 export function effectiveCapabilities(

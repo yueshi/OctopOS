@@ -52,6 +52,14 @@ def test_parse_csv_gb18030_fallback() -> None:
     assert decode_text(text.encode("gb18030")) == text
 
 
+def test_parse_skips_totals_rows() -> None:
+    rows = parse_import_file(
+        "salary.csv",
+        "工号,工资\nE001,8000\n合计,15000\n".encode(),
+    )
+    assert rows == [{"工号": "E001", "工资": "8000"}]
+
+
 def test_parse_json_array_of_objects() -> None:
     rows = parse_import_file(
         "items.json", b'[{"name": "cup", "qty": 3}, {"name": "pen", "qty": null}]'

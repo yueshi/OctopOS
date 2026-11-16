@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from octop.infra.apps.sandbox import (
     APP_CSP,
     WEBRTC_FREEZE,
@@ -10,6 +13,8 @@ from octop.infra.apps.sandbox import (
     build_wrapper_doc,
     sanitize_blocked_uri,
 )
+
+_DASHBOARD_HOST = Path(__file__).resolve().parents[3] / "dashboard/src/components/MiniAppFrame"
 
 
 def test_wrapper_denies_the_app_frame_any_navigation() -> None:
@@ -145,3 +150,45 @@ def test_sanitize_blocked_uri_truncates_and_handles_empty() -> None:
     assert sanitize_blocked_uri("") == ""
     assert len(sanitize_blocked_uri("x" * 500)) == 80
     assert sanitize_blocked_uri("inline") == "inline"
+
+
+def test_dashboard_csp_matches_python() -> None:
+    """The dashboard and public host must run the same CSP."""
+    text = (_DASHBOARD_HOST / "appCsp.ts").read_text(encoding="utf-8")
+    match = re.search(
+        r"export const APP_CSP\s*=\s*((?:\"[^\"]*\"\s*(?:\+\s*)?)+);",
+        text,
+    )
+    assert match is not None
+    ts_csp = "".join(re.findall(r'"([^"]*)"', match.group(1)))
+    assert ts_csp == APP_CSP
+    assert "export const WRAPPER_CSP = `${APP_CSP}; frame-src 'none'`;" in text
+    assert WRAPPER_CSP == APP_CSP + "; frame-src 'none'"
+
+
+def test_dashboard_wrapper_keeps_the_same_invariants() -> None:
+    text = (_DASHBOARD_HOST / "wrapper.ts").read_text(encoding="utf-8")
+    python_doc = build_wrapper_doc("<html></html>")
+    for needle in (
+        "loads > 1",
+        "inner.remove()",
+        'source: "octop-app-host", type: "escaped"',
+        "event.source === inner.contentWindow",
+        "event.source === parent",
+    ):
+        assert needle in text
+        assert needle in python_doc
+
+
+def test_dashboard_freeze_covers_the_same_apis() -> None:
+    text = (_DASHBOARD_HOST / "sdk.ts").read_text(encoding="utf-8")
+    for needle in (
+        "RTCPeerConnection",
+        "HTMLIFrameElement",
+        "DOMParser",
+        "MutationObserver",
+        "serviceWorker",
+        "WebTransport",
+    ):
+        assert needle in text
+        assert needle in WEBRTC_FREEZE

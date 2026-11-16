@@ -24,6 +24,15 @@ describe("bridge request checks", () => {
     expect(checkMethodAllowed("generate", [CAP.DATA_READ])).toBe(false);
   });
 
+  it("allows the row write methods only with data.write", () => {
+    expect(checkMethodAllowed("update", [CAP.DATA_WRITE])).toBe(true);
+    expect(checkMethodAllowed("updateMany", [CAP.DATA_WRITE])).toBe(true);
+    expect(checkMethodAllowed("remove", [CAP.DATA_WRITE])).toBe(true);
+    expect(checkMethodAllowed("update", [CAP.DATA_READ])).toBe(false);
+    expect(checkMethodAllowed("updateMany", [CAP.DATA_READ])).toBe(false);
+    expect(checkMethodAllowed("remove", [CAP.DATA_READ])).toBe(false);
+  });
+
   it("denies methods the bridge does not implement", () => {
     // An unknown method has no capability requirement, so allowing it would
     // open every method added later by default.

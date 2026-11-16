@@ -23,7 +23,17 @@ from octop.infra.apps.service import (
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.repos.agents import AgentRepo
+from octop.infra.db.repos.app_access import AppAccessRequestRepo, AppAccessRequestRow
+from octop.infra.db.repos.app_bindings import LightAppBindingRepo
+from octop.infra.db.repos.app_events import AppEventRepo
+from octop.infra.db.repos.app_schedules import (
+    LightAppScheduleRepo,
+    schedule_jitter,
+)
+from octop.infra.db.repos.app_services import LightAppServiceRepo
 from octop.infra.db.repos.apps import LightAppRepo
+from octop.infra.db.repos.audit import AuditRepo
+from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo
 from octop.infra.errors import ErrorCode, OctopError
@@ -57,12 +67,36 @@ class World:
     db: SqlitePool
     agent_repo: AgentRepo
     user_repo: UserRepo
+    access_repo: AppAccessRequestRepo
+    service_repo: LightAppServiceRepo
+    binding_repo: LightAppBindingRepo
+    event_repo: AppEventRepo
+    schedule_repo: LightAppScheduleRepo
+    connector_repo: ConnectorRepo
+    audit_repo: AuditRepo
     workspace: BackendWorkspace
     other_workspace: BackendWorkspace
     agent_id: str
     other_agent_id: str
     alice_id: int
     bob_id: int
+
+
+class FixedClock:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return float(self.value)
+
+
+class FakeExternalToolRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def run(self, *, instance_id: str, tool: str, args: dict[str, object]) -> str:
+        self.calls.append((instance_id, tool, dict(args)))
+        return json.dumps({"ok": True, "tool": tool})
 
 
 class _Workspaces:
@@ -94,6 +128,13 @@ def world(tmp_path: Path) -> World:
         FilesystemBackend(root_dir=str(other_root), virtual_mode=True), other_root
     )
     repo = LightAppRepo(db)
+    access_repo = AppAccessRequestRepo(db)
+    service_repo = LightAppServiceRepo(db)
+    binding_repo = LightAppBindingRepo(db)
+    event_repo = AppEventRepo(db)
+    schedule_repo = LightAppScheduleRepo(db)
+    connector_repo = ConnectorRepo(db)
+    audit_repo = AuditRepo(db)
     return World(
         service=AppService(
             app_repo=repo,
@@ -101,11 +142,26 @@ def world(tmp_path: Path) -> World:
             user_repo=user_repo,
             workspaces=_Workspaces({agent_id: workspace, other_agent_id: other_workspace}),
             secret_repo=SecretRepo(db),
+            access_repo=access_repo,
+            audit_repo=audit_repo,
+            binding_repo=binding_repo,
+            service_repo=service_repo,
+            event_repo=event_repo,
+            schedule_repo=schedule_repo,
+            connector_repo=connector_repo,
+            external_tool_runner=FakeExternalToolRunner(),
         ),
         repo=repo,
         db=db,
         agent_repo=agent_repo,
         user_repo=user_repo,
+        access_repo=access_repo,
+        service_repo=service_repo,
+        binding_repo=binding_repo,
+        event_repo=event_repo,
+        schedule_repo=schedule_repo,
+        connector_repo=connector_repo,
+        audit_repo=audit_repo,
         workspace=workspace,
         other_workspace=other_workspace,
         agent_id=agent_id,
@@ -370,9 +426,253 @@ async def test_permissions_and_collaborators(world: World) -> None:
     with pytest.raises(OctopError) as exc:
         world.service.set_collaborators(row, [(world.bob_id, "view"), (world.bob_id, "view")])
     _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
+    world.service.set_collaborators(row, [(world.bob_id, "edit_structure")])
+    assert (
+        world.service.require(row, world.bob_id, "edit_structure", is_admin=False)
+        == "edit_structure"
+    )
+
+
+async def test_access_request_approval_shares_agent_and_grants_permission(
+    world: World,
+) -> None:
+    app_id = await _create(world)
+
+    request = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="edit_structure",
+        note="please let me redesign it",
+    )
+    assert request.status == "pending"
+    assert request.app_owner_user_id == world.alice_id
+    assert request.agent_owner_user_id == world.alice_id
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
+
+    # Repeating the request returns the pending row instead of duplicating it.
+    again = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="edit_structure",
+    )
+    assert again.request_id == request.request_id
+    assert [
+        row.request_id
+        for row in world.service.list_access_requests(user_id=world.alice_id, is_admin=False)
+    ] == [request.request_id]
+
+    approved = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        approve=True,
+    )
+    assert approved.status == "approved"
+    assert world.agent_repo.get(world.agent_id).is_shared == 1
+    row = world.service.get(app_id)
+    assert world.service.permission_for(row, world.bob_id, is_admin=False) == "edit_structure"
+    assert world.audit_repo.query(action="miniapp.access_request", limit=10)
+    assert world.audit_repo.query(action="miniapp.access_approved", limit=10)
+
+
+async def test_access_request_derives_the_agent_from_the_app(world: World) -> None:
+    app_id = await _create(world)
+
+    request = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.other_agent_id,
+        user_id=world.bob_id,
+        needed="view",
+    )
+
+    assert request.agent_id == world.agent_id
+
+
+async def test_access_request_approval_does_not_overwrite_acl_after_race(
+    world: World,
+) -> None:
+    app_id = await _create(world)
+    request = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="view",
+    )
+
+    first = world.access_repo.resolve_with_collaborators(
+        request.request_id,
+        status="approved",
+        resolved_by=world.alice_id,
+        app_id=app_id,
+        collaborators=[(world.bob_id, "view")],
+    )
+    assert first is not None
+    assert first.status == "approved"
+
+    second = world.access_repo.resolve_with_collaborators(
+        request.request_id,
+        status="approved",
+        resolved_by=world.alice_id,
+        app_id=app_id,
+        collaborators=[(world.bob_id, "edit_data")],
+    )
+    assert second is not None
+    assert second.status == "approved"
+
+    row = world.service.get(app_id)
+    assert world.service.permission_for(row, world.bob_id, is_admin=False) == "view"
+
+
+async def test_access_request_split_owners_app_owner_cannot_finish_alone(
+    world: World,
+) -> None:
+    app = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.bob_id,
+        name="Shared",
+        description="",
+        columns=COLUMNS,
+    )
+    carol_id = world.user_repo.create(username="carol", password_hash="h", role="user")
+    request = world.service.request_access(
+        app_id=app.app_id,
+        agent_id=world.agent_id,
+        user_id=carol_id,
+        needed="edit_data",
+    )
+    assert request.app_owner_user_id == world.bob_id
+    assert request.agent_owner_user_id == world.alice_id
+
+    # The app owner can grant the app ACL, but not share someone else's expert.
+    partial = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.bob_id,
+        is_admin=False,
+        approve=True,
+    )
+    assert partial.status == "pending"
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
+    assert not world.service.is_agent_accessible(world.agent_id, carol_id)
+    row = world.service.get(app.app_id)
+    assert world.service.permission_for(row, carol_id, is_admin=False) == "edit_data"
+
+    # The expert owner completes the other half.
+    done = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        approve=True,
+    )
+    assert done.status == "approved"
+    assert world.agent_repo.get(world.agent_id).is_shared == 1
+    assert world.service.is_agent_accessible(world.agent_id, carol_id)
+
+
+async def test_access_request_split_owners_agent_owner_grants_first(
+    world: World,
+) -> None:
+    app = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.bob_id,
+        name="Shared",
+        description="",
+        columns=COLUMNS,
+    )
+    carol_id = world.user_repo.create(username="carol", password_hash="h", role="user")
+    request = world.service.request_access(
+        app_id=app.app_id,
+        agent_id=world.agent_id,
+        user_id=carol_id,
+        needed="view",
+    )
+
+    partial = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        approve=True,
+    )
+    assert partial.status == "pending"
+    assert world.agent_repo.get(world.agent_id).is_shared == 1
+    assert world.service.is_agent_accessible(world.agent_id, carol_id)
+    row = world.service.get(app.app_id)
+    assert world.service.permission_for(row, carol_id, is_admin=False) is None
+
+    done = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.bob_id,
+        is_admin=False,
+        approve=True,
+    )
+    assert done.status == "approved"
+    assert world.service.permission_for(row, carol_id, is_admin=False) == "view"
+
+
+async def test_access_request_race_returns_the_unique_pending_row(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = await _create(world)
+    first = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="view",
+    )
+    real_find = world.access_repo.find_pending
+    calls = 0
+
+    def racing_find(**kwargs: object) -> AppAccessRequestRow | None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # Simulate another process inserting between find and create.
+            return None
+        return real_find(**kwargs)
+
+    monkeypatch.setattr(world.access_repo, "find_pending", racing_find)
+    second = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="view",
+    )
+    assert second.request_id == first.request_id
+    assert len(world.access_repo.list_for_requester(world.bob_id)) == 1
+
+
+async def test_owner_cannot_request_access_to_their_own_app(world: World) -> None:
+    app_id = await _create(world)
     with pytest.raises(OctopError) as exc:
-        world.service.set_collaborators(row, [(world.bob_id, "edit_structure")])
+        world.service.request_access(
+            app_id=app_id,
+            agent_id=world.agent_id,
+            user_id=world.alice_id,
+            needed="edit_data",
+        )
     _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
+
+
+async def test_access_request_rejection_keeps_access_closed(world: World) -> None:
+    app_id = await _create(world)
+    request = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="edit_data",
+    )
+    rejected = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        approve=False,
+    )
+    assert rejected.status == "rejected"
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
+    row = world.service.get(app_id)
+    assert world.service.permission_for(row, world.bob_id, is_admin=False) is None
 
 
 async def test_list_for_user_and_agent(world: World) -> None:
@@ -921,6 +1221,12 @@ async def test_run_source_workspace_file_records_state(world: World) -> None:
     assert view.last_row_count == 1
     assert view.last_error is None
 
+    # Replaying the same batch is idempotent (content-addressed source run).
+    replay = await world.service.run_source(row, "src_1")
+    assert replay.imported == 0
+    _schema, _rows, total = await world.service.read_rows(row)
+    assert total == 1
+
     # A failing run records the error and re-raises.
     await world.workspace.adelete("inbound/imports/data.csv")
     with pytest.raises(OctopError):
@@ -1098,8 +1404,12 @@ async def test_external_source_cursor_advances_between_runs(world: World) -> Non
     assert calls[0] == {"q": "cup"}
     assert service.get_source(row, "src_cursor").params["cursor"] == "2026-11-02"
 
-    await service.run_source(row, "src_cursor")
+    replay = await service.run_source(row, "src_cursor")
     assert calls[1] == {"q": "cup", "since": "2026-11-02"}
+    # The second page returns the same record; it is not appended twice.
+    assert replay.imported == 0
+    _schema, _rows, total = await service.read_rows(row)
+    assert total == 1
 
 
 def test_extract_records_shapes() -> None:
@@ -1133,6 +1443,9 @@ async def test_run_source_backoff_and_reset(world: World) -> None:
         params={"path": "inbound/imports/b.csv"},
         created_by=world.alice_id,
     )
+    clock = FixedClock(1000)
+    world.service._clock = clock
+    jitter = schedule_jitter("sch_src_s1", 60)
 
     # Success re-arms the normal interval and resets the failure counter.
     await world.service.run_source(row, "s1")
@@ -1140,7 +1453,7 @@ async def test_run_source_backoff_and_reset(world: World) -> None:
     assert item is not None
     assert item.fail_count == 0
     assert item.next_run_at is not None and item.last_run_at is not None
-    assert item.next_run_at - item.last_run_at == 60
+    assert item.next_run_at - item.last_run_at == 60 + jitter
 
     # Failures back off exponentially: 1x, then 2x.
     await world.workspace.adelete("inbound/imports/b.csv")
@@ -1151,7 +1464,7 @@ async def test_run_source_backoff_and_reset(world: World) -> None:
         assert item is not None
         assert item.fail_count == expected_delay // 60
         assert item.next_run_at is not None and item.last_run_at is not None
-        assert item.next_run_at - item.last_run_at == expected_delay
+        assert item.next_run_at - item.last_run_at == expected_delay + jitter
 
     # Backoff is capped at MAX_BACKOFF_SECONDS.
     world.service.delete_source(row, "s1")
@@ -1165,13 +1478,14 @@ async def test_run_source_backoff_and_reset(world: World) -> None:
         params={"path": "inbound/imports/b.csv"},
         created_by=world.alice_id,
     )
+    jitter = schedule_jitter("sch_src_s2", 70000)
     for expected_delay in (70000, 24 * 3600):
         with pytest.raises(OctopError):
             await world.service.run_source(row, "s2")
         item = world.repo.get_source(app_id, "s2")
         assert item is not None
         assert item.next_run_at is not None and item.last_run_at is not None
-        assert item.next_run_at - item.last_run_at == expected_delay
+        assert item.next_run_at - item.last_run_at == expected_delay + jitter
 
 
 async def test_import_rows_replace_with_no_records_keeps_the_table(world: World) -> None:
@@ -2197,3 +2511,526 @@ async def test_read_redacts_unmarked_free_text_pii(world: World) -> None:
 
     assert rows[4] == {"title": "N4", "note": "call 138****0002"}
     assert rows[0]["note"] == "hello"
+
+
+async def test_query_rows_filters_and_sorts(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.append_row(row, {"title": "B", "qty": "10", "status": "new"})
+    await world.service.append_row(row, {"title": "A", "qty": "9", "status": "doing"})
+    await world.service.append_row(row, {"title": "C", "qty": "100", "status": "new"})
+
+    # A filter narrows the result; every filter must match.
+    _schema, rows, _meta, total = await world.service.query_rows_detailed(
+        row,
+        filters={"status": "new"},
+    )
+    assert total == 2
+    assert [item["title"] for item in rows] == ["B", "C"]
+
+    # Sorting is numeric-aware, so 9 comes before 10.
+    _schema, rows, _meta, _total = await world.service.query_rows_detailed(row, sort="qty")
+    assert [item["title"] for item in rows] == ["A", "B", "C"]
+
+    _schema, rows, _meta, _total = await world.service.query_rows_detailed(row, sort="-qty")
+    assert [item["title"] for item in rows] == ["C", "B", "A"]
+
+    # Text columns sort as text.
+    _schema, rows, _meta, _total = await world.service.query_rows_detailed(row, sort="title")
+    assert [item["title"] for item in rows] == ["A", "B", "C"]
+
+    # Filter and sort combine, and paging happens after both.
+    _schema, rows, _meta, total = await world.service.query_rows_detailed(
+        row,
+        filters={"status": "new"},
+        sort="-qty",
+        limit=1,
+    )
+    assert total == 2
+    assert [item["title"] for item in rows] == ["C"]
+
+
+async def test_query_rows_rejects_unknown_filter_and_sort_columns(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.query_rows_detailed(row, filters={"nope": "1"})
+    _assert_code(exc, ErrorCode.APP_SCHEMA_INVALID)
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.query_rows_detailed(row, sort="nope")
+    _assert_code(exc, ErrorCode.APP_SCHEMA_INVALID)
+
+
+async def test_query_rows_refuses_sensitive_columns_for_viewers(world: World) -> None:
+    app_row = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        name="Contacts",
+        description="",
+        columns=[
+            {"name": "title", "type": "string"},
+            {"name": "phone", "type": "string", "pii": "phone"},
+        ],
+    )
+    row = world.service.get(app_row.app_id)
+    await world.service.append_row(row, {"title": "A", "phone": "13800000000"})
+
+    # A viewer may not probe a masked column through filters or sorting.
+    with pytest.raises(OctopError) as exc:
+        await world.service.query_rows_detailed(
+            row,
+            filters={"phone": "13800000000"},
+            redact_pii=True,
+        )
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.query_rows_detailed(row, sort="phone", redact_pii=True)
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+
+    # The owner, whose values are not masked, may do both.
+    _schema, rows, _meta, _total = await world.service.query_rows_detailed(
+        row,
+        filters={"phone": "13800000000"},
+        sort="phone",
+    )
+    assert len(rows) == 1
+
+
+async def test_update_row_uses_the_table_the_row_lives_in(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.create_table(
+        row,
+        table_key="orders",
+        label="Orders",
+        columns=[{"name": "item", "type": "string", "required": True}],
+    )
+    await world.service.append_row(row, {"item": "纸杯"}, table="orders")
+
+    _schema, _rows, meta, _total = await world.service.read_rows_detailed(row, table="orders")
+    row_id = meta[0]["row_id"]
+
+    # The caller does not have to name the table: the row id identifies it.
+    result = await world.service.update_row(row, row_id, {"item": "奶茶"})
+    assert result["values"] == {"item": "奶茶"}
+
+    _schema, rows, _total = await world.service.read_rows(row, table="orders")
+    assert rows[0]["item"] == "奶茶"
+
+
+def _connector_instance(world: World, *, owner_id: int, kind: str = "http-extract") -> str:
+    instance_id = new_ulid()
+    world.connector_repo.create(
+        instance_id=instance_id,
+        user_id=owner_id,
+        kind=kind,
+        display_name="HTTP",
+        mcp_server_name=f"http_{instance_id}",
+    )
+    return instance_id
+
+
+async def _create_external_app(world: World) -> str:
+    row = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        name="External",
+        description="",
+        columns=COLUMNS,
+        capabilities={"data.read", "data.write", "external.fetch"},
+    )
+    return row.app_id
+
+
+async def test_service_declaration_validates_and_mirrors_binding(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+
+    view = world.service.save_service(
+        row,
+        name="douban",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=300,
+        max_calls_per_minute=3,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    assert view.name == "douban"
+    assert [item.name for item in world.service.list_services(row)] == ["douban"]
+    binding = world.binding_repo.get(app_id, "douban")
+    assert binding is not None
+    assert binding.provider == "external"
+    assert binding.service_id == view.service_id
+
+    # Another user's connector cannot be bound by the app owner.
+    bob_instance = _connector_instance(world, owner_id=world.bob_id)
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="other",
+            provider="connector",
+            connector_instance_id=bob_instance,
+            allowed_tools=["fetch_json"],
+            allowed_url_prefixes=[],
+            cache_ttl_seconds=0,
+            max_calls_per_minute=1,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="bad",
+            provider="external",
+            connector_instance_id=instance_id,
+            allowed_tools=[],
+            allowed_url_prefixes=[],
+            cache_ttl_seconds=0,
+            max_calls_per_minute=1,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="bad",
+            provider="external",
+            connector_instance_id=instance_id,
+            allowed_tools=["fetch_json"],
+            allowed_url_prefixes=["ftp://example.com"],
+            cache_ttl_seconds=0,
+            max_calls_per_minute=1,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+
+async def test_service_call_caches_and_enforces_allowlists(world: World) -> None:
+    app_id = await _create_external_app(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+    view = world.service.save_service(
+        row,
+        name="douban",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=300,
+        max_calls_per_minute=3,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    runner = world.service._external_tool_runner
+    assert isinstance(runner, FakeExternalToolRunner)
+
+    first = await world.service.call_service(
+        row,
+        name="douban",
+        tool="fetch_json",
+        args={"url": "https://api.example.com/books"},
+    )
+    assert first.value == {"ok": True, "tool": "fetch_json"}
+    assert first.cached is False
+    assert len(runner.calls) == 1
+
+    second = await world.service.call_service(
+        row,
+        name="douban",
+        tool="fetch_json",
+        args={"url": "https://api.example.com/books"},
+    )
+    assert second.cached is True
+    assert len(runner.calls) == 1
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.call_service(
+            row,
+            name="douban",
+            tool="fetch_json",
+            args={"url": "https://evil.example.net/books"},
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.call_service(
+            row,
+            name="douban",
+            tool="fetch_text",
+            args={"url": "https://api.example.com/books"},
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+    # A different service with caching off is rate-limited after one live call.
+    limited = world.service.save_service(
+        row,
+        name="limited",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=1,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    assert limited.service_id != view.service_id
+    await world.service.call_service(
+        row,
+        name="limited",
+        tool="fetch_json",
+        args={"url": "https://api.example.com/one"},
+    )
+    with pytest.raises(OctopError) as exc:
+        await world.service.call_service(
+            row,
+            name="limited",
+            tool="fetch_json",
+            args={"url": "https://api.example.com/two"},
+        )
+    _assert_code(exc, ErrorCode.APP_BUSY)
+
+
+async def test_service_call_requires_external_fetch_capability(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+    world.service.save_service(
+        row,
+        name="douban",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=1,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    with pytest.raises(OctopError) as exc:
+        await world.service.call_service(
+            row,
+            name="douban",
+            tool="fetch_json",
+            args={"url": "https://api.example.com/books"},
+        )
+    _assert_code(exc, ErrorCode.APP_CAPABILITY_DENIED)
+
+
+async def test_service_image_is_saved_as_asset(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from octop.infra.apps import service as app_service_module
+
+    app_id = await _create_external_app(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+    world.service.save_service(
+        row,
+        name="covers",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://img.example.com"],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=5,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    data = b"\x89PNG\r\n\x1a\nfake-pixels"
+    monkeypatch.setattr(app_service_module, "_fetch_service_image", lambda _url: data)
+
+    asset = await world.service.fetch_service_image(
+        row,
+        name="covers",
+        url="https://img.example.com/cover.png",
+    )
+    _mime, stored = await world.service.read_asset(row, asset)
+    assert stored == data
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.fetch_service_image(
+            row,
+            name="covers",
+            url="https://evil.example.net/cover.png",
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+
+async def test_app_event_inbox_cursor_ack_and_idempotency(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+
+    first = world.service.append_event(
+        row,
+        event_type="order.created",
+        payload={"id": "A"},
+        source="orders",
+        summary="new order",
+    )
+    second = world.service.append_event(
+        row,
+        event_type="order.created",
+        payload={"id": "B"},
+        external_event_id="evt-upstream-1",
+    )
+    assert first.event_id != second.event_id
+
+    events, latest = world.service.list_events(row)
+    assert [item.event_id for item in events] == [first.event_id, second.event_id]
+    assert latest >= 2
+
+    # The same upstream event maps to the same inbox row.
+    again = world.service.append_event(
+        row,
+        event_type="order.created",
+        payload={"id": "B"},
+        external_event_id="evt-upstream-1",
+    )
+    assert again.event_id == second.event_id
+    events, _latest = world.service.list_events(row)
+    assert len(events) == 2
+
+    assert world.service.ack_events(row, [first.event_id]) == 1
+    events, _latest = world.service.list_events(row)
+    assert events[0].acknowledged_at is not None
+    assert events[1].acknowledged_at is None
+
+    # The cursor only returns rows after the given id.
+    after_first, _latest = world.service.list_events(row, since=1)
+    assert [item.event_id for item in after_first] == [second.event_id]
+
+
+async def test_event_import_prefix_is_idempotent(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    records = [{"title": "A", "status": "new"}]
+
+    first = await world.service.import_rows(
+        row,
+        records,
+        mode="append",
+        client_request_id_prefix="evt:1",
+    )
+    assert first.imported == 1
+    second = await world.service.import_rows(
+        row,
+        records,
+        mode="append",
+        client_request_id_prefix="evt:1",
+    )
+    assert second.imported == 0
+
+    _schema, rows, _total = await world.service.read_rows(row)
+    assert [item["title"] for item in rows] == ["A"]
+
+
+async def test_table_triggers_append_inbox_events(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.set_table_rules(
+        row,
+        table="main",
+        rules={
+            "triggers": {
+                "on_create": {"event_type": "row.created"},
+                "on_update": {
+                    "event_type": "row.done",
+                    "when": {"field": "status", "equals": "done"},
+                },
+            }
+        },
+    )
+
+    _index, created = await world.service.append_row_record(
+        row,
+        {"title": "A", "status": "new"},
+    )
+    events, _latest = world.service.list_events(row)
+    assert [item.event_type for item in events] == ["row.created"]
+    assert events[0].payload["row_id"] == created.row_id
+
+    await world.service.update_row(row, created.row_id, {"title": "A", "status": "done"})
+    events, _latest = world.service.list_events(row)
+    assert [item.event_type for item in events] == ["row.created", "row.done"]
+
+    # An update whose value does not match `when` creates no event.
+    await world.service.update_row(row, created.row_id, {"title": "B", "status": "doing"})
+    events, _latest = world.service.list_events(row)
+    assert len(events) == 2
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.set_table_rules(
+            row,
+            table="main",
+            rules={"triggers": {"on_create": {"when": {"field": "missing"}}}},
+        )
+    _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
+
+
+async def test_source_retry_after_partial_commit_does_not_duplicate(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows committed before a crash are skipped when the run is retried."""
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    path = "inbound/imports/retry.csv"
+    await world.workspace.awrite_text(path, "title,qty,status\nmug,1,new\n")
+    world.service.save_source(
+        row,
+        source_id="src_retry",
+        table_key="main",
+        kind="workspace_file",
+        mode="append",
+        params={"path": path},
+        created_by=world.alice_id,
+    )
+
+    # Simulate a timeout/crash after rows were written but before run state.
+    partial = await world.service.import_from_file(
+        row,
+        path=path,
+        table="main",
+        mode="append",
+        idempotency_source="src_retry",
+    )
+    assert partial.imported == 1
+
+    result = await world.service.run_source(row, "src_retry")
+    assert result.imported == 0
+    _schema, _rows, total = await world.service.read_rows(row)
+    assert total == 1
+
+    # Retrying at the row cap must also succeed: duplicates are not new rows.
+    monkeypatch.setattr("octop.infra.apps.service.MAX_ROWS", 1)
+    at_cap = await world.service.run_source(row, "src_retry")
+    assert at_cap.imported == 0

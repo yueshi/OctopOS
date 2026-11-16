@@ -18,6 +18,16 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
   files: vi.fn(),
   listSources: vi.fn(),
+  listBindings: vi.fn(),
+  listServices: vi.fn(),
+  sourceTools: vi.fn(),
+  accessRequests: vi.fn(),
+  dataVersion: vi.fn(),
+  publication: vi.fn(),
+  listSchedules: vi.fn(),
+  saveSchedule: vi.fn(),
+  updateSchedule: vi.fn(),
+  deleteSchedule: vi.fn(),
 }));
 
 vi.mock("../../hooks/useIsMobile", () => ({
@@ -41,13 +51,17 @@ vi.mock("react-i18next", async () => {
     }
     return value;
   };
-  const t = (key: string, fallback?: unknown): string => {
+  const t = (key: string, options?: unknown): string => {
     const value = lookup(key);
-    return typeof value === "string"
-      ? value
-      : typeof fallback === "string"
-      ? fallback
-      : key;
+    if (typeof value !== "string") {
+      return typeof options === "string" ? options : key;
+    }
+    if (options && typeof options === "object" && !Array.isArray(options)) {
+      return value.replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+        String((options as Record<string, unknown>)[name] ?? ""),
+      );
+    }
+    return value;
   };
   return { useTranslation: () => ({ t, i18n: { language: "zh" } }) };
 });
@@ -57,12 +71,22 @@ vi.mock("../../api/modules/apps", () => ({
     get: api.get,
     files: api.files,
     listSources: api.listSources,
+    listBindings: api.listBindings,
+    listServices: api.listServices,
+    sourceTools: api.sourceTools,
+    accessRequests: api.accessRequests,
+    dataVersion: api.dataVersion,
+    publication: api.publication,
+    listSchedules: api.listSchedules,
+    saveSchedule: api.saveSchedule,
+    updateSchedule: api.updateSchedule,
+    deleteSchedule: api.deleteSchedule,
   },
   askAppAssistant: vi.fn(),
 }));
 
 vi.mock("../../api/modules/connectors", () => ({
-  connectorsApi: {},
+  connectorsApi: { listInstances: vi.fn(async () => []) },
 }));
 
 const detail: AppDetail = {
@@ -117,6 +141,23 @@ beforeEach(() => {
   api.files.mockResolvedValue({ files: [] });
   api.listSources.mockReset();
   api.listSources.mockResolvedValue({ sources: [] });
+  api.listBindings.mockReset();
+  api.listBindings.mockResolvedValue({ bindings: [] });
+  api.listServices.mockReset();
+  api.listServices.mockResolvedValue({ services: [] });
+  api.sourceTools.mockReset();
+  api.sourceTools.mockResolvedValue({ tools: [] });
+  api.accessRequests.mockReset();
+  api.accessRequests.mockResolvedValue({ requests: [] });
+  api.dataVersion.mockReset();
+  api.dataVersion.mockResolvedValue({ tables: [] });
+  api.publication.mockReset();
+  api.publication.mockResolvedValue({ active: false });
+  api.listSchedules.mockReset();
+  api.listSchedules.mockResolvedValue({ schedules: [] });
+  api.saveSchedule.mockReset();
+  api.updateSchedule.mockReset();
+  api.deleteSchedule.mockReset();
 });
 
 describe("app detail header actions", () => {
@@ -148,6 +189,33 @@ describe("app detail header actions", () => {
     expect(screen.getByText("删除小程序")).toBeInTheDocument();
     // No previous HTML yet, so restore is not offered.
     expect(screen.queryByText("恢复上一版")).not.toBeInTheDocument();
+  });
+
+  it("hides owner-only actions from an edit_structure collaborator", async () => {
+    currentUser.value = { username: "bob", role: "user" };
+    renderPage();
+
+    expect(
+      await screen.findByRole("button", { name: "更多" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "分享与发布" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    expect(await screen.findByText("重命名")).toBeInTheDocument();
+    expect(screen.queryByText("删除小程序")).not.toBeInTheDocument();
+  });
+
+  it("lets an admin manage an app they do not own", async () => {
+    currentUser.value = { username: "root", role: "admin" };
+    renderPage();
+
+    expect(
+      await screen.findByRole("button", { name: "分享与发布" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    expect(await screen.findByText("删除小程序")).toBeInTheDocument();
   });
 
   it("offers restore only when a previous HTML version exists", async () => {
@@ -221,6 +289,61 @@ describe("app detail header actions", () => {
     expect(screen.getByText("公开链接")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /导入/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /数据源/ })).toBeInTheDocument();
+  });
+
+  it("lists declared external services", async () => {
+    api.listServices.mockResolvedValue({
+      services: [
+        {
+          service_id: "svc_1",
+          name: "douban",
+          provider: "external",
+          connector_instance_id: "connector_1",
+          allowed_tools: ["fetch_json"],
+          allowed_url_prefixes: ["https://api.example.com"],
+          cache_ttl_seconds: 300,
+          max_calls_per_minute: 30,
+          public_live: false,
+          enabled: true,
+          created_at: 0,
+          updated_at: 0,
+        },
+      ],
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "信息" }));
+
+    expect(await screen.findByText("douban")).toBeInTheDocument();
+    expect(screen.getByText("fetch_json")).toBeInTheDocument();
+    expect(screen.getByText("TTL 300 秒 · 30 次/分")).toBeInTheDocument();
+  });
+
+  it("shows per-user tables as never public", async () => {
+    api.get.mockResolvedValue({
+      ...detail,
+      tables: [
+        ...detail.tables,
+        {
+          table_key: "notes",
+          label: "个人笔记",
+          row_count: 2,
+          is_main: false,
+          public_visible: true,
+          row_scope: "user",
+          columns: [],
+        },
+      ],
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "信息" }));
+    expect(await screen.findByText("个人笔记")).toBeInTheDocument();
+    expect(screen.getByText("个人表")).toBeInTheDocument();
+    const switches = screen.getAllByRole("switch");
+    expect(switches[0]).not.toBeDisabled();
+    expect(switches[1]).not.toBeChecked();
+    expect(switches[1]).toBeDisabled();
   });
 
   it("keeps icon-only controls on mobile", async () => {

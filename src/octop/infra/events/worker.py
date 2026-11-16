@@ -27,6 +27,7 @@ from octop.infra.errors import OctopError
 from octop.infra.events.connector_poll import parse_poll_config, poll_source
 from octop.infra.events.service import (
     MODE_APP_IMPORT,
+    MODE_APP_INBOX,
     MODE_APP_REFRESH,
     MODE_EXPERT_TURN,
     MODE_TEAM_JUDGE,
@@ -616,6 +617,30 @@ class ExternalEventWorker:
             except OctopError as exc:
                 raise DeliveryError(exc.message, retryable=True) from exc
             return
+        if subscription.mode == MODE_APP_INBOX:
+            try:
+                view = service.append_event(
+                    app,
+                    event_type=event.event_type,
+                    payload=event.payload,
+                    source=event.source_id,
+                    summary=event.summary,
+                    external_event_id=event.event_id,
+                )
+            except OctopError as exc:
+                raise DeliveryError(exc.message, retryable=False) from exc
+            if self._push_user is not None:
+                await self._push_user(
+                    app.owner_user_id,
+                    {
+                        "type": "app_event",
+                        "app_id": app.app_id,
+                        "event_id": view.event_id,
+                        "event_type": view.event_type,
+                        "summary": view.summary,
+                    },
+                )
+            return
         if subscription.mode == MODE_APP_IMPORT:
             records = _records(event.payload, mapping.get("records_path"))
             if records is None:
@@ -623,13 +648,25 @@ class ExternalEventWorker:
             table = str(mapping.get("table") or "main")
             raw_columns = mapping.get("columns")
             columns = raw_columns if isinstance(raw_columns, dict) else None
+            mode = str(mapping.get("mode") or "append")
+            if mode not in ("append", "replace"):
+                raise DeliveryError(f"unsupported app.import mode: {mode!r}", retryable=False)
+            raw_keys = mapping.get("upsert_key")
+            upsert_key = (
+                [str(item) for item in raw_keys if str(item)]
+                if isinstance(raw_keys, list)
+                else None
+            )
             try:
                 await service.import_rows(
                     app,
                     records,
                     table=table,
-                    mode="replace",
+                    mode=mode,
                     mapping=columns,
+                    upsert_key=upsert_key,
+                    source=f"external:{event.source_id}",
+                    client_request_id_prefix=f"evt:{event.event_id}",
                 )
             except OctopError as exc:
                 raise DeliveryError(exc.message, retryable=False) from exc

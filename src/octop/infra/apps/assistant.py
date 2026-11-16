@@ -178,7 +178,9 @@ class AppAssistant:
             self._check_owner_quota(row)
             messages = await self._messages_for(row, user_id, question, prepared.locale)
             charts: list[dict[str, Any]] = []
-            bound = prepared.llm.bind_tools(self._build_tools(row, charts, prepared.locale))
+            bound = prepared.llm.bind_tools(
+                self._build_tools(row, user_id, charts, prepared.locale)
+            )
 
             usage_in = usage_out = 0
             answer = ""
@@ -212,7 +214,7 @@ class AppAssistant:
                     tool_name = str(call.get("name") or "")
                     yield {"type": "tool", "name": tool_name}
                     chart_start = len(charts)
-                    tool_result = await self._run_tool(row, call, charts, prepared.locale)
+                    tool_result = await self._run_tool(row, user_id, call, charts, prepared.locale)
                     # Emit each new chart as soon as its tool call completes.
                     for chart in charts[chart_start:]:
                         yield {"type": "chart", "chart": chart}
@@ -366,6 +368,7 @@ class AppAssistant:
     def _build_tools(
         self,
         row: AppRecord,
+        user_id: int,
         charts: list[dict[str, Any]] | None = None,
         locale: Locale = "zh",
     ) -> list[StructuredTool]:
@@ -380,6 +383,14 @@ class AppAssistant:
                 dict[str, str] | None,
                 Field(description="Optional equality filters keyed by column name."),
             ] = None,
+            sort: Annotated[
+                str | None,
+                Field(
+                    description=(
+                        "Optional sort column; prefix with '-' for descending (e.g. '-created_at')."
+                    )
+                ),
+            ] = None,
             limit: Annotated[int, Field(description="Rows to return (1-200).")] = 50,
             offset: Annotated[int, Field(description="Rows to skip, for paging.")] = 0,
         ) -> str:
@@ -387,9 +398,12 @@ class AppAssistant:
                 row,
                 table=table,
                 filters=filters,
+                sort=sort,
                 limit=limit,
                 offset=offset,
                 redact_pii=True,
+                viewer_user_id=user_id,
+                include_all_rows=(service.is_admin(user_id) or user_id == row.owner_user_id),
             )
             return json.dumps(
                 {
@@ -457,6 +471,8 @@ class AppAssistant:
                 limit=MAX_ROW_READ,
                 offset=0,
                 redact_pii=True,
+                viewer_user_id=user_id,
+                include_all_rows=(service.is_admin(user_id) or user_id == row.owner_user_id),
             )
             y_columns = [y] if isinstance(y, str) else y
             spec = build_chart_spec(
@@ -522,11 +538,12 @@ class AppAssistant:
     async def _run_tool(
         self,
         row: AppRecord,
+        user_id: int,
         call: Mapping[str, Any],
         charts: list[dict[str, Any]] | None = None,
         locale: Locale = "zh",
     ) -> str:
-        tool_map = {tool.name: tool for tool in self._build_tools(row, charts, locale)}
+        tool_map = {tool.name: tool for tool in self._build_tools(row, user_id, charts, locale)}
         name = str(call.get("name") or "")
         tool = tool_map.get(name)
         if tool is None:

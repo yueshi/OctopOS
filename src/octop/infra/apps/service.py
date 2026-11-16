@@ -25,13 +25,16 @@ import secrets
 import threading
 import time
 import zipfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
+import httpx
 from octop_harness.backends import BackendWorkspace
+from octop_harness.security.ssrf import validate_agent_fetch_url
 
 from octop.infra.apps import capabilities as app_capabilities
+from octop.infra.apps import limits as app_limits
 from octop.infra.apps.importer import parse_import_file
 from octop.infra.apps.inspect import detect_pii, inspect_file
 from octop.infra.apps.models import (
@@ -74,6 +77,31 @@ from octop.infra.apps.templates import (
 from octop.infra.apps.viewgen import render_html as render_view_html
 from octop.infra.apps.viewgen import render_multi_html, suggest_view
 from octop.infra.db.repos.agents import AgentRepo
+from octop.infra.db.repos.app_access import (
+    APP_ACCESS_APPROVED,
+    APP_ACCESS_PENDING,
+    APP_ACCESS_REJECTED,
+    AppAccessRequestRepo,
+    AppAccessRequestRow,
+    is_unique_violation,
+)
+from octop.infra.db.repos.app_bindings import (
+    BINDING_PROVIDERS,
+    BUILTIN_BINDING_ID,
+    BUILTIN_SERVICE_ID,
+    LightAppBindingRepo,
+    LightAppBindingRow,
+)
+from octop.infra.db.repos.app_events import AppEventRepo, AppEventRow
+from octop.infra.db.repos.app_schedules import (
+    LightAppScheduleRepo,
+    LightAppScheduleRow,
+    schedule_jitter,
+)
+from octop.infra.db.repos.app_services import (
+    LightAppServiceRepo,
+    LightAppServiceRow,
+)
 from octop.infra.db.repos.apps import (
     PERMISSION_RANK,
     LightAppCollaboratorRow,
@@ -83,6 +111,8 @@ from octop.infra.db.repos.apps import (
     LightAppRow,
     LightAppSourceRow,
 )
+from octop.infra.db.repos.audit import AuditRepo
+from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo, UserRow
 from octop.infra.errors import ErrorCode, OctopError
@@ -285,8 +315,66 @@ class AppTableView:
     table_key: str
     label: str
     row_count: int
+    data_version: int
     is_main: bool
     public_visible: bool
+    row_scope: str = "app"
+    rules: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ServiceView:
+    """One R2.1 service declaration exposed to the dashboard and page SDK."""
+
+    service_id: str
+    name: str
+    provider: str
+    connector_instance_id: str
+    allowed_tools: tuple[str, ...]
+    allowed_url_prefixes: tuple[str, ...]
+    cache_ttl_seconds: int
+    max_calls_per_minute: int
+    public_live: bool
+    enabled: bool
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
+class ServiceCallResult:
+    value: Any
+    cached: bool
+    expires_at: int | None
+
+
+@dataclass(frozen=True)
+class AppEventView:
+    event_id: str
+    event_type: str
+    source: str
+    summary: str
+    payload: dict[str, Any]
+    created_at: int
+    acknowledged_at: int | None
+
+
+@dataclass(frozen=True)
+class ScheduleView:
+    """One application-level interval job."""
+
+    schedule_id: str
+    app_id: str
+    action: str
+    target: dict[str, Any]
+    interval_seconds: int
+    next_run_at: int
+    last_run_at: int | None
+    last_status: str
+    last_error: str
+    failure_count: int
+    enabled: bool
+    created_at: int
+    updated_at: int
 
 
 @dataclass(frozen=True)
@@ -302,6 +390,14 @@ IMPORT_MODE_APPEND = "append"
 IMPORT_MODE_REPLACE = "replace"
 IMPORT_MODES = (IMPORT_MODE_APPEND, IMPORT_MODE_REPLACE)
 
+SERVICE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+SERVICE_PROVIDERS = ("connector", "external")
+SERVICE_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+APP_EVENT_RETENTION_SECONDS = 30 * 24 * 3600
+APP_EVENT_KEEP = 500
+APP_EVENT_MAX_PAYLOAD_BYTES = 64 * 1024
+
 IMPORT_DIR = "inbound/imports"
 MAX_IMPORT_ERRORS = 5
 """Row-level validation failures reported per import (the rest are counted)."""
@@ -314,6 +410,14 @@ SOURCE_STATUS_ERROR = "error"
 MAX_SCHEDULE_SECONDS = 30 * 24 * 3600
 MAX_BACKOFF_SECONDS = 24 * 3600
 """Auto-sync failure backoff cap (a day between retries, however often it fails)."""
+MAX_SCHEDULES_PER_APP = 20
+
+SCHEDULE_ACTION_SYNC_SOURCE = "sync_source"
+SCHEDULE_ACTION_SNAPSHOT_PUBLICATION = "snapshot_publication"
+SCHEDULE_ACTIONS = (
+    SCHEDULE_ACTION_SYNC_SOURCE,
+    SCHEDULE_ACTION_SNAPSHOT_PUBLICATION,
+)
 
 
 @dataclass(frozen=True)
@@ -337,6 +441,19 @@ class ImportResult:
     """Sensitive columns whose values were not written (``include_pii=false``)."""
     failed_rows: list[dict[str, Any]] = field(default_factory=list)
     """Up to ``MAX_FAILED_ROWS`` rejected rows with their errors, for retry."""
+
+
+@dataclass(frozen=True)
+class BindingView:
+    """A service binding as the dashboard and agent tools see it."""
+
+    binding_id: str
+    provider: str
+    service_id: str
+    config: dict[str, Any]
+    enabled: bool
+    version: int
+    builtin: bool
 
 
 @dataclass(frozen=True)
@@ -602,10 +719,125 @@ def _read_backup_zip(
     return manifest, tables, html, preview, assets
 
 
+def _rules_from_json(raw: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _service_value(raw: str) -> Any:
+    """Return JSON values as objects; plain text stays a string."""
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def _service_url_allowed(prefixes: Sequence[str], url: str) -> bool:
+    return any(url == prefix or url.startswith(f"{prefix}/") for prefix in prefixes)
+
+
+def _fetch_service_image(url: str, *, timeout: float = 20.0) -> bytes:
+    """Fetch a public image with the same SSRF/size guards as http-extract."""
+    current = validate_agent_fetch_url(url)
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+        for _ in range(6):
+            validate_agent_fetch_url(current)
+            response = client.get(current)
+            if 300 <= response.status_code < 400:
+                location = (response.headers.get("location") or "").strip()
+                if not location:
+                    break
+                current = str(response.url.join(location))
+                continue
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").lower()
+            if not content_type.startswith("image/"):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "service image is not an image")
+            data = response.content
+            if len(data) > MAX_ASSET_BYTES:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"service image exceeds the {MAX_ASSET_BYTES // (1024 * 1024)} MB limit",
+                )
+            return data
+    raise _invalid(ErrorCode.APP_SOURCE_INVALID, "too many redirects")
+
+
+def _batch_prefix(
+    source_id: str,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    table: str,
+    mapping: Mapping[str, str] | None = None,
+    upsert_key: Sequence[str] | None = None,
+    include_pii: bool = False,
+) -> str:
+    """Stable idempotency prefix for one source batch.
+
+    The record payload plus the target table/mapping is hashed, so retrying
+    the same file/tool output after a crash (or after rows were committed but
+    the run state was not) skips rows that were already written. Config changes
+    produce a new prefix and are imported normally. ``client_request_id`` is
+    unique per app, hence the source id is part of the prefix.
+    """
+    payload = json.dumps(
+        {
+            "source": source_id,
+            "table": table,
+            "mapping": dict(mapping or {}),
+            "upsert_key": list(upsert_key or []),
+            "include_pii": include_pii,
+            "records": records,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+    return f"src:{source_id}:{digest}"
+
+
 def _normalize_rows(schema: Schema, rows: list[dict[str, str]]) -> list[dict[str, str]]:
     """Fill columns added after a row was written with empty cells."""
     names = schema.names
     return [{name: item.get(name, "") for name in names} for item in rows]
+
+
+def _row_sort_key(value: object, numeric: bool) -> tuple[int, float, str]:
+    """Sort key for one cell.
+
+    Numeric columns compare as numbers so ``9`` sorts before ``10``; anything
+    that does not parse falls back to text and sorts after the numbers.
+    """
+    text = str(value if value is not None else "").strip()
+    if numeric:
+        try:
+            return (0, float(text.replace(",", "")), "")
+        except ValueError:
+            return (1, 0.0, text.casefold())
+    return (0, 0.0, text.casefold())
+
+
+def _parse_sort(schema: Schema, sort: str | None) -> tuple[str, bool] | None:
+    """Resolve a ``col`` / ``-col`` sort spec against the schema."""
+    text = str(sort or "").strip()
+    if not text:
+        return None
+    descending = text.startswith("-")
+    name = (text[1:] if descending else text).strip()
+    if not name:
+        return None
+    if schema.column(name) is None:
+        raise _invalid(
+            ErrorCode.APP_SCHEMA_INVALID,
+            f"unknown sort column: {name!r}",
+            column=name,
+        )
+    return name, descending
 
 
 def _with_detected_pii(schema: Schema, rows: Sequence[Mapping[str, str]]) -> Schema:
@@ -692,6 +924,14 @@ class AppService:
         workspaces: WorkspaceSource,
         external_tool_runner: ExternalToolRunner | None = None,
         secret_repo: SecretRepo | None = None,
+        audit_repo: AuditRepo | None = None,
+        access_repo: AppAccessRequestRepo | None = None,
+        binding_repo: LightAppBindingRepo | None = None,
+        service_repo: LightAppServiceRepo | None = None,
+        connector_repo: ConnectorRepo | None = None,
+        event_repo: AppEventRepo | None = None,
+        schedule_repo: LightAppScheduleRepo | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._app_repo = app_repo
         self._agent_repo = agent_repo
@@ -699,6 +939,14 @@ class AppService:
         self._workspaces = workspaces
         self._external_tool_runner = external_tool_runner
         self._secret_repo = secret_repo
+        self._audit_repo = audit_repo
+        self._access_repo = access_repo
+        self._binding_repo = binding_repo
+        self._service_repo = service_repo
+        self._connector_repo = connector_repo
+        self._event_repo = event_repo
+        self._schedule_repo = schedule_repo
+        self._clock = clock or time.time
 
     # ----- lookup / ACL -----
 
@@ -829,15 +1077,21 @@ class AppService:
         optional file, not a column.
         """
         owners: dict[int, str] = {}
-        out: list[AppView] = []
-        for row, permission in self.list_for_user(user_id, is_admin=is_admin):
-            view = self.view(row, permission, owners=owners)
-            if not (view.html_bytes and view.data_bytes):
-                html_bytes, data_bytes = await self._file_stats(row)
-                if (html_bytes, data_bytes) != (view.html_bytes, view.data_bytes):
-                    view = replace(view, html_bytes=html_bytes, data_bytes=data_bytes)
-            out.append(replace(view, has_preview=await self.has_preview(row)))
-        return out
+        rows = self.list_for_user(user_id, is_admin=is_admin)
+        views = [self.view(row, permission, owners=owners) for row, permission in rows]
+        previews = await asyncio.gather(*(self.has_preview(row) for row, _permission in rows))
+        needs_stats = [
+            index for index, view in enumerate(views) if not (view.html_bytes and view.data_bytes)
+        ]
+        stats = await asyncio.gather(*(self._file_stats(rows[index][0]) for index in needs_stats))
+        for index, (html_bytes, data_bytes) in zip(needs_stats, stats, strict=True):
+            view = views[index]
+            if (html_bytes, data_bytes) != (view.html_bytes, view.data_bytes):
+                views[index] = replace(view, html_bytes=html_bytes, data_bytes=data_bytes)
+        return [
+            replace(view, has_preview=preview)
+            for view, preview in zip(views, previews, strict=True)
+        ]
 
     async def _file_stats(self, row: AppRecord) -> tuple[int, int]:
         """Cached (html_bytes, data_bytes), refreshed from the workspace when unknown.
@@ -911,6 +1165,72 @@ class AppService:
         agent = self._agent_repo.get(agent_id)
         return agent is not None and agent.user_id == user_id
 
+    def is_admin(self, user_id: int) -> bool:
+        """True when the acting user is a system administrator."""
+        user = self._user_repo.get(user_id)
+        return user is not None and user.role == "admin"
+
+    def describe_access(
+        self,
+        *,
+        agent_id: str,
+        app_id: str | None,
+        user_id: int,
+        needed: str,
+    ) -> dict[str, Any]:
+        """Identity and ACL snapshot used by permission-error cards."""
+        agent = self._agent_repo.get(agent_id)
+        user = self._user_repo.get(user_id)
+        row = self._app_repo.get(app_id) if app_id else None
+        agent_owner = (
+            self._user_repo.get(agent.user_id)
+            if agent is not None and agent.user_id is not None
+            else None
+        )
+        app_owner = self._user_repo.get(row.owner_user_id) if row is not None else None
+        return {
+            "agent_id": agent_id,
+            "agent_owner": agent_owner.username if agent_owner is not None else "",
+            "agent_shared": bool(getattr(agent, "is_shared", False)) if agent else False,
+            "app_id": app_id or "",
+            "app_owner": app_owner.username if app_owner is not None else "",
+            "acting_user": user.username if user is not None else "",
+            "needed": needed,
+            "granted": (
+                self.permission_for(row, user_id, is_admin=self.is_admin(user_id))
+                if row is not None
+                else None
+            ),
+        }
+
+    def audit_admin_override(
+        self,
+        *,
+        user_id: int,
+        agent_id: str,
+        app_id: str,
+        needed: str,
+        app_owner_id: int | None = None,
+        via: str = "agent_tool",
+    ) -> None:
+        """Record an admin acting on an app/agent they do not own."""
+        if self._audit_repo is None:
+            return
+        self._audit_repo.write(
+            actor=f"user:{user_id}",
+            action="miniapp.admin_override",
+            target=app_id,
+            payload=json.dumps(
+                {
+                    "agent_id": agent_id,
+                    "needed": needed,
+                    "app_owner_id": app_owner_id,
+                    "via": via,
+                },
+                ensure_ascii=False,
+            ),
+        )
+
     def is_agent_accessible(self, agent_id: str, user_id: int) -> bool:
         """True when the user may use this agent at all (owner or shared)."""
         agent = self._agent_repo.get(agent_id)
@@ -919,6 +1239,303 @@ class AppService:
         if agent.user_id == user_id:
             return True
         return bool(getattr(agent, "is_shared", False))
+
+    # ----- access requests -----
+
+    def _audit_access(
+        self,
+        *,
+        actor: str,
+        action: str,
+        target: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if self._audit_repo is None:
+            return
+        self._audit_repo.write(
+            actor=actor,
+            action=action,
+            target=target,
+            payload=json.dumps(payload, ensure_ascii=False),
+        )
+
+    def request_access(
+        self,
+        *,
+        app_id: str | None,
+        agent_id: str,
+        user_id: int,
+        needed: str,
+        note: str = "",
+    ) -> AppAccessRequestRow:
+        """Create (or return the pending) access request for a blocked user."""
+        request, _created = self.request_access_with_status(
+            app_id=app_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            needed=needed,
+            note=note,
+        )
+        return request
+
+    def request_access_with_status(
+        self,
+        *,
+        app_id: str | None,
+        agent_id: str,
+        user_id: int,
+        needed: str,
+        note: str = "",
+    ) -> tuple[AppAccessRequestRow, bool]:
+        """Return the request plus whether this call created a new row."""
+        if self._access_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "access requests are not configured")
+        permission = validate_permission(needed)
+        row = self._app_repo.get(app_id) if app_id else None
+        if app_id and row is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        # The app is the source of truth for its agent; never trust a
+        # caller-supplied pair that could share an unrelated expert on approval.
+        if row is not None:
+            agent_id = row.agent_id
+        agent = self._agent_repo.get(agent_id)
+        if agent is None:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, f"agent not found: {agent_id}")
+        app_owner_id = row.owner_user_id if row is not None else None
+        agent_owner_id = agent.user_id
+        if agent_owner_id is None:
+            raise OctopError(ErrorCode.APP_SHARE_INVALID, "agent has no owner")
+        if user_id in {app_owner_id, agent_owner_id}:
+            raise OctopError(ErrorCode.APP_SHARE_INVALID, "the owner already has access")
+        if self.is_admin(user_id) or self.is_agent_accessible(agent_id, user_id):
+            granted = (
+                self.permission_for(row, user_id, is_admin=False) if row is not None else "view"
+            )
+            if PERMISSION_RANK.get(granted or "", 0) >= PERMISSION_RANK[permission]:
+                raise OctopError(ErrorCode.APP_SHARE_INVALID, "access is already granted")
+        account = self._user_repo.get(user_id)
+        if account is None or account.disabled:
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "user is not active")
+        existing = self._access_repo.find_pending(
+            app_id=app_id,
+            agent_id=agent_id,
+            requester_user_id=user_id,
+        )
+        if existing is not None:
+            return existing, False
+        try:
+            request = self._access_repo.create(
+                app_id=app_id,
+                agent_id=agent_id,
+                requester_user_id=user_id,
+                app_owner_user_id=app_owner_id,
+                agent_owner_user_id=agent_owner_id,
+                needed=permission,
+                note=note.strip()[:500],
+            )
+        except Exception as exc:
+            # Two processes can pass find_pending together; the partial unique
+            # index decides the winner and the loser returns the stored row.
+            if not is_unique_violation(exc):
+                raise
+            existing = self._access_repo.find_pending(
+                app_id=app_id,
+                agent_id=agent_id,
+                requester_user_id=user_id,
+            )
+            if existing is None:
+                raise
+            return existing, False
+        self._audit_access(
+            actor=f"user:{user_id}",
+            action="miniapp.access_request",
+            target=app_id or agent_id,
+            payload={
+                "request_id": request.request_id,
+                "agent_id": agent_id,
+                "needed": permission,
+                "app_owner_user_id": app_owner_id,
+                "agent_owner_user_id": agent_owner_id,
+            },
+        )
+        return request, True
+
+    def list_access_requests(
+        self,
+        *,
+        user_id: int,
+        is_admin: bool,
+        scope: str = "owner",
+        app_id: str | None = None,
+    ) -> list[AppAccessRequestRow]:
+        if self._access_repo is None:
+            return []
+        if scope == "mine":
+            return self._access_repo.list_for_requester(user_id)
+        if is_admin:
+            rows = self._access_repo.list_pending_admin(limit=500)
+            if app_id is not None:
+                rows = [row for row in rows if row.app_id == app_id]
+            return rows
+        return self._access_repo.list_for_owner(user_id, app_id=app_id)
+
+    def resolve_access_request(
+        self,
+        *,
+        request_id: str,
+        actor_user_id: int,
+        is_admin: bool,
+        approve: bool,
+    ) -> AppAccessRequestRow:
+        """Approve or reject a request.
+
+        A split-owner approval applies the acting owner's half immediately and
+        keeps the request pending until the requester can reach both the expert
+        and the app; the other owner (or an admin) completes it.
+        """
+        if self._access_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "access requests are not configured")
+        request = self._access_repo.get(request_id)
+        if request is None:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, "access request not found")
+        owners = {
+            user_id
+            for user_id in (request.app_owner_user_id, request.agent_owner_user_id)
+            if user_id is not None
+        }
+        if not is_admin and actor_user_id not in owners:
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "only an owner can resolve this request")
+        if request.status != APP_ACCESS_PENDING:
+            return request
+
+        if not approve:
+            rejected = self._access_repo.resolve(
+                request.request_id,
+                status=APP_ACCESS_REJECTED,
+                resolved_by=actor_user_id,
+            )
+            if rejected is None:
+                raise OctopError(ErrorCode.APP_NOT_FOUND, "access request not found")
+            self._audit_access(
+                actor=f"user:{actor_user_id}",
+                action="miniapp.access_rejected",
+                target=request.app_id or request.agent_id,
+                payload={
+                    "request_id": request.request_id,
+                    "requester_user_id": request.requester_user_id,
+                    "needed": request.needed,
+                },
+            )
+            return rejected
+
+        agent = self._agent_repo.get(request.agent_id)
+        if agent is None:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, f"agent not found: {request.agent_id}")
+        row = self._app_repo.get(request.app_id) if request.app_id else None
+        if request.app_id and row is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+
+        # The two halves of a split-owner request: the expert owner can share
+        # the expert, the app owner can grant the app ACL. An admin can do both.
+        can_share_agent = is_admin or agent.user_id == actor_user_id
+        can_grant_app = row is not None and (is_admin or row.owner_user_id == actor_user_id)
+
+        if can_share_agent and not agent.is_shared:
+            self._agent_repo.set_shared(request.agent_id, True)
+            self._audit_access(
+                actor=f"user:{actor_user_id}",
+                action="miniapp.agent_shared",
+                target=request.agent_id,
+                payload={"request_id": request.request_id},
+            )
+
+        updated: AppAccessRequestRow | None = None
+        if row is not None:
+            collaborators = self._app_repo.list_collaborators(row.app_id)
+            current = next(
+                (
+                    item.permission
+                    for item in collaborators
+                    if item.user_id == request.requester_user_id
+                ),
+                None,
+            )
+            needed_rank = PERMISSION_RANK[request.needed]
+            if PERMISSION_RANK.get(current or "", 0) < needed_rank and can_grant_app:
+                granted = request.needed
+                if current and PERMISSION_RANK.get(current, 0) > PERMISSION_RANK.get(granted, 0):
+                    granted = current
+                entries = [
+                    (item.user_id, item.permission)
+                    for item in collaborators
+                    if item.user_id != request.requester_user_id
+                ]
+                entries.append((request.requester_user_id, granted))
+                collaborators = self.set_collaborators(row, entries)
+                current = next(
+                    (
+                        item.permission
+                        for item in collaborators
+                        if item.user_id == request.requester_user_id
+                    ),
+                    granted,
+                )
+                self._audit_access(
+                    actor=f"user:{actor_user_id}",
+                    action="miniapp.access_app_granted",
+                    target=row.app_id,
+                    payload={
+                        "request_id": request.request_id,
+                        "requester_user_id": request.requester_user_id,
+                        "permission": current,
+                    },
+                )
+            agent_accessible = self.is_agent_accessible(request.agent_id, request.requester_user_id)
+            app_allowed = PERMISSION_RANK.get(current or "", 0) >= needed_rank
+            if agent_accessible and app_allowed:
+                cleaned = self._clean_collaborators(
+                    row,
+                    [(item.user_id, item.permission) for item in collaborators],
+                )
+                updated = self._access_repo.resolve_with_collaborators(
+                    request.request_id,
+                    status=APP_ACCESS_APPROVED,
+                    resolved_by=actor_user_id,
+                    app_id=row.app_id,
+                    collaborators=cleaned,
+                )
+                if updated is None:
+                    raise OctopError(ErrorCode.APP_NOT_FOUND, "access request not found")
+                if updated.status != APP_ACCESS_APPROVED:
+                    # Another caller resolved the request first.
+                    return updated
+            else:
+                # One side approved; the request stays pending until the other
+                # owner's grant (or an admin) makes access real.
+                return self._access_repo.get(request_id) or request
+        elif self.is_agent_accessible(request.agent_id, request.requester_user_id):
+            updated = self._access_repo.resolve(
+                request.request_id,
+                status=APP_ACCESS_APPROVED,
+                resolved_by=actor_user_id,
+            )
+            if updated is None:
+                raise OctopError(ErrorCode.APP_NOT_FOUND, "access request not found")
+        else:
+            return self._access_repo.get(request_id) or request
+
+        self._audit_access(
+            actor=f"user:{actor_user_id}",
+            action="miniapp.access_approved",
+            target=request.app_id or request.agent_id,
+            payload={
+                "request_id": request.request_id,
+                "requester_user_id": request.requester_user_id,
+                "needed": request.needed,
+            },
+        )
+        assert updated is not None
+        return updated
 
     def apps_for_agent(self, agent_id: str) -> list[LightAppRow]:
         """Every app hosted in an agent's workspace, whoever created it."""
@@ -1436,8 +2053,11 @@ class AppService:
                 table_key=MAIN_TABLE_KEY,
                 label=main.label if main is not None else "",
                 row_count=main.row_count if main is not None else row.row_count,
+                data_version=main.data_version if main is not None else 0,
                 is_main=True,
                 public_visible=main.public_visible if main is not None else True,
+                row_scope=main.row_scope if main is not None else "app",
+                rules=_rules_from_json(main.rules_json if main is not None else "{}"),
             )
         ]
         for item in registered:
@@ -1448,8 +2068,11 @@ class AppService:
                     table_key=item.table_key,
                     label=item.label,
                     row_count=item.row_count,
+                    data_version=item.data_version,
                     is_main=False,
                     public_visible=item.public_visible,
+                    row_scope=item.row_scope,
+                    rules=_rules_from_json(item.rules_json),
                 )
             )
         return views
@@ -1491,9 +2114,16 @@ class AppService:
         label: str = "",
         columns: object,
         public_visible: bool = False,
+        row_scope: str = "app",
     ) -> AppTableView:
         """Add a table with its own columns and an empty CSV."""
         key = validate_table_key(table_key)
+        clean_scope = row_scope.strip().lower()
+        if clean_scope not in {"app", "user"}:
+            raise _invalid(
+                ErrorCode.APP_SCHEMA_INVALID,
+                "row_scope must be 'app' or 'user'",
+            )
         if key == MAIN_TABLE_KEY:
             raise _invalid(
                 ErrorCode.APP_SCHEMA_INVALID,
@@ -1530,6 +2160,7 @@ class AppService:
                 key,
                 clean_label,
                 public_visible=public_visible,
+                row_scope=clean_scope,
             )
             self._app_repo.set_table_schema(row.app_id, key, schema.to_json(), schema.version)
             self._app_repo.set_table_stats(
@@ -1543,9 +2174,261 @@ class AppService:
             table_key=key,
             label=clean_label,
             row_count=0,
+            data_version=0,
             is_main=False,
             public_visible=public_visible,
+            row_scope=clean_scope,
         )
+
+    async def set_table_row_scope(
+        self,
+        row: AppRecord,
+        *,
+        table: str,
+        row_scope: str,
+    ) -> AppTableView:
+        """Switch a table between shared (``app``) and per-user (``user``)."""
+        clean_scope = row_scope.strip().lower()
+        if clean_scope not in {"app", "user"}:
+            raise _invalid(
+                ErrorCode.APP_SCHEMA_INVALID,
+                "row_scope must be 'app' or 'user'",
+            )
+        key = self._require_table(row, table)
+        async with _lock_for(row.app_id):
+            self._require_live(row.app_id)
+            current = self._app_repo.get(row.app_id) or row
+            self._ensure_main_table(current)
+            self._app_repo.set_table_row_scope(current.app_id, key, row_scope=clean_scope)
+            ws = await self._workspace(current.agent_id)
+            await self._refresh_manifest(ws, current.app_id)
+        return next(item for item in self.list_tables(current) if item.table_key == key)
+
+    def table_row_scope(self, row: AppRecord, table: str) -> str:
+        try:
+            key = validate_table_key(table)
+        except OctopError:
+            return "app"
+        registered = self._app_repo.get_table(row.app_id, key)
+        return registered.row_scope if registered is not None else "app"
+
+    def table_rules(self, row: AppRecord, table: str) -> dict[str, Any]:
+        registered = self._app_repo.get_table(row.app_id, validate_table_key(table))
+        return _rules_from_json(registered.rules_json) if registered is not None else {}
+
+    async def set_table_rules(
+        self,
+        row: AppRecord,
+        *,
+        table: str,
+        rules: Mapping[str, Any],
+    ) -> AppTableView:
+        key = self._require_table(row, table)
+        async with _lock_for(row.app_id):
+            self._require_live(row.app_id)
+            current = self._app_repo.get(row.app_id) or row
+            ws = await self._workspace(current.agent_id)
+            schema = await self._read_schema(ws, current.app_id, key)
+            clean = self._validate_rules(schema, rules)
+            payload = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
+            if len(payload.encode("utf-8")) > 16 * 1024:
+                raise _invalid(ErrorCode.APP_SHARE_INVALID, "table rules exceed 16 KB")
+            self._app_repo.set_table_rules(current.app_id, key, rules_json=payload)
+            await self._refresh_manifest(ws, current.app_id)
+        return next(item for item in self.list_tables(current) if item.table_key == key)
+
+    @staticmethod
+    def _validate_rules(schema: Schema, rules: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(rules, Mapping):
+            raise _invalid(ErrorCode.APP_SHARE_INVALID, "rules must be an object")
+        unknown = set(rules) - {"state_field", "transitions", "triggers"}
+        if unknown:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                f"unknown rule keys: {', '.join(sorted(map(str, unknown)))}",
+            )
+        triggers = AppService._validate_triggers(schema, rules.get("triggers"))
+        state_field = rules.get("state_field")
+        transitions = rules.get("transitions") or {}
+        if not state_field:
+            if transitions:
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    "transitions require state_field",
+                )
+            return {"triggers": triggers} if triggers else {}
+        if not isinstance(state_field, str):
+            raise _invalid(ErrorCode.APP_SHARE_INVALID, "state_field must be a string")
+        column = schema.column(state_field)
+        if column is None:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                f"unknown state field: {state_field!r}",
+            )
+        if column.type not in {"string", "enum"}:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                "state_field must be a string or enum column",
+            )
+        if not isinstance(transitions, dict):
+            raise _invalid(ErrorCode.APP_SHARE_INVALID, "transitions must be an object")
+        allowed_values = set(column.values) if column.type == "enum" else None
+        clean: dict[str, list[str]] = {}
+        for old_state, targets in transitions.items():
+            if not isinstance(old_state, str) or not isinstance(targets, list):
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    "transitions must map a state to a list of states",
+                )
+            if not all(isinstance(item, str) for item in targets):
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    "transition targets must be strings",
+                )
+            if allowed_values is not None and (
+                old_state not in allowed_values
+                or any(item not in allowed_values for item in targets)
+            ):
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    f"transition uses a value outside {state_field!r}: {old_state!r}",
+                )
+            clean[old_state] = list(dict.fromkeys(targets))
+        result: dict[str, Any] = {"state_field": state_field, "transitions": clean}
+        if triggers:
+            result["triggers"] = triggers
+        return result
+
+    @staticmethod
+    def _validate_triggers(schema: Schema, raw: object) -> dict[str, Any]:
+        if raw is None:
+            return {}
+        if not isinstance(raw, Mapping):
+            raise _invalid(ErrorCode.APP_SHARE_INVALID, "triggers must be an object")
+        clean: dict[str, Any] = {}
+        for name, config in raw.items():
+            if name not in {"on_create", "on_update"}:
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    f"unknown trigger: {name!r}",
+                )
+            if not isinstance(config, Mapping):
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    f"trigger {name!r} must be an object",
+                )
+            unknown = set(config) - {"event_type", "when"}
+            if unknown:
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    f"unknown trigger keys: {', '.join(sorted(map(str, unknown)))}",
+                )
+            default_type = "row.created" if name == "on_create" else "row.updated"
+            event_type = str(config.get("event_type") or default_type).strip()[:100]
+            if not event_type:
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    f"trigger {name!r} needs an event_type",
+                )
+            clean_config: dict[str, Any] = {"event_type": event_type}
+            when = config.get("when")
+            if when is not None:
+                if not isinstance(when, Mapping):
+                    raise _invalid(
+                        ErrorCode.APP_SHARE_INVALID,
+                        f"trigger {name!r}.when must be an object",
+                    )
+                if set(when) - {"field", "equals"}:
+                    raise _invalid(
+                        ErrorCode.APP_SHARE_INVALID,
+                        f"trigger {name!r}.when supports field and equals",
+                    )
+                field = str(when.get("field") or "")
+                if schema.column(field) is None:
+                    raise _invalid(
+                        ErrorCode.APP_SHARE_INVALID,
+                        f"trigger {name!r} uses an unknown field: {field!r}",
+                    )
+                clean_config["when"] = {
+                    "field": field,
+                    "equals": str(when.get("equals") or ""),
+                }
+            clean[str(name)] = clean_config
+        return clean
+
+    def _emit_row_event(
+        self,
+        row: AppRecord,
+        key: str,
+        trigger: str,
+        row_id: str,
+        values: Mapping[str, str],
+    ) -> None:
+        """Append an inbox event for a configured on_create/on_update trigger."""
+        if self._event_repo is None:
+            return
+        rules = self.table_rules(row, key)
+        triggers = rules.get("triggers")
+        if not isinstance(triggers, Mapping):
+            return
+        config = triggers.get(trigger)
+        if not isinstance(config, Mapping):
+            return
+        when = config.get("when")
+        if isinstance(when, Mapping):
+            field = str(when.get("field") or "")
+            if field and str(values.get(field, "")) != str(when.get("equals") or ""):
+                return
+        event_type = str(config.get("event_type") or f"row.{trigger.removeprefix('on_')}")
+        self.append_event(
+            row,
+            event_type=event_type,
+            payload={"table": key, "row_id": row_id},
+            source="trigger",
+            summary=f"{trigger} {key}",
+        )
+
+    def _check_transition(
+        self,
+        row: AppRecord,
+        key: str,
+        old_values: Mapping[str, str],
+        new_values: Mapping[str, str],
+    ) -> None:
+        rules = self.table_rules(row, key)
+        field = rules.get("state_field")
+        if not isinstance(field, str) or not field:
+            return
+        old_state = str(old_values.get(field, ""))
+        new_state = str(new_values.get(field, ""))
+        if old_state == new_state:
+            return
+        transitions = rules.get("transitions")
+        allowed = transitions.get(old_state) if isinstance(transitions, dict) else None
+        if not isinstance(allowed, list) or new_state not in allowed:
+            raise _invalid(
+                ErrorCode.APP_ROW_INVALID,
+                f"invalid transition for {field!r}: {old_state!r} -> {new_state!r}",
+                field=field,
+                from_state=old_state,
+                to_state=new_state,
+            )
+
+    def _row_owner_filter(
+        self,
+        row: AppRecord,
+        key: str,
+        viewer_user_id: int | None,
+        include_all_rows: bool,
+    ) -> int | None:
+        if self.table_row_scope(row, key) != "user" or include_all_rows:
+            return None
+        if viewer_user_id is None:
+            raise OctopError(
+                ErrorCode.APP_FORBIDDEN,
+                "row-scoped table requires a viewer",
+            )
+        return viewer_user_id
 
     async def set_table_visibility(
         self,
@@ -1578,7 +2461,7 @@ class AppService:
             return False
         for view in self.list_tables(row):
             if view.table_key == key:
-                return view.public_visible
+                return view.public_visible and view.row_scope != "user"
         return False
 
     async def update_metadata(
@@ -1816,6 +2699,8 @@ class AppService:
         offset: int = 0,
         table: str = MAIN_TABLE_KEY,
         redact_pii: bool = False,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], int]:
         schema, rows, _meta, total = await self.read_rows_detailed(
             row,
@@ -1823,6 +2708,8 @@ class AppService:
             offset=offset,
             table=table,
             redact_pii=redact_pii,
+            viewer_user_id=viewer_user_id,
+            include_all_rows=include_all_rows,
         )
         return schema, rows, total
 
@@ -1834,6 +2721,8 @@ class AppService:
         offset: int = 0,
         table: str = MAIN_TABLE_KEY,
         redact_pii: bool = False,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], list[dict[str, Any]], int]:
         """Read a page plus per-row ``row_id``/``version`` metadata."""
         key = self._require_table(row, table)
@@ -1845,12 +2734,14 @@ class AppService:
             current = self._app_repo.get(row.app_id) or row
             ws = await self._workspace(current.agent_id)
             schema = await self._read_schema(ws, current.app_id, key)
+            owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
             if current.storage_version >= 2:
                 data_page, total = self._app_repo.list_data_rows(
                     current.app_id,
                     key,
                     limit=safe_limit,
                     offset=safe_offset,
+                    created_by=owner_filter,
                 )
                 rows_page = _normalize_rows(schema, [item.values for item in data_page])
                 schema, rows_page = _apply_pii(schema, rows_page, redact_pii=redact_pii)
@@ -1866,6 +2757,11 @@ class AppService:
                         for item in data_page
                     ],
                     total,
+                )
+            if owner_filter is not None:
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    "row-scoped table requires DB storage; migrate the app first",
                 )
             rows = await self._read_rows_file(ws, current.app_id, schema, key)
             total = len(rows)
@@ -1898,6 +2794,8 @@ class AppService:
         limit: int = MAX_ROW_READ,
         offset: int = 0,
         redact_pii: bool = False,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], int]:
         schema, rows, _meta, total = await self.query_rows_detailed(
             row,
@@ -1906,6 +2804,8 @@ class AppService:
             limit=limit,
             offset=offset,
             redact_pii=redact_pii,
+            viewer_user_id=viewer_user_id,
+            include_all_rows=include_all_rows,
         )
         return schema, rows, total
 
@@ -1915,14 +2815,19 @@ class AppService:
         *,
         table: str = MAIN_TABLE_KEY,
         filters: Mapping[str, object] | None = None,
+        sort: str | None = None,
         limit: int = MAX_ROW_READ,
         offset: int = 0,
         redact_pii: bool = False,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], list[dict[str, Any]], int]:
         """Read filtered rows plus per-row ``row_id``/``version`` metadata.
 
         Filter values compare case-insensitively against the stored cell text;
         unknown filter columns raise instead of silently matching nothing.
+        ``sort`` is a column name, optionally prefixed with ``-`` for
+        descending order; numeric columns compare as numbers.
         """
         key = self._require_table(row, table)
         clean_filters = {str(col).strip(): str(val) for col, val in (filters or {}).items()}
@@ -1935,14 +2840,33 @@ class AppService:
             ws = await self._workspace(current.agent_id)
             schema = await self._read_schema(ws, current.app_id, key)
             for column in clean_filters:
-                if schema.column(column) is None:
+                found = schema.column(column)
+                if found is None:
                     raise _invalid(
                         ErrorCode.APP_SCHEMA_INVALID,
                         f"unknown filter column: {column!r}",
                         table=key,
                     )
+                if redact_pii and found.pii:
+                    raise _invalid(
+                        ErrorCode.APP_FORBIDDEN,
+                        f"cannot filter on a sensitive column: {column!r}",
+                        table=key,
+                    )
+            sort_spec = _parse_sort(schema, sort)
+            if sort_spec is not None:
+                sort_column = schema.column(sort_spec[0])
+                if redact_pii and sort_column is not None and sort_column.pii:
+                    raise _invalid(
+                        ErrorCode.APP_FORBIDDEN,
+                        f"cannot sort by a sensitive column: {sort_spec[0]!r}",
+                        table=key,
+                    )
+            owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
             if current.storage_version >= 2:
                 data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
+                if owner_filter is not None:
+                    data_rows = [item for item in data_rows if item.created_by == owner_filter]
                 rows = _normalize_rows(schema, [item.values for item in data_rows])
                 meta = [
                     {
@@ -1953,6 +2877,11 @@ class AppService:
                     for item in data_rows
                 ]
             else:
+                if owner_filter is not None:
+                    raise OctopError(
+                        ErrorCode.APP_FORBIDDEN,
+                        "row-scoped table requires DB storage; migrate the app first",
+                    )
                 rows = await self._read_rows_file(ws, current.app_id, schema, key)
                 meta = [{"row_id": "", "version": 1, "source": "manual"} for _ in rows]
         if clean_filters:
@@ -1964,6 +2893,17 @@ class AppService:
             ]
             rows = [rows[index] for index in keep]
             meta = [meta[index] for index in keep]
+        if sort_spec is not None:
+            sort_name, descending = sort_spec
+            sort_column = schema.column(sort_name)
+            numeric = sort_column is not None and sort_column.type in {"number", "integer"}
+            order = sorted(
+                range(len(rows)),
+                key=lambda index: _row_sort_key(rows[index].get(sort_name, ""), numeric),
+                reverse=descending,
+            )
+            rows = [rows[index] for index in order]
+            meta = [meta[index] for index in order]
         end = safe_offset + safe_limit
         schema, page = _apply_pii(
             schema,
@@ -2009,6 +2949,12 @@ class AppService:
         created_by: int | None = None,
     ) -> tuple[int, LightAppDataRow]:
         key = self._require_table(row, table)
+        scope = self.table_row_scope(row, key)
+        if scope == "user" and created_by is None:
+            raise _invalid(
+                ErrorCode.APP_ROW_INVALID,
+                "row-scoped table requires a creator",
+            )
         await self._ensure_db_rows(row)
         async with _lock_for(row.app_id):
             self._require_live(row.app_id)
@@ -2044,8 +2990,14 @@ class AppService:
                     client_request_id=client_request_id,
                     created_by=created_by,
                 )
+                self._emit_row_event(current, key, "on_create", stored.row_id, stored.values)
                 await self._refresh_manifest(ws, current.app_id)
                 return index, stored
+            if scope == "user":
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    "row-scoped table requires DB storage; migrate the app first",
+                )
             rows = await self._read_rows_file(ws, current.app_id, schema, key)
             if len(rows) >= MAX_ROWS:
                 raise _invalid(
@@ -2065,6 +3017,7 @@ class AppService:
                 values=normalized,
                 version=1,
                 source=source,
+                created_by=created_by,
                 created_at=ts,
                 updated_at=ts,
             )
@@ -2171,6 +3124,15 @@ class AppService:
         schema = parse_schema_payload({"columns": list(columns)})
         clean_name = validate_name(name)
         clean_description = validate_description(description)
+        data = await self.read_workspace_file(agent_id, clean_path)
+        report = inspect_file(clean_path, data)
+        selected = _select_sheet_report(report, sheet)
+        if header_row is None:
+            detected = selected.get("header_row")
+            if isinstance(detected, int) and detected >= 0:
+                # The client may omit header_row; use the same detection the
+                # inspection report showed instead of assuming row 0.
+                header_row = detected
         row = await self.create(
             agent_id=agent_id,
             owner_user_id=owner_user_id,
@@ -2190,9 +3152,6 @@ class AppService:
             )
             if result.imported == 0 and result.updated == 0 and result.errors:
                 raise _invalid(ErrorCode.APP_ROW_INVALID, result.errors[0])
-            data = await self.read_workspace_file(agent_id, clean_path)
-            report = inspect_file(clean_path, data)
-            selected = _select_sheet_report(report, sheet)
             spec = suggest_view(
                 selected,
                 schema,
@@ -2267,6 +3226,15 @@ class AppService:
                     "view": str(item.get("view") or "dashboard"),
                 }
             )
+        data = await self.read_workspace_file(agent_id, clean_path)
+        report = inspect_file(clean_path, data)
+        for item in parsed:
+            if item["header_row"] is not None:
+                continue
+            selected_sheet = _select_sheet_report(report, item["sheet"])
+            detected = selected_sheet.get("header_row")
+            if isinstance(detected, int) and detected >= 0:
+                item["header_row"] = detected
         row = await self.create(
             agent_id=agent_id,
             owner_user_id=owner_user_id,
@@ -2308,8 +3276,6 @@ class AppService:
                 failed_rows.extend(result.failed_rows)
             if imported == 0 and updated == 0 and errors:
                 raise _invalid(ErrorCode.APP_ROW_INVALID, errors[0])
-            data = await self.read_workspace_file(agent_id, clean_path)
-            report = inspect_file(clean_path, data)
             tables: list[dict[str, Any]] = []
             for item in parsed:
                 selected = _select_sheet_report(report, item["sheet"])
@@ -2386,12 +3352,15 @@ class AppService:
         dry_run: bool = False,
         upsert_key: list[str] | None = None,
         include_pii: bool = False,
+        created_by: int | None = None,
+        idempotency_source: str | None = None,
     ) -> ImportResult:
         """Parse a workspace file (or raw bytes) and import it into one table.
 
         ``sheet`` and ``header_row`` point at the part of the file to import
         (an Excel worksheet and its header line). ``dry_run`` validates and
-        counts the rows without writing anything.
+        counts the rows without writing anything. ``idempotency_source`` turns
+        the parsed batch into a content-addressed import for a data source.
         """
         source_path = _safe_import_path(path)
         if data is None:
@@ -2422,6 +3391,19 @@ class AppService:
             dry_run=dry_run,
             upsert_key=upsert_key,
             include_pii=include_pii,
+            created_by=created_by,
+            client_request_id_prefix=(
+                _batch_prefix(
+                    idempotency_source,
+                    records,
+                    table=table,
+                    mapping=mapping,
+                    upsert_key=upsert_key,
+                    include_pii=include_pii,
+                )
+                if idempotency_source
+                else None
+            ),
         )
 
     async def import_from_files(
@@ -2437,6 +3419,7 @@ class AppService:
         dry_run: bool = False,
         upsert_key: list[str] | None = None,
         include_pii: bool = False,
+        created_by: int | None = None,
     ) -> ImportResult:
         """Import a batch of workspace files into one table, in order."""
         if not paths:
@@ -2473,6 +3456,7 @@ class AppService:
             dry_run=dry_run,
             upsert_key=upsert_key,
             include_pii=include_pii,
+            created_by=created_by,
         )
 
     async def import_rows(
@@ -2487,6 +3471,8 @@ class AppService:
         upsert_key: list[str] | None = None,
         include_pii: bool = False,
         source: str = "import",
+        client_request_id_prefix: str | None = None,
+        created_by: int | None = None,
     ) -> ImportResult:
         """Validate and write parsed records into one table (append or replace).
 
@@ -2501,6 +3487,11 @@ class AppService:
                 f"invalid import mode: {mode!r}",
             )
         key = self._require_table(row, table)
+        owner_id = created_by
+        if self.table_row_scope(row, key) == "user" and owner_id is None:
+            # Imports do not have a per-row actor here; attribute them to the
+            # owner so user-scoped rows never become invisible orphans.
+            owner_id = row.owner_user_id
         clean = [dict(record) for record in records]
         if len(clean) > MAX_ROWS:
             raise _invalid(
@@ -2605,12 +3596,27 @@ class AppService:
                     errors=errors,
                 )
             if current.storage_version >= 2:
+                duplicate_indices: set[int] = set()
+                if client_request_id_prefix and mode != IMPORT_MODE_REPLACE:
+                    existing_ids = self._app_repo.existing_client_request_ids(
+                        current.app_id, client_request_id_prefix
+                    )
+                    duplicate_indices = {
+                        index
+                        for index in range(len(imported_rows))
+                        if f"{client_request_id_prefix}:{index}" in existing_ids
+                    }
+                new_rows = [
+                    item
+                    for index, item in enumerate(imported_rows)
+                    if index not in duplicate_indices
+                ]
                 existing_count = (
                     0
                     if mode == IMPORT_MODE_REPLACE
                     else self._app_repo.count_data_rows(current.app_id, key)
                 )
-                if existing_count + len(imported_rows) > MAX_ROWS:
+                if existing_count + len(new_rows) > MAX_ROWS:
                     raise _invalid(
                         ErrorCode.APP_LIMIT_EXCEEDED,
                         f"table has reached the {MAX_ROWS}-row limit",
@@ -2623,8 +3629,7 @@ class AppService:
                     else (table_view.data_bytes if table_view is not None else 0)
                 )
                 added_bytes = sum(
-                    len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
-                    for item in imported_rows
+                    len(json.dumps(item, ensure_ascii=False).encode("utf-8")) for item in new_rows
                 )
                 if current_bytes + added_bytes > MAX_CSV_BYTES:
                     raise _invalid(
@@ -2647,17 +3652,40 @@ class AppService:
                 if pii_changed:
                     await self._persist_schema(ws, current.app_id, key, schema)
                 updated_count = 0
+                duplicate_count = 0
                 if mode == IMPORT_MODE_REPLACE:
-                    self._app_repo.replace_data_rows(current.app_id, key, imported_rows)
+                    self._app_repo.replace_data_rows(
+                        current.app_id,
+                        key,
+                        imported_rows,
+                        source=source,
+                        created_by=owner_id,
+                    )
                 elif upsert_key:
-                    for item in imported_rows:
+                    for index, item in enumerate(imported_rows):
                         key_values = [item.get(name, "") for name in upsert_key]
                         if any(value == "" for value in key_values):
+                            client_request_id = (
+                                f"{client_request_id_prefix}:{index}"
+                                if client_request_id_prefix
+                                else None
+                            )
+                            if (
+                                client_request_id is not None
+                                and self._app_repo.find_data_row_by_client_request_id(
+                                    current.app_id, client_request_id
+                                )
+                                is not None
+                            ):
+                                duplicate_count += 1
+                                continue
                             self._app_repo.append_data_row(
                                 current.app_id,
                                 key,
                                 item,
                                 source=source,
+                                client_request_id=client_request_id,
+                                created_by=owner_id,
                             )
                             continue
                         source_key = "|".join(key_values)
@@ -2675,19 +3703,47 @@ class AppService:
                                 source=source,
                                 source_id=source,
                                 source_key=source_key,
+                                created_by=owner_id,
                             )
                         else:
+                            self._check_transition(current, key, existing_row.values, item)
                             self._app_repo.update_data_row(
                                 current.app_id,
                                 existing_row.row_id,
                                 item,
                             )
                             updated_count += 1
+                elif client_request_id_prefix:
+                    # Event imports carry a stable prefix so a retried delivery
+                    # does not append the same records twice.
+                    for index, item in enumerate(imported_rows):
+                        client_request_id = f"{client_request_id_prefix}:{index}"
+                        if (
+                            self._app_repo.find_data_row_by_client_request_id(
+                                current.app_id, client_request_id
+                            )
+                            is not None
+                        ):
+                            duplicate_count += 1
+                            continue
+                        self._app_repo.append_data_row(
+                            current.app_id,
+                            key,
+                            item,
+                            source=source,
+                            client_request_id=client_request_id,
+                            created_by=owner_id,
+                        )
                 else:
-                    self._app_repo.append_data_rows(current.app_id, key, imported_rows)
+                    self._app_repo.append_data_rows(
+                        current.app_id,
+                        key,
+                        imported_rows,
+                        created_by=owner_id,
+                    )
                 await self._refresh_manifest(ws, current.app_id)
                 return ImportResult(
-                    imported=len(imported_rows) - updated_count,
+                    imported=len(imported_rows) - updated_count - duplicate_count,
                     skipped=len(clean) - len(imported_rows),
                     errors=errors,
                     warnings=warnings,
@@ -2783,6 +3839,8 @@ class AppService:
         *,
         table: str = MAIN_TABLE_KEY,
         expected_version: int | None = None,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> dict[str, Any]:
         """Update one row with an optional version check (CAS)."""
         key = self._require_table(row, table)
@@ -2796,12 +3854,20 @@ class AppService:
                     f"row not found: {row_id}",
                 )
             ws = await self._workspace(current.agent_id)
-            schema = await self._read_schema(ws, current.app_id, key)
             existing_row = self._app_repo.get_data_row(current.app_id, row_id)
             if existing_row is None:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
+            # A row id identifies the row inside the whole app, so validate it
+            # against the table it actually lives in — otherwise a multi-table
+            # app would check the values against another table's schema.
+            key = existing_row.table_key or key
+            schema = await self._read_schema(ws, current.app_id, key)
+            owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
+            if owner_filter is not None and existing_row.created_by != owner_filter:
+                raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
             normalized = validate_row(schema, values)
             _reject_unmarked_pii(schema, normalized, table=key)
+            self._check_transition(current, key, existing_row.values, normalized)
             table_view = self._app_repo.get_table(current.app_id, key)
             current_bytes = table_view.data_bytes if table_view is not None else 0
             old_bytes = len(json.dumps(existing_row.values, ensure_ascii=False).encode("utf-8"))
@@ -2823,6 +3889,7 @@ class AppService:
                     ErrorCode.APP_CONFLICT,
                     "row changed since it was read; refresh and retry",
                 )
+            self._emit_row_event(current, key, "on_update", updated.row_id, updated.values)
             await self._refresh_manifest(ws, current.app_id)
             return {
                 "row_id": updated.row_id,
@@ -2836,6 +3903,8 @@ class AppService:
         row_id: str,
         *,
         expected_version: int | None = None,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> str:
         """Delete one row with an optional version check (CAS)."""
         await self._ensure_db_rows(row)
@@ -2844,7 +3913,13 @@ class AppService:
             current = self._app_repo.get(row.app_id) or row
             if current.storage_version < 2:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
-            if self._app_repo.get_data_row(current.app_id, row_id) is None:
+            existing_row = self._app_repo.get_data_row(current.app_id, row_id)
+            if existing_row is None:
+                raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
+            owner_filter = self._row_owner_filter(
+                current, existing_row.table_key, viewer_user_id, include_all_rows
+            )
+            if owner_filter is not None and existing_row.created_by != owner_filter:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
             if not self._app_repo.delete_data_row(
                 current.app_id,
@@ -2865,6 +3940,8 @@ class AppService:
         *,
         table: str = MAIN_TABLE_KEY,
         redact_pii: bool = False,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
     ) -> tuple[str, str]:
         """Render one table as CSV (a snapshot, not the live storage)."""
         key = self._require_table(row, table)
@@ -2872,12 +3949,18 @@ class AppService:
         current = self._app_repo.get(row.app_id) or row
         ws = await self._workspace(current.agent_id)
         schema = await self._read_schema(ws, current.app_id, key)
+        owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
         if current.storage_version >= 2:
-            rows = _normalize_rows(
-                schema,
-                [item.values for item in self._app_repo.list_all_data_rows(current.app_id, key)],
-            )
+            data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
+            if owner_filter is not None:
+                data_rows = [item for item in data_rows if item.created_by == owner_filter]
+            rows = _normalize_rows(schema, [item.values for item in data_rows])
         else:
+            if owner_filter is not None:
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    "row-scoped table requires DB storage; migrate the app first",
+                )
             rows = await self._read_rows_file(ws, current.app_id, schema, key)
         schema, rows = _apply_pii(schema, rows, redact_pii=redact_pii)
         return f"{key}.csv", render_csv(schema, rows)
@@ -2908,7 +3991,11 @@ class AppService:
                     schema.to_json().encode("utf-8"),
                 )
             )
-            _filename, csv_text = await self.export_rows(current, table=table_view.table_key)
+            _filename, csv_text = await self.export_rows(
+                current,
+                table=table_view.table_key,
+                include_all_rows=True,
+            )
             entries.append(
                 (
                     f"{TABLES_DIR}/{table_view.table_key}/{FILE_DATA}",
@@ -3093,7 +4180,7 @@ class AppService:
         html = await ws.aread_text(app_path(row.app_id, FILE_HTML)) or ""
         tables: list[dict[str, Any]] = []
         for table in self.list_tables(row):
-            if not table.public_visible:
+            if not table.public_visible or table.row_scope == "user":
                 continue
             schema = await self._read_schema(ws, row.app_id, table.table_key)
             tables.append(
@@ -3199,8 +4286,9 @@ class AppService:
                 continue
             key = item.get("table_key")
             table = live.get(key) if isinstance(key, str) else None
-            # Hiding a table takes effect immediately, even with a snapshot.
-            if table is None or not table.public_visible:
+            # Hiding a table (or making it per-user) takes effect immediately,
+            # even with a snapshot.
+            if table is None or not table.public_visible or table.row_scope == "user":
                 continue
             tables.append({**item, "row_count": table.row_count})
         return publication.html_snapshot, tables
@@ -3209,6 +4297,10 @@ class AppService:
         revoked = self._app_repo.revoke_publication(row.app_id)
         if self._secret_repo is not None:
             self._secret_repo.delete(self._publication_secret_key(row.app_id))
+        if revoked and self._schedule_repo is not None:
+            for item in self._schedule_repo.list_for_app(row.app_id):
+                if item.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
+                    self._schedule_repo.delete(row.app_id, item.schedule_id)
         return revoked
 
     def resolve_public_app(self, token: str) -> AppRecord | None:
@@ -3223,6 +4315,702 @@ class AppService:
         if publication.expires_at is not None and publication.expires_at <= int(time.time()):
             return None
         return self._app_repo.get(publication.app_id)
+
+    # ----- service bindings -----
+
+    def list_bindings(self, row: AppRecord) -> list[BindingView]:
+        """The implicit built-in dataset plus any stored connector/external bindings."""
+        stored = self._binding_repo.list_for_app(row.app_id) if self._binding_repo else []
+        return [
+            BindingView(
+                binding_id=BUILTIN_BINDING_ID,
+                provider="builtin",
+                service_id=BUILTIN_SERVICE_ID,
+                config={},
+                enabled=True,
+                version=1,
+                builtin=True,
+            ),
+            *[self._binding_view(item) for item in stored if item.binding_id != BUILTIN_BINDING_ID],
+        ]
+
+    def save_binding(
+        self,
+        row: AppRecord,
+        *,
+        binding_id: str,
+        provider: str,
+        service_id: str,
+        config: Mapping[str, Any] | None = None,
+        enabled: bool = True,
+    ) -> BindingView:
+        if self._binding_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "service bindings are not configured")
+        clean_id = binding_id.strip()
+        if clean_id == BUILTIN_BINDING_ID:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                f"binding id {BUILTIN_BINDING_ID!r} is reserved for the built-in dataset",
+            )
+        if re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", clean_id) is None:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                "binding id must be 1-64 chars: lowercase letters, digits, '_' or '-'",
+            )
+        clean_provider = provider.strip().lower()
+        if clean_provider not in BINDING_PROVIDERS:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                f"unknown binding provider: {provider!r}",
+            )
+        clean_service = service_id.strip()[:200]
+        if not clean_service:
+            raise _invalid(ErrorCode.APP_SHARE_INVALID, "service_id is required")
+        if clean_provider == "builtin" and clean_service != BUILTIN_SERVICE_ID:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                f"builtin bindings must use {BUILTIN_SERVICE_ID!r}",
+            )
+        payload = dict(config or {})
+        config_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(config_json.encode("utf-8")) > 64 * 1024:
+            raise _invalid(ErrorCode.APP_SHARE_INVALID, "binding config exceeds 64 KB")
+        stored = self._binding_repo.upsert(
+            app_id=row.app_id,
+            binding_id=clean_id,
+            provider=clean_provider,
+            service_id=clean_service,
+            config_json=config_json,
+            enabled=enabled,
+        )
+        return self._binding_view(stored)
+
+    def delete_binding(self, row: AppRecord, binding_id: str) -> bool:
+        if self._binding_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "service bindings are not configured")
+        if binding_id == BUILTIN_BINDING_ID:
+            raise _invalid(
+                ErrorCode.APP_SHARE_INVALID,
+                f"binding {BUILTIN_BINDING_ID!r} is implicit and cannot be deleted",
+            )
+        return self._binding_repo.delete(row.app_id, binding_id)
+
+    # ----- R2.1 external services -----
+
+    @staticmethod
+    def _service_view(item: LightAppServiceRow) -> ServiceView:
+        return ServiceView(
+            service_id=item.service_id,
+            name=item.name,
+            provider=item.provider,
+            connector_instance_id=item.connector_instance_id,
+            allowed_tools=item.allowed_tools,
+            allowed_url_prefixes=item.allowed_url_prefixes,
+            cache_ttl_seconds=item.cache_ttl_seconds,
+            max_calls_per_minute=item.max_calls_per_minute,
+            public_live=item.public_live,
+            enabled=item.enabled,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+
+    def list_services(self, row: AppRecord) -> list[ServiceView]:
+        if self._service_repo is None:
+            return []
+        return [self._service_view(item) for item in self._service_repo.list_for_app(row.app_id)]
+
+    def save_service(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        provider: str,
+        connector_instance_id: str,
+        allowed_tools: list[str],
+        allowed_url_prefixes: list[str],
+        cache_ttl_seconds: int,
+        max_calls_per_minute: int,
+        public_live: bool,
+        enabled: bool,
+        actor_user_id: int,
+        is_admin: bool,
+    ) -> ServiceView:
+        """Create or update one service declaration.
+
+        It is both the call allowlist and the assembly binding: saving it
+        mirrors a connector/external binding with the same page-facing name.
+        """
+        if self._service_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "app services are not configured")
+        clean_name = name.strip().lower()
+        if not SERVICE_NAME_RE.fullmatch(clean_name) or clean_name == BUILTIN_BINDING_ID:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "service name must be lowercase letters, digits, '-' or '_'",
+            )
+        clean_provider = provider.strip().lower()
+        if clean_provider not in SERVICE_PROVIDERS:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID, "service provider must be connector or external"
+            )
+        instance_id = connector_instance_id.strip()
+        if not instance_id:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "connector_instance_id is required")
+        if self._connector_repo is not None:
+            instance = self._connector_repo.get(instance_id)
+            if instance is None:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown connector: {instance_id!r}")
+            if not (is_admin or instance.user_id == row.owner_user_id or instance.shared):
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    "only the connector owner can bind it to this app",
+                )
+        tools = list(dict.fromkeys(item.strip() for item in allowed_tools if item.strip()))
+        if not tools:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "at least one read-only tool is required")
+        prefixes = list(
+            dict.fromkeys(item.strip().rstrip("/") for item in allowed_url_prefixes if item.strip())
+        )
+        for prefix in prefixes:
+            if not prefix.startswith(("https://", "http://")):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid URL prefix: {prefix!r}")
+        if not 0 <= cache_ttl_seconds <= 86_400:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "cache_ttl_seconds must be 0..86400")
+        if not 1 <= max_calls_per_minute <= 600:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "max_calls_per_minute must be 1..600",
+            )
+        existing = self._service_repo.get_by_name(row.app_id, clean_name)
+        if existing is None:
+            stored = self._service_repo.create(
+                app_id=row.app_id,
+                name=clean_name,
+                provider=clean_provider,
+                connector_instance_id=instance_id,
+                allowed_tools=tools,
+                allowed_url_prefixes=prefixes,
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_calls_per_minute=max_calls_per_minute,
+                public_live=public_live,
+                enabled=enabled,
+                created_by=actor_user_id,
+            )
+        else:
+            updated = self._service_repo.update(
+                existing.service_id,
+                provider=clean_provider,
+                connector_instance_id=instance_id,
+                allowed_tools=tools,
+                allowed_url_prefixes=prefixes,
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_calls_per_minute=max_calls_per_minute,
+                public_live=public_live,
+                enabled=enabled,
+            )
+            if updated is None:
+                raise OctopError(ErrorCode.APP_NOT_FOUND, "service declaration not found")
+            self._service_repo.clear_cache(existing.service_id)
+            stored = updated
+        if self._binding_repo is not None:
+            self._binding_repo.upsert(
+                app_id=row.app_id,
+                binding_id=clean_name,
+                provider=clean_provider,
+                service_id=stored.service_id,
+                config_json="{}",
+                enabled=enabled,
+            )
+        return self._service_view(stored)
+
+    def delete_service(self, row: AppRecord, name: str) -> bool:
+        if self._service_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "app services are not configured")
+        clean_name = name.strip().lower()
+        existing = self._service_repo.get_by_name(row.app_id, clean_name)
+        if existing is None:
+            return False
+        self._service_repo.clear_cache(existing.service_id)
+        if self._binding_repo is not None:
+            self._binding_repo.delete(row.app_id, clean_name)
+        return self._service_repo.delete(row.app_id, clean_name)
+
+    async def call_service(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        tool: str,
+        args: Mapping[str, Any] | None = None,
+    ) -> ServiceCallResult:
+        """Call one declared, allowlisted read-only connector tool.
+
+        The declaration is enforced here as well as at bind time: tools must be
+        allowlisted, URLs must match a prefix, live calls are rate-limited, and
+        responses are cached with the declared TTL.
+        """
+        self.require_capability(row, "external.fetch")
+        if self._service_repo is None or self._external_tool_runner is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external services are not available on this server",
+            )
+        declaration = self._service_repo.get_by_name(row.app_id, name.strip().lower())
+        if declaration is None or not declaration.enabled:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown or disabled service: {name!r}")
+        clean_tool = tool.strip()
+        if clean_tool not in declaration.allowed_tools:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"tool {clean_tool!r} is not allowed for service {declaration.name!r}",
+            )
+        clean_args = {str(key): value for key, value in (args or {}).items()}
+        url = clean_args.get("url")
+        if isinstance(url, str) and url.strip():
+            clean_url = url.strip()
+            if not _service_url_allowed(declaration.allowed_url_prefixes, clean_url):
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "URL is outside the service's allowed prefixes",
+                )
+        args_json = json.dumps(
+            clean_args,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        args_hash = hashlib.sha256(args_json.encode("utf-8")).hexdigest()
+        ttl = declaration.cache_ttl_seconds
+        now = int(time.time())
+        if ttl > 0:
+            cached = self._service_repo.get_cached(
+                declaration.service_id,
+                clean_tool,
+                args_hash,
+                now=now,
+            )
+            if cached is not None:
+                return ServiceCallResult(
+                    value=_service_value(cached),
+                    cached=True,
+                    expires_at=None,
+                )
+            # Opportunistic cleanup keeps the cache table bounded without a
+            # dedicated scheduler.
+            self._service_repo.delete_expired(now=now)
+        async with app_limits.service_slot(
+            declaration.service_id,
+            per_minute=declaration.max_calls_per_minute,
+        ):
+            output = await asyncio.to_thread(
+                self._external_tool_runner.run,
+                instance_id=declaration.connector_instance_id,
+                tool=clean_tool,
+                args=clean_args,
+            )
+        if not isinstance(output, str):
+            output = str(output)
+        if len(output.encode("utf-8")) > SERVICE_MAX_RESPONSE_BYTES:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "service response is larger than 5 MB",
+            )
+        expires_at = now + ttl if ttl > 0 else None
+        if expires_at is not None:
+            self._service_repo.put_cached(
+                service_id=declaration.service_id,
+                tool=clean_tool,
+                args_hash=args_hash,
+                response_json=output,
+                expires_at=expires_at,
+            )
+        return ServiceCallResult(
+            value=_service_value(output),
+            cached=False,
+            expires_at=expires_at,
+        )
+
+    def read_cached_service(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        tool: str,
+        args: Mapping[str, Any] | None = None,
+    ) -> ServiceCallResult:
+        """Read a cached service response for a public link; never calls live."""
+        if self._service_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external services are not available on this server",
+            )
+        declaration = self._service_repo.get_by_name(row.app_id, name.strip().lower())
+        if declaration is None or not declaration.enabled or not declaration.public_live:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"service {name!r} is not available on the public link",
+            )
+        clean_tool = tool.strip()
+        if clean_tool not in declaration.allowed_tools:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"tool {clean_tool!r} is not allowed for service {declaration.name!r}",
+            )
+        clean_args = {str(key): value for key, value in (args or {}).items()}
+        url = clean_args.get("url")
+        if (
+            isinstance(url, str)
+            and url.strip()
+            and not _service_url_allowed(declaration.allowed_url_prefixes, url.strip())
+        ):
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "URL is outside the service's allowed prefixes",
+            )
+        args_json = json.dumps(
+            clean_args,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        args_hash = hashlib.sha256(args_json.encode("utf-8")).hexdigest()
+        cached = self._service_repo.get_cached(
+            declaration.service_id,
+            clean_tool,
+            args_hash,
+            now=int(time.time()),
+        )
+        if cached is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "no cached response for this public service call",
+            )
+        return ServiceCallResult(value=_service_value(cached), cached=True, expires_at=None)
+
+    @staticmethod
+    def _event_view(row: AppEventRow) -> AppEventView:
+        return AppEventView(
+            event_id=row.event_id,
+            event_type=row.event_type,
+            source=row.source,
+            summary=row.summary,
+            payload=row.payload,
+            created_at=row.created_at,
+            acknowledged_at=row.acknowledged_at,
+        )
+
+    def append_event(
+        self,
+        row: AppRecord,
+        *,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        source: str = "",
+        summary: str = "",
+        external_event_id: str | None = None,
+    ) -> AppEventView:
+        """Append one inbox event, keeping the newest 500 within 30 days.
+
+        ``external_event_id`` makes retries idempotent: the same upstream event
+        maps to the same app event id.
+        """
+        if self._event_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "app events are not available on this server",
+            )
+        event_id = f"ext_{external_event_id.strip()[:80]}" if external_event_id else None
+        if event_id is not None:
+            existing = self._event_repo.get(event_id)
+            if existing is not None:
+                return self._event_view(existing)
+        clean_type = event_type.strip()[:100]
+        if not clean_type:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "event_type is required")
+        raw = json.dumps(payload or {}, ensure_ascii=False)
+        if len(raw.encode("utf-8")) > APP_EVENT_MAX_PAYLOAD_BYTES:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "event payload exceeds 64 KB")
+        stored = self._event_repo.create(
+            app_id=row.app_id,
+            event_type=clean_type,
+            source=source.strip()[:200],
+            summary=summary.strip()[:500],
+            payload=payload or {},
+            event_id=event_id,
+        )
+        self._event_repo.prune(
+            row.app_id,
+            before=int(time.time()) - APP_EVENT_RETENTION_SECONDS,
+            keep=APP_EVENT_KEEP,
+        )
+        return self._event_view(stored)
+
+    def list_events(
+        self,
+        row: AppRecord,
+        *,
+        since: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[AppEventView], int]:
+        if self._event_repo is None:
+            return [], 0
+        events, latest = self._event_repo.list_after(
+            row.app_id,
+            since=max(0, since),
+            limit=limit,
+        )
+        return [self._event_view(item) for item in events], latest
+
+    def ack_events(self, row: AppRecord, event_ids: list[str]) -> int:
+        if self._event_repo is None:
+            return 0
+        return self._event_repo.ack(row.app_id, event_ids)
+
+    async def fetch_service_image(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        url: str,
+    ) -> str:
+        """Fetch a public image through a declared service and store it as an asset."""
+        self.require_capability(row, "external.fetch")
+        if self._service_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external services are not available on this server",
+            )
+        declaration = self._service_repo.get_by_name(row.app_id, name.strip().lower())
+        if declaration is None or not declaration.enabled:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown or disabled service: {name!r}")
+        clean_url = url.strip()
+        if not clean_url:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "url is required")
+        if not _service_url_allowed(declaration.allowed_url_prefixes, clean_url):
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "URL is outside the service's allowed prefixes",
+            )
+        data = await asyncio.to_thread(_fetch_service_image, clean_url)
+        asset_name = f"svc_{hashlib.sha256(clean_url.encode('utf-8')).hexdigest()[:20]}"
+        return await self.save_asset(row, asset_name, data)
+
+    async def export_dataset(self, row: AppRecord) -> bytes:
+        """Export the built-in dataset as a portable JSON document.
+
+        This is the first half of the promote path: the manifest and rows are
+        self-describing, so an external service adapter can import them without
+        reaching into Octop's control-plane tables.
+        """
+        current = self._app_repo.get(row.app_id) or row
+        ws = await self._workspace(current.agent_id)
+        tables: list[dict[str, Any]] = []
+        for view in self.list_tables(current):
+            schema = await self.read_schema(current, view.table_key)
+            if current.storage_version >= 2:
+                stored = self._app_repo.list_all_data_rows(current.app_id, view.table_key)
+                rows = [
+                    {
+                        "values": item.values,
+                        "created_by": item.created_by,
+                        "row_id": item.row_id,
+                        "version": item.version,
+                    }
+                    for item in stored
+                ]
+            else:
+                legacy = await self._read_rows_file(ws, current.app_id, schema, view.table_key)
+                rows = [{"values": values} for values in legacy]
+            tables.append(
+                {
+                    "table_key": view.table_key,
+                    "label": view.label,
+                    "is_main": view.is_main,
+                    "public_visible": view.public_visible,
+                    "row_scope": view.row_scope,
+                    "rules": view.rules,
+                    "schema": schema.to_dict(),
+                    "rows": rows,
+                }
+            )
+        payload = {
+            "format": "octop.miniapp.dataset",
+            "version": 1,
+            "exported_at": int(time.time()),
+            "app": {
+                "app_id": current.app_id,
+                "name": current.name,
+                "description": current.description,
+                "agent_id": current.agent_id,
+                "owner_user_id": current.owner_user_id,
+            },
+            "capabilities": self.capability_list(current),
+            "tables": tables,
+            "bindings": [
+                {
+                    "binding_id": item.binding_id,
+                    "provider": item.provider,
+                    "service_id": item.service_id,
+                    "config": item.config,
+                    "enabled": item.enabled,
+                    "builtin": item.builtin,
+                }
+                for item in self.list_bindings(current)
+            ],
+        }
+        content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        if len(content) > MAX_BACKUP_BYTES:
+            raise _invalid(
+                ErrorCode.APP_LIMIT_EXCEEDED,
+                f"dataset export exceeds {MAX_BACKUP_BYTES // (1024 * 1024)} MB",
+                limit=MAX_BACKUP_BYTES,
+            )
+        return content
+
+    async def import_dataset(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        agent_id: str,
+        owner_user_id: int,
+    ) -> LightAppRow:
+        """Create a new app from :meth:`export_dataset` output.
+
+        Rows are attributed to the importing owner because external user ids
+        do not necessarily exist on this host. Connector/external bindings are
+        recreated disabled so the owner can review and re-bind credentials.
+        """
+        if payload.get("format") != "octop.miniapp.dataset":
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "not a MiniApp dataset export")
+        try:
+            version = int(payload.get("version") or 0)
+        except (TypeError, ValueError):
+            version = 0
+        if version != 1:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "unsupported dataset export version")
+        raw_tables = payload.get("tables")
+        if not isinstance(raw_tables, list) or not raw_tables:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "dataset export has no tables")
+        main = next(
+            (
+                item
+                for item in raw_tables
+                if isinstance(item, dict)
+                and (item.get("is_main") is True or item.get("table_key") == MAIN_TABLE_KEY)
+            ),
+            None,
+        )
+        if main is None:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "dataset export has no main table")
+        raw_app = payload.get("app")
+        app_meta = raw_app if isinstance(raw_app, dict) else {}
+        base_name = str(app_meta.get("name") or "Imported app").strip() or "Imported app"
+        name = (base_name[:90] + " (imported)")[:100]
+        description = str(app_meta.get("description") or "")
+        raw_caps = payload.get("capabilities")
+        capabilities = raw_caps if isinstance(raw_caps, list) else None
+        main_schema = main.get("schema")
+        if not isinstance(main_schema, dict):
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "main table has no schema")
+
+        row = await self.create(
+            agent_id=agent_id,
+            owner_user_id=owner_user_id,
+            name=name,
+            description=description,
+            columns=main_schema,
+            capabilities=capabilities,
+        )
+        try:
+            for table in raw_tables:
+                if not isinstance(table, dict):
+                    raise _invalid(ErrorCode.APP_SOURCE_INVALID, "invalid table entry")
+                key = str(table.get("table_key") or MAIN_TABLE_KEY)
+                scope = str(table.get("row_scope") or "app")
+                public_visible = bool(table.get("public_visible", key == MAIN_TABLE_KEY))
+                rules = table.get("rules")
+                if key == MAIN_TABLE_KEY:
+                    await self.set_table_row_scope(row, table=key, row_scope=scope)
+                    await self.set_table_visibility(row, table=key, public_visible=public_visible)
+                else:
+                    schema = table.get("schema")
+                    if not isinstance(schema, dict):
+                        raise _invalid(
+                            ErrorCode.APP_SOURCE_INVALID,
+                            f"table {key!r} has no schema",
+                        )
+                    await self.create_table(
+                        row,
+                        table_key=key,
+                        label=str(table.get("label") or ""),
+                        columns=schema,
+                        public_visible=public_visible,
+                        row_scope=scope,
+                    )
+                if isinstance(rules, dict) and rules:
+                    await self.set_table_rules(row, table=key, rules=rules)
+                records = self._dataset_records(table.get("rows"))
+                if records:
+                    await self.import_rows(
+                        row,
+                        records,
+                        table=key,
+                        mode=IMPORT_MODE_REPLACE,
+                        source="promote",
+                        created_by=owner_user_id,
+                    )
+            raw_bindings = payload.get("bindings")
+            if isinstance(raw_bindings, list):
+                for item in raw_bindings:
+                    if not isinstance(item, dict) or item.get("builtin"):
+                        continue
+                    binding_id = str(item.get("binding_id") or "")
+                    if not binding_id or binding_id == BUILTIN_BINDING_ID:
+                        continue
+                    self.save_binding(
+                        row,
+                        binding_id=binding_id,
+                        provider=str(item.get("provider") or ""),
+                        service_id=str(item.get("service_id") or ""),
+                        config=item.get("config") if isinstance(item.get("config"), dict) else {},
+                        enabled=False,
+                    )
+        except Exception:
+            await self.delete(row)
+            raise
+        return self.get(row.app_id)
+
+    @staticmethod
+    def _dataset_records(raw: object) -> list[dict[str, str]]:
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "table rows must be a list")
+        records: list[dict[str, str]] = []
+        for item in raw:
+            values = item.get("values") if isinstance(item, dict) else None
+            if not isinstance(values, dict):
+                values = item if isinstance(item, dict) else None
+            if not isinstance(values, dict):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "invalid row entry")
+            records.append({str(key): str(value) for key, value in values.items()})
+        return records
+
+    @staticmethod
+    def _binding_view(item: LightAppBindingRow) -> BindingView:
+        try:
+            config = json.loads(item.config_json or "{}")
+        except ValueError:
+            config = {}
+        return BindingView(
+            binding_id=item.binding_id,
+            provider=item.provider,
+            service_id=item.service_id,
+            config=dict(config) if isinstance(config, dict) else {},
+            enabled=item.enabled,
+            version=item.version,
+            builtin=False,
+        )
 
     # ----- data sources -----
 
@@ -3314,11 +5102,242 @@ class AppService:
                 params_json=params_json,
                 mapping_json=mapping_json,
             )
+        self._mirror_source_schedule(item, created_by=created_by)
         return self._source_view(item)
 
     def delete_source(self, row: AppRecord, source_id: str) -> None:
         if not self._app_repo.delete_source(row.app_id, source_id):
             raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        if self._schedule_repo is not None:
+            self._schedule_repo.delete_by_source(source_id)
+
+    def _mirror_source_schedule(
+        self,
+        item: LightAppSourceRow,
+        *,
+        created_by: int | None = None,
+        enabled: bool = True,
+    ) -> None:
+        """Keep the ``sync_source`` schedule row in step with the binding."""
+        if self._schedule_repo is None:
+            return
+        if item.schedule_seconds > 0:
+            self._schedule_repo.upsert_source(
+                app_id=item.app_id,
+                source_id=item.source_id,
+                interval_seconds=item.schedule_seconds,
+                created_by=created_by or item.created_by,
+                enabled=enabled,
+            )
+        else:
+            self._schedule_repo.delete_by_source(item.source_id)
+
+    def list_schedules(self, row: AppRecord) -> list[ScheduleView]:
+        if self._schedule_repo is None:
+            return []
+        return [self._schedule_view(item) for item in self._schedule_repo.list_for_app(row.app_id)]
+
+    def get_schedule(self, row: AppRecord, schedule_id: str) -> ScheduleView:
+        """One schedule that belongs to *row*, or APP_NOT_FOUND."""
+        if self._schedule_repo is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        item = self._schedule_repo.get(schedule_id)
+        if item is None or item.app_id != row.app_id:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        return self._schedule_view(item)
+
+    def save_schedule(
+        self,
+        row: AppRecord,
+        *,
+        action: str,
+        interval_seconds: int,
+        created_by: int,
+        enabled: bool = True,
+        target: Mapping[str, Any] | None = None,
+        schedule_id: str | None = None,
+    ) -> ScheduleView:
+        """Create or update one interval job.
+
+        ``sync_source`` jobs are derived from data-source bindings and use a
+        deterministic id; ``snapshot_publication`` only refreshes an existing
+        public link, never creates one.
+        """
+        if self._schedule_repo is None:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "scheduling is not configured")
+        if action not in SCHEDULE_ACTIONS:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid schedule action: {action!r}")
+        interval = int(interval_seconds)
+        if interval < 1 or interval > MAX_SCHEDULE_SECONDS:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"interval_seconds must be 1..{MAX_SCHEDULE_SECONDS}",
+            )
+        existing = self._schedule_repo.get(schedule_id) if schedule_id else None
+        if schedule_id and (existing is None or existing.app_id != row.app_id):
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        if existing is not None and existing.action != action:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "schedule action cannot be changed")
+
+        if action == SCHEDULE_ACTION_SYNC_SOURCE:
+            source_id = str((target or {}).get("source_id") or "")
+            source = self._app_repo.get_source(row.app_id, source_id)
+            if source is None:
+                raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+            derived_id = f"sch_src_{source_id}"
+            if schedule_id and schedule_id != derived_id:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "source schedules use a derived id")
+            derived = self._schedule_repo.get(derived_id)
+            if derived is None and not self._has_schedule_capacity(row.app_id):
+                raise OctopError.localized(ErrorCode.APP_LIMIT_EXCEEDED)
+            item = self._schedule_repo.upsert_source(
+                app_id=row.app_id,
+                source_id=source_id,
+                interval_seconds=interval,
+                created_by=created_by,
+                enabled=enabled,
+            )
+            self._app_repo.set_source_schedule(source_id, interval if enabled else 0)
+            return self._schedule_view(item)
+
+        publication = self._app_repo.get_publication(row.app_id)
+        if publication is None or publication.revoked_at is not None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "publish the app before scheduling a snapshot refresh",
+            )
+        if existing is None:
+            existing = next(
+                (
+                    item
+                    for item in self._schedule_repo.list_for_app(row.app_id)
+                    if item.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION
+                ),
+                None,
+            )
+        if existing is not None:
+            updated = self._schedule_repo.update(
+                existing.schedule_id,
+                interval_seconds=interval,
+                enabled=enabled,
+            )
+            if updated is None:
+                raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+            return self._schedule_view(updated)
+        if not self._has_schedule_capacity(row.app_id):
+            raise OctopError.localized(ErrorCode.APP_LIMIT_EXCEEDED)
+        item = self._schedule_repo.create(
+            app_id=row.app_id,
+            action=SCHEDULE_ACTION_SNAPSHOT_PUBLICATION,
+            interval_seconds=interval,
+            created_by=created_by,
+            enabled=enabled,
+            target={},
+        )
+        return self._schedule_view(item)
+
+    def update_schedule(
+        self,
+        row: AppRecord,
+        schedule_id: str,
+        *,
+        interval_seconds: int,
+        enabled: bool,
+    ) -> ScheduleView:
+        if self._schedule_repo is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        item = self._schedule_repo.get(schedule_id)
+        if item is None or item.app_id != row.app_id:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        interval = int(interval_seconds)
+        if interval < 1 or interval > MAX_SCHEDULE_SECONDS:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"interval_seconds must be 1..{MAX_SCHEDULE_SECONDS}",
+            )
+        updated = self._schedule_repo.update(
+            schedule_id,
+            interval_seconds=interval,
+            enabled=enabled,
+        )
+        if updated is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        if item.action == SCHEDULE_ACTION_SYNC_SOURCE:
+            source_id = str(item.target.get("source_id") or "")
+            if source_id:
+                self._app_repo.set_source_schedule(source_id, interval if enabled else 0)
+        return self._schedule_view(updated)
+
+    def delete_schedule(self, row: AppRecord, schedule_id: str) -> None:
+        if self._schedule_repo is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        item = self._schedule_repo.get(schedule_id)
+        if item is None or item.app_id != row.app_id:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        self._schedule_repo.delete(row.app_id, schedule_id)
+        if item.action == SCHEDULE_ACTION_SYNC_SOURCE:
+            source_id = str(item.target.get("source_id") or "")
+            if source_id:
+                self._app_repo.set_source_schedule(source_id, 0)
+
+    def _has_schedule_capacity(self, app_id: str) -> bool:
+        assert self._schedule_repo is not None
+        return self._schedule_repo.count_for_app(app_id) < MAX_SCHEDULES_PER_APP
+
+    @staticmethod
+    def _schedule_view(item: LightAppScheduleRow) -> ScheduleView:
+        return ScheduleView(
+            schedule_id=item.schedule_id,
+            app_id=item.app_id,
+            action=item.action,
+            target=item.target,
+            interval_seconds=item.interval_seconds,
+            next_run_at=item.next_run_at,
+            last_run_at=item.last_run_at,
+            last_status=item.last_status,
+            last_error=item.last_error,
+            failure_count=item.failure_count,
+            enabled=item.enabled,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+
+    async def execute_schedule(
+        self, row: AppRecord, action: str, target: Mapping[str, Any]
+    ) -> None:
+        """Run one schedule action; bookkeeping stays in this service."""
+        if action == SCHEDULE_ACTION_SYNC_SOURCE:
+            source_id = str(target.get("source_id") or "")
+            if not source_id:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "sync_source needs a source_id")
+            await self.run_source(row, source_id)
+            return
+        if action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
+            await self.refresh_publication_snapshot(row)
+            return
+        raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid schedule action: {action!r}")
+
+    async def refresh_publication_snapshot(self, row: AppRecord) -> int:
+        """Refresh the frozen HTML/table snapshot of an existing public link."""
+        async with _lock_for(row.app_id):
+            self._require_live(row.app_id)
+            publication = self._app_repo.get_publication(row.app_id)
+            if publication is None or publication.revoked_at is not None:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "no active public link to snapshot",
+                )
+            ws = await self._workspace(row.agent_id)
+            html, tables_json = await self._snapshot_parts(row, ws)
+            now = int(time.time())
+            self._app_repo.set_publication_snapshot(
+                row.app_id,
+                html=html,
+                tables_json=tables_json,
+                digest=hashlib.sha256((html + "\0" + tables_json).encode("utf-8")).hexdigest(),
+                snapshot_at=now,
+            )
+            return now
 
     async def run_source(self, row: AppRecord, source_id: str) -> ImportResult:
         """Run one binding now and record the outcome.
@@ -3330,7 +5349,7 @@ class AppService:
         item = self._app_repo.get_source(row.app_id, source_id)
         if item is None:
             raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
-        run_at = int(time.time())
+        run_at = int(self._clock())
         try:
             params = json.loads(item.params_json)
             if not isinstance(params, dict):
@@ -3351,6 +5370,8 @@ class AppService:
                     mapping=json.loads(item.mapping_json),
                     upsert_key=upsert_key,
                     include_pii=include_pii,
+                    created_by=item.created_by,
+                    idempotency_source=item.source_id,
                 )
             elif item.kind == SOURCE_KIND_EXTERNAL:
                 result = await self._run_external_source(
@@ -3359,6 +5380,7 @@ class AppService:
                     params,
                     upsert_key=upsert_key,
                     include_pii=include_pii,
+                    idempotency_source=item.source_id,
                 )
             else:
                 raise _invalid(
@@ -3391,17 +5413,28 @@ class AppService:
     ) -> None:
         """Record the run outcome and the next scheduled attempt.
 
-        Success re-arms the normal interval; failure backs off exponentially
-        from the interval, capped at ``MAX_BACKOFF_SECONDS``. Sources without
-        a schedule get ``next_run_at`` written too, but the scan ignores them.
+        Re-arm from completion time, not start time, so a run longer than its
+        interval cannot create a backlog of immediately-due executions. A
+        deterministic jitter spreads schedules that would otherwise fire in
+        the same scan. Failures back off exponentially from the interval,
+        capped at ``MAX_BACKOFF_SECONDS``; sources without a schedule get
+        ``next_run_at`` written too, but the scan ignores them.
         """
+        # Re-arm from the finish time, not the start: a run longer than its
+        # interval must not create a backlog of immediately-due executions.
+        finished_at = max(run_at, int(self._clock()))
+        jitter = (
+            schedule_jitter(f"sch_src_{item.source_id}", item.schedule_seconds)
+            if item.schedule_seconds > 0
+            else 0
+        )
         if status == SOURCE_STATUS_OK or item.schedule_seconds <= 0:
             fail_count = 0
-            next_run_at = run_at + max(item.schedule_seconds, 0)
+            next_run_at = finished_at + max(item.schedule_seconds, 0) + jitter
         else:
             fail_count = item.fail_count + 1
             delay = min(item.schedule_seconds * 2 ** (fail_count - 1), MAX_BACKOFF_SECONDS)
-            next_run_at = run_at + delay
+            next_run_at = finished_at + delay + jitter
         self._app_repo.set_source_run_state(
             item.source_id,
             status=status,
@@ -3411,6 +5444,15 @@ class AppService:
             next_run_at=next_run_at,
             fail_count=fail_count,
         )
+        if self._schedule_repo is not None:
+            self._schedule_repo.record_run(
+                f"sch_src_{item.source_id}",
+                run_at=run_at,
+                status=status,
+                next_run_at=next_run_at,
+                failure_count=fail_count,
+                error=error,
+            )
 
     async def _run_external_source(
         self,
@@ -3420,6 +5462,7 @@ class AppService:
         *,
         upsert_key: list[str] | None = None,
         include_pii: bool = False,
+        idempotency_source: str | None = None,
     ) -> ImportResult:
         if self._external_tool_runner is None:
             raise _invalid(
@@ -3456,6 +5499,19 @@ class AppService:
             mapping=json.loads(item.mapping_json),
             upsert_key=upsert_key,
             include_pii=include_pii,
+            created_by=item.created_by,
+            client_request_id_prefix=(
+                _batch_prefix(
+                    idempotency_source,
+                    records,
+                    table=item.table_key,
+                    mapping=json.loads(item.mapping_json),
+                    upsert_key=upsert_key,
+                    include_pii=include_pii,
+                )
+                if idempotency_source
+                else None
+            ),
         )
         if cursor_path:
             try:
@@ -3818,11 +5874,11 @@ class AppService:
         self.set_collaborators(row, entries)
         return self.list_share_views(row)
 
-    def set_collaborators(
+    def _clean_collaborators(
         self,
         row: AppRecord,
         entries: list[tuple[int, str]],
-    ) -> list[LightAppCollaboratorRow]:
+    ) -> list[tuple[int, str]]:
         if len(entries) > MAX_COLLABORATORS:
             raise _invalid(
                 ErrorCode.APP_SHARE_INVALID,
@@ -3843,6 +5899,14 @@ class AppService:
                 )
             seen.add(user_id)
             cleaned.append((user_id, validate_permission(permission)))
+        return cleaned
+
+    def set_collaborators(
+        self,
+        row: AppRecord,
+        entries: list[tuple[int, str]],
+    ) -> list[LightAppCollaboratorRow]:
+        cleaned = self._clean_collaborators(row, entries)
         self._app_repo.set_collaborators(row.app_id, cleaned)
         self._app_repo.touch(row.app_id)
         return self._app_repo.list_collaborators(row.app_id)

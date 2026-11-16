@@ -14,12 +14,28 @@ export interface BridgeParams {
   offset?: number;
   table?: string | null;
   row?: Record<string, unknown>;
+  rowId?: string;
+  rows?: BridgeRowUpdate[];
+  expectedVersion?: number;
+  filters?: Record<string, string>;
+  sort?: string;
   url?: string;
   name?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  since?: number;
+  event_ids?: string[];
   prompt?: string;
   system?: string;
   gameId?: string;
   text?: string;
+}
+
+/** One row of a batch update sent by the page. */
+export interface BridgeRowUpdate {
+  row_id: string;
+  row: Record<string, unknown>;
+  expected_version?: number;
 }
 
 export type SecurityEventKind = "csp_violation" | "sandbox_integrity";
@@ -71,11 +87,18 @@ export const KNOWN_METHODS: ReadonlySet<string> = new Set([
   "tables",
   "rows",
   "append",
+  "update",
+  "updateMany",
+  "remove",
   "generate",
   "composeMessage",
   "launchGame",
   "openExternal",
   "asset",
+  "service",
+  "serviceImage",
+  "events",
+  "ackEvents",
 ]);
 
 /**

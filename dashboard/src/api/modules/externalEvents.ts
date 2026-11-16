@@ -8,7 +8,8 @@ export type ExternalTargetMode =
   | "team.judge"
   | "team.notify"
   | "app.refresh"
-  | "app.import";
+  | "app.import"
+  | "app.inbox";
 
 export interface ExternalSource {
   source_id: string;

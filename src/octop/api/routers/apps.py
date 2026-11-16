@@ -25,6 +25,7 @@ from octop.api.routers.chat.sse import format_sse
 from octop.config import DEFAULT_MAX_UPLOAD_MB, upload_mb_to_bytes
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps.assistant import AppAssistant
+from octop.infra.apps.dataset import BuiltinDatasetService
 from octop.infra.apps.game_sessions import create_game_token
 from octop.infra.apps.generation import AppGenerator
 from octop.infra.apps.limits import (
@@ -40,14 +41,18 @@ from octop.infra.apps.service import (
     IMPORT_MODE_REPLACE,
     MAX_ASSET_BYTES,
     MAX_BACKUP_BYTES,
+    SCHEDULE_ACTION_SNAPSHOT_PUBLICATION,
     AppRecord,
     AppService,
     AppTableView,
     ImportResult,
+    ScheduleView,
+    ServiceView,
     SourceView,
 )
 from octop.infra.apps.session import app_card_ids
 from octop.infra.apps.sources import GatewayToolRunner
+from octop.infra.apps.wiring import build_app_service
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
@@ -56,7 +61,7 @@ from octop.infra.utils.ulid import new_short_id
 
 router = APIRouter(prefix="/apps")
 
-SharePermission = Literal["view", "edit_data"]
+SharePermission = Literal["view", "edit_data", "edit_structure"]
 
 
 class AppColumn(BaseModel):
@@ -114,10 +119,22 @@ class AppTableOut(BaseModel):
     table_key: str = Field(description="Machine key of the table.")
     label: str = Field(default="", description="Display name of the table.")
     row_count: int = Field(default=0, description="Rows currently stored in the table.")
+    data_version: int = Field(
+        default=0,
+        description="Monotonic token bumped on every row write; poll it for refreshes.",
+    )
     is_main: bool = Field(default=False, description="Whether this is the app's main table.")
     public_visible: bool = Field(
         default=True,
         description="Whether the table is exposed by the app's public read-only link.",
+    )
+    row_scope: str = Field(
+        default="app",
+        description="'app' shares rows with collaborators; 'user' isolates them per user.",
+    )
+    rules: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Declarative table rules; currently a state machine.",
     )
     columns: list[AppColumn] = Field(
         default_factory=list,
@@ -129,9 +146,206 @@ class AppTablesResponse(BaseModel):
     tables: list[AppTableOut]
 
 
+class AppTableVersionOut(BaseModel):
+    table_key: str = Field(description="Machine key of the table.")
+    data_version: int = Field(description="Monotonic token bumped on every row write.")
+    row_count: int = Field(description="Rows currently stored in the table.")
+
+
+class AppDataVersionOut(BaseModel):
+    tables: list[AppTableVersionOut]
+
+
+class DatasetColumnOut(BaseModel):
+    name: str
+    label: str
+    type: str
+    required: bool
+    pii: str | None = None
+
+
+class DatasetTableOut(BaseModel):
+    table_key: str
+    label: str
+    row_count: int
+    is_main: bool
+    public_visible: bool
+    row_scope: str
+    columns: list[DatasetColumnOut]
+
+
+class DatasetOut(BaseModel):
+    app_id: str
+    service_id: str
+    operations: list[str]
+    row_scope: str = Field(description="App-wide default; each table reports its own row_scope.")
+    tables: list[DatasetTableOut]
+
+
+class DatasetQueryBody(BaseModel):
+    table: str = Field(default=MAIN_TABLE_KEY, description="Logical table key.")
+    limit: int = Field(default=200, ge=1, le=500, description="Rows to return.")
+    offset: int = Field(default=0, ge=0, description="Rows to skip.")
+
+
+class ImportDatasetBody(BaseModel):
+    agent_id: str = Field(description="Target agent that will host the imported app.")
+    dataset: dict[str, Any] = Field(description="Output of GET /apps/{id}/dataset/export.")
+
+
+class DatasetQueryOut(BaseModel):
+    table: str
+    columns: list[DatasetColumnOut]
+    rows: list[dict[str, str]]
+    total: int
+    limit: int
+    offset: int
+    pii_columns: list[str]
+
+
+class BindingOut(BaseModel):
+    binding_id: str
+    provider: str
+    service_id: str
+    config: dict[str, Any]
+    enabled: bool
+    version: int
+    builtin: bool
+
+
+class BindingsResponse(BaseModel):
+    bindings: list[BindingOut]
+
+
+class SaveBindingBody(BaseModel):
+    provider: str = Field(description="builtin, connector or external.")
+    service_id: str = Field(description="Service identifier; builtin is builtin.dataset.")
+    config: dict[str, Any] = Field(default_factory=dict, description="Provider-specific config.")
+    enabled: bool = Field(default=True, description="Whether the binding is active.")
+
+
+class AppServiceOut(BaseModel):
+    service_id: str = Field(description="Public service declaration id.")
+    name: str = Field(description="Page-facing name used by octopApp.service().")
+    provider: str = Field(description="connector or external.")
+    connector_instance_id: str = Field(description="Connector instance that runs the tool.")
+    allowed_tools: list[str] = Field(description="Read-only tools the page may call.")
+    allowed_url_prefixes: list[str] = Field(
+        description="URL prefixes accepted for tools that fetch a URL."
+    )
+    cache_ttl_seconds: int = Field(description="Response cache TTL; 0 disables caching.")
+    max_calls_per_minute: int = Field(description="Live call budget per minute.")
+    public_live: bool = Field(description="Reserved for public-link live calls.")
+    enabled: bool = Field(description="Whether the page may call this service.")
+    created_at: int
+    updated_at: int
+
+
+class AppServicesResponse(BaseModel):
+    services: list[AppServiceOut]
+
+
+class SaveAppServiceBody(BaseModel):
+    provider: Literal["connector", "external"] = Field(
+        description="connector: authenticated connector; external: public source."
+    )
+    connector_instance_id: str = Field(description="Existing connector instance id.")
+    allowed_tools: list[str] = Field(
+        min_length=1,
+        description="Read-only tool names the page may call.",
+    )
+    allowed_url_prefixes: list[str] = Field(
+        default_factory=list,
+        description="Required for URL-fetching tools; http(s) prefixes only.",
+    )
+    cache_ttl_seconds: int = Field(default=300, ge=0, le=86_400)
+    max_calls_per_minute: int = Field(default=30, ge=1, le=600)
+    public_live: bool = Field(
+        default=False,
+        description="Reserved for the R2.1b public-link live feature.",
+    )
+    enabled: bool = Field(default=True)
+
+
+class ServiceCallBody(BaseModel):
+    tool: str = Field(description="Tool name; must be in the declaration allowlist.")
+    args: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tool arguments; URL fetches must match allowed_url_prefixes.",
+    )
+
+
+class ServiceCallOut(BaseModel):
+    value: Any = Field(description="Tool result; JSON when the adapter returns JSON.")
+    cached: bool = Field(description="Whether the result came from the TTL cache.")
+    expires_at: int | None = Field(
+        default=None,
+        description="Cache expiry, when the result was cached.",
+    )
+
+
+class ServiceImageBody(BaseModel):
+    url: str = Field(description="Public image URL inside the service's allowed prefixes.")
+
+
+class ServiceImageOut(BaseModel):
+    asset: str = Field(description="Stored asset name; pass it to octopApp.asset().")
+
+
+class AppEventOut(BaseModel):
+    event_id: str
+    event_type: str
+    source: str
+    summary: str
+    payload: dict[str, Any]
+    created_at: int
+    acknowledged_at: int | None
+
+
+class AppEventsResponse(BaseModel):
+    events: list[AppEventOut]
+    latest_id: int
+
+
+class AckEventsBody(BaseModel):
+    event_ids: list[str] = Field(
+        default_factory=list,
+        description="Event ids to mark acknowledged (max 200).",
+    )
+
+
+class AckEventsOut(BaseModel):
+    acknowledged: int
+
+
+class DeleteBindingResponse(BaseModel):
+    deleted: str
+
+
 class TableVisibilityBody(BaseModel):
     public_visible: bool = Field(
         description="Expose this table on the app's public read-only link."
+    )
+    row_scope: Literal["app", "user"] | None = Field(
+        default=None,
+        description=(
+            "Who sees rows inside the app. 'app' shares them with every "
+            "collaborator; 'user' shows each normal user only the rows they "
+            "created. Owner/admin always sees every row. Public exposure is "
+            "controlled separately by ``public_visible``; there is no "
+            "'published' row scope, and 'user' tables never appear on the "
+            "public link."
+        ),
+    )
+
+
+class TableRulesBody(BaseModel):
+    rules: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Declarative rules. v1 supports "
+            '{"state_field": "status", "transitions": {"new": ["done"]}}.'
+        ),
     )
 
 
@@ -357,12 +571,9 @@ def _audit(
 def _service(server: OctopServer) -> AppService:
     if server.services is None or server.app_runtime is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
-    return AppService(
-        app_repo=server.services.light_app_repo,
-        agent_repo=server.services.agent_repo,
-        user_repo=server.services.user_repo,
+    return build_app_service(
+        repos=server.services.repos,
         workspaces=server.app_runtime.agent_registry,
-        secret_repo=server.services.secret_repo,
     )
 
 
@@ -378,6 +589,25 @@ def _columns(schema: Schema) -> list[AppColumn]:
         )
         for col in schema.columns
     ]
+
+
+def _parse_row_filters(raw: list[str]) -> dict[str, str]:
+    """Turn repeated ``column=value`` query params into a filter mapping.
+
+    The value may itself contain ``=``; only the first one separates the
+    column from the value.
+    """
+    filters: dict[str, str] = {}
+    for item in raw:
+        column, separator, value = str(item).partition("=")
+        name = column.strip()
+        if not separator or not name:
+            raise OctopError(
+                ErrorCode.APP_ROW_INVALID,
+                f"invalid filter, expected column=value: {item!r}",
+            )
+        filters[name] = value.strip()
+    return filters
 
 
 def _summary(service: AppService, row: AppRecord, permission: str) -> AppSummary:
@@ -402,8 +632,11 @@ async def _table_out(service: AppService, row: AppRecord, table: AppTableView) -
         table_key=table.table_key,
         label=table.label,
         row_count=table.row_count,
+        data_version=table.data_version,
         is_main=table.is_main,
         public_visible=table.public_visible,
+        row_scope=table.row_scope,
+        rules=table.rules,
         columns=columns,
     )
 
@@ -434,6 +667,71 @@ def _row_access(
     row = service.get(app_id)
     permission = service.require(row, user.id, needed, is_admin=user.is_admin)
     return service, row, permission
+
+
+def _write_access(
+    server: OctopServer,
+    user: User,
+    app_id: str,
+    needed: str,
+) -> tuple[AppService, AppRecord, str]:
+    """Resolve a write target and audit an admin acting on someone else's app."""
+    service, row, permission = _row_access(server, user, app_id, needed)
+    if user.is_admin and row.owner_user_id != user.id:
+        service.audit_admin_override(
+            user_id=user.id,
+            agent_id=row.agent_id,
+            app_id=row.app_id,
+            needed=needed,
+            app_owner_id=row.owner_user_id,
+            via="http",
+        )
+    return service, row, permission
+
+
+def _manage_access(
+    server: OctopServer,
+    user: User,
+    app_id: str,
+) -> tuple[AppService, AppRecord, str]:
+    """Owner/admin only: read-only owner check for management views."""
+    service, row, permission = _row_access(server, user, app_id, "edit_structure")
+    if not (user.is_admin or row.owner_user_id == user.id):
+        raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
+    return service, row, permission
+
+
+def _manage_write_access(
+    server: OctopServer,
+    user: User,
+    app_id: str,
+) -> tuple[AppService, AppRecord, str]:
+    """Owner/admin only management write, with admin override auditing."""
+    service, row, permission = _write_access(server, user, app_id, "edit_structure")
+    if not (user.is_admin or row.owner_user_id == user.id):
+        raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
+    return service, row, permission
+
+
+def _schedule_write_access(
+    server: OctopServer,
+    user: User,
+    app_id: str,
+    schedule_id: str,
+) -> tuple[AppService, AppRecord, ScheduleView]:
+    """Resolve one schedule and apply the gate for its action.
+
+    ``snapshot_publication`` republishes the current HTML/schema, so it is an
+    owner/admin management action like ``publication.publish``. Source sync
+    stays on ``edit_structure``, matching the data-source binding it mirrors.
+    """
+    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    view = service.get_schedule(row, schedule_id)
+    if view.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
+        service, row, _permission = _manage_write_access(server, user, app_id)
+    else:
+        service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+    return service, row, view
 
 
 def _public_link(server: OctopServer, token: str) -> str:
@@ -489,13 +787,10 @@ def _service_with_runner(server: OctopServer) -> AppService:
     """AppService wired with the gateway tool runner (external sources)."""
     if server.services is None or server.app_runtime is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
-    return AppService(
-        app_repo=server.services.light_app_repo,
-        agent_repo=server.services.agent_repo,
-        user_repo=server.services.user_repo,
+    return build_app_service(
+        repos=server.services.repos,
         workspaces=server.app_runtime.agent_registry,
         external_tool_runner=_tool_runner(server),
-        secret_repo=server.services.secret_repo,
     )
 
 
@@ -1007,12 +1302,466 @@ async def list_app_tables(
     return AppTablesResponse(tables=await _table_outs(service, row))
 
 
+@router.get(
+    "/{app_id}/data-version",
+    response_model=AppDataVersionOut,
+    summary="Poll table data versions",
+    description=(
+        "Lightweight change token for live refresh: one ``data_version`` per "
+        "table, bumped on every row write. The host polls this and forwards "
+        "``data-changed`` to the MiniApp iframe. Requires view permission."
+    ),
+)
+async def get_app_data_version(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppDataVersionOut:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return AppDataVersionOut(
+        tables=[
+            AppTableVersionOut(
+                table_key=table.table_key,
+                data_version=table.data_version,
+                row_count=table.row_count,
+            )
+            for table in service.list_tables(row)
+        ]
+    )
+
+
+@router.post(
+    "/dataset/import",
+    response_model=AppDetail,
+    summary="Import a built-in dataset export",
+    description=(
+        "Creates a new app from GET /apps/{id}/dataset/export. Rows are attributed "
+        "to the importing user; connector/external bindings are recreated disabled."
+    ),
+)
+async def import_app_dataset(
+    body: ImportDatasetBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppDetail:
+    service = _service(server)
+    _assert_agent_access(service, user, body.agent_id)
+    row = await service.import_dataset(
+        body.dataset,
+        agent_id=body.agent_id,
+        owner_user_id=user.id,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.dataset.import",
+        target=row.app_id,
+        payload={"source_app_id": body.dataset.get("app", {}).get("app_id")},
+    )
+    return await _app_detail(service, row)
+
+
+@router.get(
+    "/{app_id}/dataset",
+    response_model=DatasetOut,
+    summary="Describe the built-in dataset service",
+    description=(
+        "The platform-provided ``builtin.dataset`` service for small apps: tables, "
+        "columns and supported read operations. Requires view permission."
+    ),
+)
+async def get_app_dataset(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> DatasetOut:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    descriptor = await BuiltinDatasetService(service).describe(row)
+    return DatasetOut(**asdict(descriptor))
+
+
+@router.post(
+    "/{app_id}/dataset/query",
+    response_model=DatasetQueryOut,
+    summary="Query the built-in dataset service",
+    description=(
+        "Reads one page from the platform-provided ``builtin.dataset`` service. "
+        "Viewers receive PII-masked rows. Requires view permission."
+    ),
+)
+async def query_app_dataset(
+    app_id: str,
+    body: DatasetQueryBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> DatasetQueryOut:
+    service, row, permission = _row_access(server, user, app_id, "view")
+    schema, rows, total = await BuiltinDatasetService(service).query(
+        row,
+        table=body.table,
+        limit=body.limit,
+        offset=body.offset,
+        redact_pii=permission == "view",
+        viewer_user_id=user.id,
+        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+    )
+    columns = [
+        DatasetColumnOut(
+            name=column.name,
+            label=column.label,
+            type=column.type,
+            required=column.required,
+            pii=column.pii,
+        )
+        for column in schema.columns
+    ]
+    return DatasetQueryOut(
+        table=body.table,
+        columns=columns,
+        rows=rows,
+        total=total,
+        limit=body.limit,
+        offset=body.offset,
+        pii_columns=[column.name for column in columns if column.pii],
+    )
+
+
+@router.get(
+    "/{app_id}/dataset/export",
+    summary="Export the built-in dataset",
+    description=(
+        "Exports schema, rows, row scope, rules and bindings as a portable JSON "
+        "document for promoting the app to an external service. Requires owner "
+        "or admin because the export contains unmasked data."
+    ),
+    responses={200: {"content": {"application/json": {}}}},
+)
+async def export_app_dataset(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> Response:
+    service, row, _permission = _manage_access(server, user, app_id)
+    content = await service.export_dataset(row)
+    from octop.infra.metrics import METRICS  # noqa: PLC0415
+
+    METRICS.inc("light_app_export_total")
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.dataset.export",
+        target=app_id,
+        payload={"bytes": len(content)},
+    )
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="miniapp-{app_id}-dataset.json"'},
+    )
+
+
+@router.get(
+    "/{app_id}/bindings",
+    response_model=BindingsResponse,
+    summary="List MiniApp service bindings",
+    description=(
+        "Lists the implicit built-in dataset binding plus stored connector/external "
+        "bindings. Requires view permission."
+    ),
+)
+async def list_app_bindings(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> BindingsResponse:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return BindingsResponse(
+        bindings=[BindingOut(**asdict(item)) for item in service.list_bindings(row)]
+    )
+
+
+@router.put(
+    "/{app_id}/bindings/{binding_id}",
+    response_model=BindingOut,
+    summary="Create or update a MiniApp service binding",
+    description="Requires owner or admin.",
+)
+async def save_app_binding(
+    app_id: str,
+    binding_id: str,
+    body: SaveBindingBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> BindingOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view = service.save_binding(
+        row,
+        binding_id=binding_id,
+        provider=body.provider,
+        service_id=body.service_id,
+        config=body.config,
+        enabled=body.enabled,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.binding.save",
+        target=app_id,
+        payload={
+            "binding_id": view.binding_id,
+            "provider": view.provider,
+            "service_id": view.service_id,
+            "enabled": view.enabled,
+        },
+    )
+    return BindingOut(**asdict(view))
+
+
+@router.delete(
+    "/{app_id}/bindings/{binding_id}",
+    response_model=DeleteBindingResponse,
+    summary="Delete a MiniApp service binding",
+    description="The implicit builtin.dataset binding cannot be deleted. Requires owner or admin.",
+)
+async def delete_app_binding(
+    app_id: str,
+    binding_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> DeleteBindingResponse:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    if not service.delete_binding(row, binding_id):
+        raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.binding.delete",
+        target=app_id,
+        payload={"binding_id": binding_id},
+    )
+    return DeleteBindingResponse(deleted=binding_id)
+
+
+def _service_out(view: ServiceView) -> AppServiceOut:
+    return AppServiceOut(
+        service_id=view.service_id,
+        name=view.name,
+        provider=view.provider,
+        connector_instance_id=view.connector_instance_id,
+        allowed_tools=list(view.allowed_tools),
+        allowed_url_prefixes=list(view.allowed_url_prefixes),
+        cache_ttl_seconds=view.cache_ttl_seconds,
+        max_calls_per_minute=view.max_calls_per_minute,
+        public_live=view.public_live,
+        enabled=view.enabled,
+        created_at=view.created_at,
+        updated_at=view.updated_at,
+    )
+
+
+@router.get(
+    "/{app_id}/services",
+    response_model=AppServicesResponse,
+    summary="List external service declarations",
+    description=(
+        "Declared read-only connector services the MiniApp page can call. Requires view permission."
+    ),
+)
+async def list_app_services(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppServicesResponse:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return AppServicesResponse(services=[_service_out(view) for view in service.list_services(row)])
+
+
+@router.put(
+    "/{app_id}/services/{name}",
+    response_model=AppServiceOut,
+    summary="Declare or update an external service",
+    description=(
+        "Owner/admin only. The declaration is the page allowlist (tools, URL "
+        "prefixes, cache and rate limit) and mirrors a connector/external "
+        "binding with the same name."
+    ),
+)
+async def save_app_service(
+    app_id: str,
+    name: str,
+    body: SaveAppServiceBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppServiceOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view = service.save_service(
+        row,
+        name=name,
+        provider=body.provider,
+        connector_instance_id=body.connector_instance_id,
+        allowed_tools=body.allowed_tools,
+        allowed_url_prefixes=body.allowed_url_prefixes,
+        cache_ttl_seconds=body.cache_ttl_seconds,
+        max_calls_per_minute=body.max_calls_per_minute,
+        public_live=body.public_live,
+        enabled=body.enabled,
+        actor_user_id=user.id,
+        is_admin=user.is_admin,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.save",
+        target=app_id,
+        payload={
+            "name": view.name,
+            "provider": view.provider,
+            "connector_instance_id": view.connector_instance_id,
+            "allowed_tools": list(view.allowed_tools),
+            "enabled": view.enabled,
+        },
+    )
+    return _service_out(view)
+
+
+@router.delete(
+    "/{app_id}/services/{name}",
+    response_model=DeleteBindingResponse,
+    summary="Delete an external service declaration",
+    description="Owner/admin only. Removes its cache and mirrored binding.",
+)
+async def delete_app_service(
+    app_id: str,
+    name: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> DeleteBindingResponse:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    if not service.delete_service(row, name):
+        raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.delete",
+        target=app_id,
+        payload={"name": name.strip().lower()},
+    )
+    return DeleteBindingResponse(deleted=name.strip().lower())
+
+
+@router.post(
+    "/{app_id}/services/{name}/call",
+    response_model=ServiceCallOut,
+    summary="Call a declared external service",
+    description=(
+        "Runs one allowlisted read-only connector tool on behalf of the app "
+        "page. Requires view permission and the ``external.fetch`` capability; "
+        "URLs must match the declaration's prefixes. Responses are cached."
+    ),
+)
+async def call_app_service(
+    app_id: str,
+    name: str,
+    body: ServiceCallBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceCallOut:
+    _service_check, row, _permission = _row_access(server, user, app_id, "view")
+    result = await _service_with_runner(server).call_service(
+        row,
+        name=name,
+        tool=body.tool,
+        args=body.args,
+    )
+    return ServiceCallOut(
+        value=result.value,
+        cached=result.cached,
+        expires_at=result.expires_at,
+    )
+
+
+@router.get(
+    "/{app_id}/events",
+    response_model=AppEventsResponse,
+    summary="Read MiniApp inbox events",
+    description=(
+        "Events delivered to this app, ordered by cursor. Pass the last seen "
+        "``latest_id`` as ``since`` on the next poll. Requires view permission."
+    ),
+)
+async def list_app_events(
+    app_id: str,
+    since: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppEventsResponse:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    events, latest = service.list_events(row, since=since, limit=limit)
+    return AppEventsResponse(
+        events=[
+            AppEventOut(
+                event_id=item.event_id,
+                event_type=item.event_type,
+                source=item.source,
+                summary=item.summary,
+                payload=item.payload,
+                created_at=item.created_at,
+                acknowledged_at=item.acknowledged_at,
+            )
+            for item in events
+        ],
+        latest_id=latest,
+    )
+
+
+@router.post(
+    "/{app_id}/events/ack",
+    response_model=AckEventsOut,
+    summary="Acknowledge MiniApp inbox events",
+    description="Marks events as processed; requires view permission.",
+)
+async def ack_app_events(
+    app_id: str,
+    body: AckEventsBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AckEventsOut:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return AckEventsOut(acknowledged=service.ack_events(row, body.event_ids))
+
+
+@router.post(
+    "/{app_id}/services/{name}/image",
+    response_model=ServiceImageOut,
+    summary="Fetch and store a service image",
+    description=(
+        "Fetches a public image inside the service's allowed URL prefixes, stores "
+        "it as an app asset, and returns the asset name for octopApp.asset(). "
+        "Requires view permission and the external.fetch capability."
+    ),
+)
+async def fetch_app_service_image(
+    app_id: str,
+    name: str,
+    body: ServiceImageBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceImageOut:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    asset = await service.fetch_service_image(row, name=name, url=body.url)
+    return ServiceImageOut(asset=asset)
+
+
 @router.patch(
     "/{app_id}/tables/{table_key}",
     response_model=AppTableOut,
-    summary="Set table visibility",
+    summary="Set table visibility and row scope",
     description=(
-        "Expose or hide one table on the app's public read-only link. Requires edit_structure."
+        "Expose or hide one table on the app's public read-only link, and/or set "
+        "its row scope: ``app`` (every collaborator sees all rows) or ``user`` "
+        "(each user sees only their own rows; the public link hides the table). "
+        "Requires owner or admin."
     ),
 )
 async def set_app_table_visibility(
@@ -1022,7 +1771,9 @@ async def set_app_table_visibility(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppTableOut:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    if body.row_scope is not None:
+        await service.set_table_row_scope(row, table=table_key, row_scope=body.row_scope)
     view = await service.set_table_visibility(
         row,
         table=table_key,
@@ -1033,7 +1784,11 @@ async def set_app_table_visibility(
         actor=f"user:{user.id}",
         action="light_app.table.visibility",
         target=app_id,
-        payload={"table": table_key, "public_visible": body.public_visible},
+        payload={
+            "table": table_key,
+            "public_visible": body.public_visible,
+            "row_scope": body.row_scope,
+        },
     )
     return await _table_out(service, row, view)
 
@@ -1176,7 +1931,7 @@ async def upload_app_asset(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AssetOut:
-    service, row, _permission = _row_access(server, user, app_id, "edit_data")
+    service, row, _permission = _write_access(server, user, app_id, "edit_data")
     data = await read_upload_capped(
         file,
         max_bytes=MAX_ASSET_BYTES,
@@ -1258,24 +2013,56 @@ async def get_app_preview(
     "/{app_id}/rows",
     response_model=AppRowsResponse,
     summary="Read app rows",
+    description=(
+        "Reads one page of rows. Repeat ``filter=column=value`` to narrow the "
+        "result (all filters must match); use ``sort=column`` or "
+        "``sort=-column`` to order it. Sensitive columns cannot be filtered or "
+        "sorted for a viewer, because their values are masked anyway."
+    ),
 )
 async def get_app_rows(
     app_id: str,
     limit: int = Query(200, ge=1, le=500, description="Rows to return."),
     offset: int = Query(0, ge=0, description="Rows to skip."),
     table: str = Query(MAIN_TABLE_KEY, description="Table key to read from."),
+    filter_: list[str] = Query(
+        default=[],
+        alias="filter",
+        description="Repeatable ``column=value`` filter; every filter must match.",
+    ),
+    sort: str | None = Query(
+        default=None,
+        description="Column to sort by; prefix with ``-`` for descending.",
+    ),
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppRowsResponse:
     service, row, permission = _row_access(server, user, app_id, "view")
     redact_pii = permission == "view"
-    schema, rows, row_meta, total = await service.read_rows_detailed(
-        row,
-        limit=limit,
-        offset=offset,
-        table=table,
-        redact_pii=redact_pii,
-    )
+    include_all_rows = user.is_admin or row.owner_user_id == user.id
+    filters = _parse_row_filters(filter_)
+    if filters or sort:
+        schema, rows, row_meta, total = await service.query_rows_detailed(
+            row,
+            limit=limit,
+            offset=offset,
+            table=table,
+            filters=filters,
+            sort=sort,
+            redact_pii=redact_pii,
+            viewer_user_id=user.id,
+            include_all_rows=include_all_rows,
+        )
+    else:
+        schema, rows, row_meta, total = await service.read_rows_detailed(
+            row,
+            limit=limit,
+            offset=offset,
+            table=table,
+            redact_pii=redact_pii,
+            viewer_user_id=user.id,
+            include_all_rows=include_all_rows,
+        )
     return AppRowsResponse(
         columns=_columns(schema),
         rows=rows,
@@ -1300,7 +2087,7 @@ async def append_app_row(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppendRowResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_data")
+    service, row, _permission = _write_access(server, user, app_id, "edit_data")
     index, stored = await service.append_row_record(
         row,
         body.row,
@@ -1336,12 +2123,14 @@ async def update_app_row(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> UpdateRowResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_data")
+    service, row, _permission = _write_access(server, user, app_id, "edit_data")
     result = await service.update_row(
         row,
         row_id,
         body.row,
         expected_version=body.expected_version,
+        viewer_user_id=user.id,
+        include_all_rows=user.is_admin or row.owner_user_id == user.id,
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -1366,8 +2155,14 @@ async def delete_app_row(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteRowResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_data")
-    deleted = await service.delete_row(row, row_id, expected_version=expected_version)
+    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    deleted = await service.delete_row(
+        row,
+        row_id,
+        expected_version=expected_version,
+        viewer_user_id=user.id,
+        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+    )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
     METRICS.inc("light_app_row_write_total")
@@ -1394,6 +2189,8 @@ async def export_app_table(
         row,
         table=table,
         redact_pii=redact_pii,
+        viewer_user_id=user.id,
+        include_all_rows=user.is_admin or row.owner_user_id == user.id,
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -1410,6 +2207,35 @@ async def export_app_table(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.put(
+    "/{app_id}/tables/{table_key}/rules",
+    response_model=AppTableOut,
+    summary="Set declarative table rules",
+    description=(
+        "v1 supports a state machine: ``state_field`` plus allowed "
+        "``transitions``. Invalid transitions are rejected on row update. "
+        "Requires owner or admin."
+    ),
+)
+async def set_app_table_rules(
+    app_id: str,
+    table_key: str,
+    body: TableRulesBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppTableOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view = await service.set_table_rules(row, table=table_key, rules=body.rules)
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.table.rules",
+        target=app_id,
+        payload={"table": table_key, "rules": body.rules},
+    )
+    return await _table_out(service, row, view)
 
 
 @router.get(
@@ -1464,7 +2290,7 @@ async def alter_app_schema(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, permission = _write_access(server, user, app_id, "edit_structure")
     await service.alter_schema(
         row,
         table=table,
@@ -1497,7 +2323,7 @@ async def update_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, permission = _write_access(server, user, app_id, "edit_structure")
     row = await service.update_metadata(row, name=body.name, description=body.description)
     schema = await service.read_schema(row)
     base = _summary(service, row, permission)
@@ -1517,7 +2343,7 @@ async def update_app(
     description=(
         "Replaces the capability manifest that gates what the sandboxed app page may "
         "ask the host to do. This does not restrict the agent tools or the dashboard's "
-        "own data panel. Requires edit_structure."
+        "own data panel. Requires owner or admin."
     ),
 )
 async def update_app_capabilities(
@@ -1526,7 +2352,7 @@ async def update_app_capabilities(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     row = service.set_capabilities(row, body.capabilities)
     _audit(
         server,
@@ -1552,7 +2378,7 @@ async def restore_app_html(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _write_access(server, user, app_id, "edit_structure")
     restored = await service.restore_html(row)
     _audit(
         server,
@@ -1567,14 +2393,14 @@ async def restore_app_html(
     "/{app_id}",
     response_model=DeleteAppResponse,
     summary="Delete a MiniApp",
-    description="Deletes the app files and metadata. Requires edit_structure.",
+    description="Deletes the app files and metadata. Requires owner or admin.",
 )
 async def delete_app(
     app_id: str,
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteAppResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     await service.delete(row)
     return DeleteAppResponse(deleted=row.app_id)
 
@@ -1583,14 +2409,14 @@ async def delete_app(
     "/{app_id}/shares",
     response_model=SharesResponse,
     summary="List collaborators",
-    description="Requires edit_structure.",
+    description="Requires owner or admin.",
 )
 async def list_app_shares(
     app_id: str,
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SharesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_access(server, user, app_id)
     return SharesResponse(
         shares=[ShareOut(**asdict(view)) for view in service.list_share_views(row)]
     )
@@ -1600,7 +2426,7 @@ async def list_app_shares(
     "/{app_id}/shares",
     response_model=SharesResponse,
     summary="Replace collaborators",
-    description="Replaces the full collaborator list. Requires edit_structure.",
+    description="Replaces the full collaborator list. Requires owner or admin.",
 )
 async def set_app_shares(
     app_id: str,
@@ -1608,7 +2434,7 @@ async def set_app_shares(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SharesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     views = service.set_shares(row, [(share.username, share.permission) for share in body.shares])
     _audit(
         server,
@@ -1684,7 +2510,7 @@ async def get_app_publication(
     summary="Create or rotate the public link",
     description=(
         "Creates a read-only public link and returns the token once. "
-        "Rotating the link invalidates the previous one. Requires edit_structure."
+        "Rotating the link invalidates the previous one. Requires owner or admin."
     ),
 )
 async def create_app_publication(
@@ -1693,7 +2519,7 @@ async def create_app_publication(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     token, expires_at = await service.publish(
         row,
         user_id=user.id,
@@ -1725,7 +2551,7 @@ async def create_app_publication(
     summary="Publish the current MiniApp version",
     description=(
         "Refreshes the public snapshot (HTML and public table structure) without "
-        "rotating the token. Rows remain live. Requires edit_structure."
+        "rotating the token. Rows remain live. Requires owner or admin."
     ),
 )
 async def publish_app_publication(
@@ -1733,7 +2559,7 @@ async def publish_app_publication(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     token, expires_at = await service.publish(row, user_id=user.id, rotate=False)
     _audit(
         server,
@@ -1756,14 +2582,14 @@ async def publish_app_publication(
     "/{app_id}/publication",
     response_model=PublicationOut,
     summary="Revoke the public link",
-    description="Revokes the current link; an already shared URL returns 404. Requires edit_structure.",
+    description="Revokes the current link; an already shared URL returns 404. Requires owner or admin.",
 )
 async def revoke_app_publication(
     app_id: str,
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     service.revoke_publication(row)
     _audit(
         server,
@@ -1788,7 +2614,7 @@ class TransferAppBody(BaseModel):
     description=(
         "Copies the app files into another agent's workspace and moves the "
         "app there. Use it to hand an app over to a different expert. "
-        "Requires edit_structure."
+        "Requires owner or admin."
     ),
 )
 async def transfer_app(
@@ -1797,7 +2623,7 @@ async def transfer_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _manage_write_access(server, user, app_id)
     moved = await service.transfer(row, target_agent_id=body.agent_id, actor_user_id=user.id)
     schema = await service.read_schema(moved)
     base = _summary(service, moved, "edit_structure")
@@ -2129,7 +2955,7 @@ async def upload_app_import_file(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> UploadImportResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_data")
+    service, row, _permission = _write_access(server, user, app_id, "edit_data")
     max_bytes = (
         int(server.services.config.max_upload_bytes) if server.services is not None else None
     )
@@ -2162,7 +2988,7 @@ async def import_app_table(
         if body.mode == IMPORT_MODE_REPLACE or body.kind == "workspace_file"
         else "edit_data"
     )
-    service, row, _permission = _row_access(server, user, app_id, needed)
+    service, row, _permission = _write_access(server, user, app_id, needed)
     if body.paths and body.path:
         raise OctopError(ErrorCode.APP_ROW_INVALID, "use either path or paths, not both")
     if not body.paths and not body.path:
@@ -2179,6 +3005,7 @@ async def import_app_table(
             dry_run=body.dry_run,
             upsert_key=body.upsert_key,
             include_pii=body.include_pii,
+            created_by=user.id,
         )
     else:
         result = await service.import_from_file(
@@ -2192,6 +3019,7 @@ async def import_app_table(
             dry_run=body.dry_run,
             upsert_key=body.upsert_key,
             include_pii=body.include_pii,
+            created_by=user.id,
         )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -2290,6 +3118,180 @@ def _source_out(view: SourceView) -> SourceOut:
     )
 
 
+class ScheduleOut(BaseModel):
+    schedule_id: str
+    action: str = Field(description="sync_source or snapshot_publication.")
+    target: dict[str, Any] = Field(description="Action target; sync_source carries source_id.")
+    interval_seconds: int
+    next_run_at: int = Field(description="Unix seconds; the scheduler picks it up when due.")
+    last_run_at: int | None = None
+    last_status: str = ""
+    last_error: str = ""
+    failure_count: int = 0
+    enabled: bool
+    created_at: int
+    updated_at: int
+
+
+class SchedulesResponse(BaseModel):
+    schedules: list[ScheduleOut]
+
+
+class SaveScheduleBody(BaseModel):
+    action: Literal["sync_source", "snapshot_publication"]
+    interval_seconds: int = Field(ge=1, description="Run interval in seconds.")
+    enabled: bool = True
+    target: dict[str, Any] = Field(
+        default_factory=dict,
+        description="sync_source: {source_id}; snapshot_publication: {}.",
+    )
+
+
+class UpdateScheduleBody(BaseModel):
+    interval_seconds: int = Field(ge=1)
+    enabled: bool = True
+
+
+def _schedule_out(view: ScheduleView) -> ScheduleOut:
+    return ScheduleOut(
+        schedule_id=view.schedule_id,
+        action=view.action,
+        target=view.target,
+        interval_seconds=view.interval_seconds,
+        next_run_at=view.next_run_at,
+        last_run_at=view.last_run_at,
+        last_status=view.last_status,
+        last_error=view.last_error,
+        failure_count=view.failure_count,
+        enabled=view.enabled,
+        created_at=view.created_at,
+        updated_at=view.updated_at,
+    )
+
+
+@router.get(
+    "/{app_id}/schedules",
+    response_model=SchedulesResponse,
+    summary="List application schedules",
+    description="Interval jobs such as source sync and public-snapshot refresh.",
+)
+async def list_app_schedules(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> SchedulesResponse:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return SchedulesResponse(
+        schedules=[_schedule_out(view) for view in service.list_schedules(row)]
+    )
+
+
+@router.post(
+    "/{app_id}/schedules",
+    response_model=ScheduleOut,
+    summary="Create or update an application schedule",
+    description=(
+        "source sync schedules use a derived id and mirror the source's "
+        "schedule_seconds; snapshot schedules only refresh an existing public "
+        "link. Source sync requires edit_structure; snapshot refresh requires "
+        "owner or admin."
+    ),
+)
+async def save_app_schedule(
+    app_id: str,
+    body: SaveScheduleBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ScheduleOut:
+    if body.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
+        service, row, _permission = _manage_write_access(server, user, app_id)
+    else:
+        service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+    view = service.save_schedule(
+        row,
+        action=body.action,
+        interval_seconds=body.interval_seconds,
+        created_by=user.id,
+        enabled=body.enabled,
+        target=body.target,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.schedule.save",
+        target=app_id,
+        payload={
+            "schedule_id": view.schedule_id,
+            "action": view.action,
+            "interval_seconds": view.interval_seconds,
+            "enabled": view.enabled,
+        },
+    )
+    return _schedule_out(view)
+
+
+@router.patch(
+    "/{app_id}/schedules/{schedule_id}",
+    response_model=ScheduleOut,
+    summary="Update an application schedule",
+    description=("Source sync requires edit_structure; snapshot refresh requires owner or admin."),
+)
+async def update_app_schedule(
+    app_id: str,
+    schedule_id: str,
+    body: UpdateScheduleBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ScheduleOut:
+    service, row, existing = _schedule_write_access(server, user, app_id, schedule_id)
+    view = service.update_schedule(
+        row,
+        schedule_id,
+        interval_seconds=body.interval_seconds,
+        enabled=body.enabled,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.schedule.update",
+        target=app_id,
+        payload={
+            "schedule_id": schedule_id,
+            "action": existing.action,
+            "interval_seconds": view.interval_seconds,
+            "enabled": view.enabled,
+        },
+    )
+    return _schedule_out(view)
+
+
+@router.delete(
+    "/{app_id}/schedules/{schedule_id}",
+    status_code=204,
+    summary="Delete an application schedule",
+    description=(
+        "Deleting a source-sync schedule leaves the binding on manual sync. "
+        "Source sync requires edit_structure; snapshot refresh requires owner or admin."
+    ),
+)
+async def delete_app_schedule(
+    app_id: str,
+    schedule_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> Response:
+    service, row, existing = _schedule_write_access(server, user, app_id, schedule_id)
+    service.delete_schedule(row, schedule_id)
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.schedule.delete",
+        target=app_id,
+        payload={"schedule_id": schedule_id, "action": existing.action},
+    )
+    return Response(status_code=204)
+
+
 @router.get(
     "/{app_id}/sources",
     response_model=SourcesResponse,
@@ -2321,7 +3323,7 @@ async def save_app_source(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SourceOut:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _write_access(server, user, app_id, "edit_structure")
     if body.kind == "external":
         # Bind-time validation (defense in depth: the runner re-checks
         # read-only on every call).
@@ -2363,7 +3365,7 @@ async def delete_app_source(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _permission = _write_access(server, user, app_id, "edit_structure")
     service.delete_source(row, source_id)
     return Response(status_code=204)
 
@@ -2380,7 +3382,7 @@ async def run_app_source(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SourceRunResponse:
-    service, row, _permission = _row_access(server, user, app_id, "edit_data")
+    service, row, _permission = _write_access(server, user, app_id, "edit_data")
     view = service.get_source(row, source_id)
     if view.kind == "external":
         service = _service_with_runner(server)

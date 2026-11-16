@@ -169,6 +169,8 @@ export const routeConfigs: RouteConfig[] = [
 
   // Common
   { path: "/apps", element: <AppsPage /> },
+  { path: "/apps/all", element: <AppsPage /> },
+  { path: "/apps/desktop", element: <AppsPage /> },
   { path: "/apps/boards/:boardId", element: <AppsPage /> },
   { path: "/apps/boards/:boardId/view", element: <BoardViewPage /> },
   { path: "/apps/:appId", element: <AppDetailPage /> },

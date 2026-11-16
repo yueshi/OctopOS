@@ -509,10 +509,10 @@ def validate_html(raw: str) -> str:
 
 def validate_permission(raw: str) -> str:
     permission = raw.strip()
-    if permission not in {"view", "edit_data"}:
+    if permission not in {"view", "edit_data", "edit_structure"}:
         raise _invalid(
             ErrorCode.APP_SHARE_INVALID,
-            "permission must be 'view' or 'edit_data'",
+            "permission must be 'view', 'edit_data' or 'edit_structure'",
         )
     return permission
 

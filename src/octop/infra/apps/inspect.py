@@ -337,7 +337,7 @@ def _normalize_headers(row: Sequence[str]) -> list[str]:
     return headers
 
 
-def _is_totals_row(row: Sequence[str]) -> bool:
+def is_totals_row(row: Sequence[str]) -> bool:
     first = row[0].strip() if row else ""
     if not any(marker in first for marker in _TOTALS_MARKERS):
         return False
@@ -491,7 +491,7 @@ def inspect_sheet(sheet: RawSheet) -> SheetReport:
     totals = 0
     kept: list[list[str]] = []
     for row in data_rows:
-        if _is_totals_row(row):
+        if is_totals_row(row):
             totals += 1
             continue
         kept.append(list(row))

@@ -28,6 +28,10 @@ APP_DELETE_TOOL_NAME = "app_delete"
 APP_TOOL_NAMES: tuple[str, ...] = (
     "app_inspect_file",
     "app_list",
+    "app_list_bindings",
+    "app_add_service",
+    "app_list_services",
+    "app_remove_service",
     "app_open",
     "app_share_link",
     "app_create",
@@ -111,8 +115,45 @@ def _ok(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
+class AppAccessError(ValueError):
+    """Permission failure carrying a machine-readable card payload."""
+
+    def __init__(self, message: str, *, code: str, data: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.data = {**data, "code": code, "message": message}
+
+
 def _err(exc: Exception) -> str:
+    if isinstance(exc, AppAccessError):
+        return json.dumps(
+            {
+                "octop_ui": {"renderer": "app_permission_card", "version": 1},
+                "data": exc.data,
+                "error": str(exc),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     return json.dumps({"error": str(exc)}, ensure_ascii=False)
+
+
+def _access_error(
+    service: AppService,
+    *,
+    agent_id: str,
+    app_id: str | None,
+    user_id: int,
+    needed: str,
+    code: str,
+    message: str,
+) -> AppAccessError:
+    data = service.describe_access(
+        agent_id=agent_id,
+        app_id=app_id,
+        user_id=user_id,
+        needed=needed,
+    )
+    return AppAccessError(message, code=code, data=data)
 
 
 def _get_for_actor(
@@ -127,24 +168,61 @@ def _get_for_actor(
     The agent is only the executor: what the user may do with an app comes
     from the app's own collaborator list, so a shared agent's members can use
     the apps they were given and nobody inherits access from owning an agent.
+    Administrators may act on any app (matching the HTTP routes); cross-owner
+    writes are recorded in the audit log.
     """
-    if not service.is_agent_accessible(agent_id, user_id):
-        raise ValueError("agent is not accessible to this user")
+    is_admin = service.is_admin(user_id)
+    if not (is_admin or service.is_agent_accessible(agent_id, user_id)):
+        raise _access_error(
+            service,
+            agent_id=agent_id,
+            app_id=app_id,
+            user_id=user_id,
+            needed=needed,
+            code="APP_AGENT_NOT_ACCESSIBLE",
+            message="agent is not accessible to this user",
+        )
     row = service.get(app_id)
     if row is None:
         raise ValueError(f"MiniApp not found: {app_id}")
-    granted = service.permission_for(row, user_id, is_admin=False)
+    granted = service.permission_for(row, user_id, is_admin=is_admin)
     if granted is None or PERMISSION_RANK.get(granted, 0) < PERMISSION_RANK[needed]:
-        raise ValueError(
-            f"this user has no '{needed}' permission on MiniApp {app_id} "
-            f"(granted: {granted or 'none'})"
+        raise _access_error(
+            service,
+            agent_id=agent_id,
+            app_id=app_id,
+            user_id=user_id,
+            needed=needed,
+            code="APP_PERMISSION_DENIED",
+            message=(
+                f"this user has no '{needed}' permission on MiniApp {app_id} "
+                f"(granted: {granted or 'none'})"
+            ),
+        )
+    if (
+        is_admin
+        and needed in {"edit_data", "edit_structure"}
+        and (row.owner_user_id != user_id or not service.is_agent_owner(agent_id, user_id))
+    ):
+        service.audit_admin_override(
+            user_id=user_id,
+            agent_id=agent_id,
+            app_id=row.app_id,
+            needed=needed,
+            app_owner_id=row.owner_user_id,
         )
     return row
 
 
+def _require_manager(service: AppService, row: LightAppRow, user_id: int) -> None:
+    """Owner/admin only: publishing, sharing, capability and deletion actions."""
+    if not (service.is_admin(user_id) or row.owner_user_id == user_id):
+        raise ValueError("only the app owner or an admin can manage this MiniApp")
+
+
 def _may_see_pii(service: AppService, row: LightAppRow, user_id: int) -> bool:
     """Editors and owners see sensitive columns; viewers do not."""
-    permission = service.permission_for(row, user_id, is_admin=False)
+    permission = service.permission_for(row, user_id, is_admin=service.is_admin(user_id))
     return PERMISSION_RANK.get(permission or "", 0) >= PERMISSION_RANK["edit_data"]
 
 
@@ -333,8 +411,16 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            if not service.is_agent_accessible(agent_id, user_id):
-                raise ValueError("agent is not accessible to this user")
+            if not (service.is_admin(user_id) or service.is_agent_accessible(agent_id, user_id)):
+                raise _access_error(
+                    service,
+                    agent_id=agent_id,
+                    app_id=None,
+                    user_id=user_id,
+                    needed="view",
+                    code="APP_AGENT_NOT_ACCESSIBLE",
+                    message="agent is not accessible to this user",
+                )
             report = await service.inspect_workspace_file(agent_id, path)
             return _ok(
                 {
@@ -353,9 +439,14 @@ def build_app_tools(
     async def app_list() -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            if not service.is_agent_accessible(agent_id, user_id):
+            is_admin = service.is_admin(user_id)
+            if not (is_admin or service.is_agent_accessible(agent_id, user_id)):
                 return _ok({"apps": []})
-            rows = service.list_for_agent(agent_id, user_id)
+            rows = (
+                service.apps_for_agent(agent_id)
+                if is_admin
+                else service.list_for_agent(agent_id, user_id)
+            )
             return _ok(
                 {
                     "apps": [
@@ -367,6 +458,142 @@ def build_app_tools(
                     ]
                 }
             )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_list_bindings(
+        app_id: Annotated[str, Field(description="App id returned by app_list/app_create.")],
+    ) -> str:
+        """List service bindings; binding writes remain an owner/admin action."""
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            return _ok(
+                {
+                    "app_id": row.app_id,
+                    "bindings": [
+                        {
+                            "binding_id": item.binding_id,
+                            "provider": item.provider,
+                            "service_id": item.service_id,
+                            "config": item.config,
+                            "enabled": item.enabled,
+                            "version": item.version,
+                            "builtin": item.builtin,
+                        }
+                        for item in service.list_bindings(row)
+                    ],
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_add_service(
+        app_id: Annotated[str, Field(description="App id returned by app_list/app_create.")],
+        name: Annotated[
+            str,
+            Field(description="Page-facing service name, lowercase letters/digits/-/_."),
+        ],
+        provider: Annotated[
+            str,
+            Field(description="connector (authenticated) or external (public source)."),
+        ],
+        connector_instance_id: Annotated[
+            str,
+            Field(description="Existing connector instance owned by the app owner/admin."),
+        ],
+        allowed_tools: Annotated[
+            list[str],
+            Field(description="Read-only tool names the page may call."),
+        ],
+        allowed_url_prefixes: Annotated[
+            list[str] | None,
+            Field(description="http(s) prefixes accepted for URL-fetching tools."),
+        ] = None,
+        cache_ttl_seconds: Annotated[
+            int,
+            Field(description="Response cache TTL; 0 disables caching."),
+        ] = 300,
+        max_calls_per_minute: Annotated[
+            int,
+            Field(description="Live call budget per minute (1-600)."),
+        ] = 30,
+        enabled: Annotated[bool, Field(description="Whether the page may call it.")] = True,
+    ) -> str:
+        """Declare a read-only external service; the owner must still grant external.fetch."""
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
+            _require_manager(service, row, user_id)
+            view = service.save_service(
+                row,
+                name=name,
+                provider=provider,
+                connector_instance_id=connector_instance_id,
+                allowed_tools=allowed_tools,
+                allowed_url_prefixes=allowed_url_prefixes or [],
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_calls_per_minute=max_calls_per_minute,
+                public_live=False,
+                enabled=enabled,
+                actor_user_id=user_id,
+                is_admin=service.is_admin(user_id),
+            )
+            return _ok(
+                {
+                    "app_id": row.app_id,
+                    "service": {
+                        "name": view.name,
+                        "provider": view.provider,
+                        "connector_instance_id": view.connector_instance_id,
+                        "allowed_tools": list(view.allowed_tools),
+                        "allowed_url_prefixes": list(view.allowed_url_prefixes),
+                        "enabled": view.enabled,
+                    },
+                    "note": "The app owner must enable external.fetch before the page can call it.",
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_list_services(
+        app_id: Annotated[str, Field(description="App id returned by app_list/app_create.")],
+    ) -> str:
+        """List declared external services for an app."""
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            return _ok(
+                {
+                    "app_id": row.app_id,
+                    "services": [
+                        {
+                            "name": item.name,
+                            "provider": item.provider,
+                            "connector_instance_id": item.connector_instance_id,
+                            "allowed_tools": list(item.allowed_tools),
+                            "allowed_url_prefixes": list(item.allowed_url_prefixes),
+                            "enabled": item.enabled,
+                        }
+                        for item in service.list_services(row)
+                    ],
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_remove_service(
+        app_id: Annotated[str, Field(description="App id returned by app_list/app_create.")],
+        name: Annotated[str, Field(description="Service name to remove.")],
+    ) -> str:
+        """Remove a declared external service and its cache."""
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
+            _require_manager(service, row, user_id)
+            if not service.delete_service(row, name):
+                raise ValueError(f"unknown service: {name!r}")
+            return _ok({"app_id": row.app_id, "deleted": name.strip().lower()})
         except Exception as exc:
             return _err(exc)
 
@@ -431,11 +658,16 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
+            is_admin = service.is_admin(user_id)
             if app_id:
                 row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
             elif name and name.strip():
                 needle = name.strip().lower()
-                rows = service.list_for_agent(agent_id, user_id)
+                rows = (
+                    service.apps_for_agent(agent_id)
+                    if is_admin
+                    else service.list_for_agent(agent_id, user_id)
+                )
                 exact = [
                     candidate for candidate in rows if candidate.name.strip().lower() == needle
                 ]
@@ -448,9 +680,10 @@ def build_app_tools(
                     options = ", ".join(f"{item.name} ({item.app_id})" for item in matches[:5])
                     raise ValueError(f"more than one MiniApp matches {name!r}: {options}")
                 row = matches[0]
-                service.require(row, user_id, "edit_structure", is_admin=False)
+                service.require(row, user_id, "edit_structure", is_admin=is_admin)
             else:
                 raise ValueError("app_id or name is required")
+            _require_manager(service, row, user_id)
             payload = await _share_link_payload(
                 service,
                 row,
@@ -486,23 +719,46 @@ def build_app_tools(
                     "Page capabilities to declare. Omit for the safe default: data.read, "
                     "data.write, asset.read, external.open, chat.compose, events.read. "
                     "High-risk actions (ai.generate, game.launch, external.fetch, "
-                    "events.emit, schedules.manage) must be declared explicitly."
+                    "events.emit, schedules.manage) must be enabled by the owner in the "
+                    "app detail page; this tool rejects them."
                 )
             ),
         ] = None,
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            if not service.is_agent_accessible(agent_id, user_id):
-                raise ValueError("this user cannot use this agent")
+            is_admin = service.is_admin(user_id)
+            if not (is_admin or service.is_agent_accessible(agent_id, user_id)):
+                raise _access_error(
+                    service,
+                    agent_id=agent_id,
+                    app_id=None,
+                    user_id=user_id,
+                    needed="edit_structure",
+                    code="APP_AGENT_NOT_ACCESSIBLE",
+                    message="this user cannot use this agent",
+                )
+            selected = (
+                app_capabilities.validate_agent_settable(capabilities)
+                if capabilities is not None
+                else None
+            )
             row = await service.create(
                 agent_id=agent_id,
                 owner_user_id=user_id,
                 name=name,
                 description=description,
                 columns=columns,
-                capabilities=capabilities,
+                capabilities=selected,
             )
+            if is_admin and not service.is_agent_owner(agent_id, user_id):
+                service.audit_admin_override(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    app_id=row.app_id,
+                    needed="edit_structure",
+                    app_owner_id=row.owner_user_id,
+                )
             return _ok({**_summary(row), "next_step": "call app_write_html to build the UI"})
         except Exception as exc:
             return _err(exc)
@@ -607,6 +863,7 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
+            _require_manager(service, row, user_id)
             view = await service.set_table_visibility(
                 row,
                 table=table,
@@ -629,8 +886,9 @@ def build_app_tools(
             Field(
                 description=(
                     "Complete page capability list. Pass [] to deny every page action; "
-                    "omit high-risk actions the app does not need (ai.generate, "
-                    "game.launch, external.fetch, events.emit, schedules.manage)."
+                    "high-risk actions (ai.generate, game.launch, external.fetch, "
+                    "events.emit, schedules.manage) must be enabled by the owner in the "
+                    "app detail page and are rejected here."
                 )
             ),
         ],
@@ -638,7 +896,10 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-            row = service.set_capabilities(row, capabilities)
+            _require_manager(service, row, user_id)
+            row = service.set_capabilities(
+                row, app_capabilities.validate_agent_settable(capabilities)
+            )
             return _ok(_summary(row))
         except Exception as exc:
             return _err(exc)
@@ -685,8 +946,17 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            if not service.is_agent_accessible(agent_id, user_id):
-                raise ValueError("agent is not accessible to this user")
+            is_admin = service.is_admin(user_id)
+            if not (is_admin or service.is_agent_accessible(agent_id, user_id)):
+                raise _access_error(
+                    service,
+                    agent_id=agent_id,
+                    app_id=None,
+                    user_id=user_id,
+                    needed="edit_structure",
+                    code="APP_AGENT_NOT_ACCESSIBLE",
+                    message="agent is not accessible to this user",
+                )
             row = await service.create_from_template(
                 agent_id=agent_id,
                 owner_user_id=user_id,
@@ -695,6 +965,14 @@ def build_app_tools(
                 name=name,
                 description=description,
             )
+            if is_admin and not service.is_agent_owner(agent_id, user_id):
+                service.audit_admin_override(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    app_id=row.app_id,
+                    needed="edit_structure",
+                    app_owner_id=row.owner_user_id,
+                )
             card = await _app_card(service, row)
             card["data"]["next_step"] = "call app_write_html only if you want to change the shell"
             return _ok({**card["data"], **card})
@@ -771,6 +1049,8 @@ def build_app_tools(
                 offset=offset,
                 table=table,
                 redact_pii=redact_pii,
+                viewer_user_id=user_id,
+                include_all_rows=service.is_admin(user_id) or row.owner_user_id == user_id,
             )
             pii_columns = [column.name for column in schema.columns if column.pii]
             return _ok(
@@ -868,6 +1148,8 @@ def build_app_tools(
                 row,
                 table=table,
                 expected_version=expected_version,
+                viewer_user_id=user_id,
+                include_all_rows=service.is_admin(user_id) or app.owner_user_id == user_id,
             )
             schema = await service.read_schema(app, table)
             return _ok(
@@ -892,7 +1174,13 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
-            deleted = await service.delete_row(app, row_id, expected_version=expected_version)
+            deleted = await service.delete_row(
+                app,
+                row_id,
+                expected_version=expected_version,
+                viewer_user_id=user_id,
+                include_all_rows=service.is_admin(user_id) or app.owner_user_id == user_id,
+            )
             return _ok({"app_id": app.app_id, "deleted": deleted})
         except Exception as exc:
             return _err(exc)
@@ -1003,6 +1291,7 @@ def build_app_tools(
                     dry_run=dry_run,
                     upsert_key=upsert_key,
                     include_pii=include_pii,
+                    created_by=user_id,
                 )
             else:
                 result = await service.import_from_file(
@@ -1016,6 +1305,7 @@ def build_app_tools(
                     dry_run=dry_run,
                     upsert_key=upsert_key,
                     include_pii=include_pii,
+                    created_by=user_id,
                 )
             return _ok(
                 {
@@ -1108,6 +1398,7 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
+            _require_manager(service, row, user_id)
             await service.delete(row)
             return _ok({"deleted": row.app_id})
         except Exception as exc:
@@ -1131,6 +1422,36 @@ def build_app_tools(
                 "List the lightweight apps owned by the current user and created by this agent. "
                 "Returns app_id, name, description and row_count."
             ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_list_bindings,
+            name="app_list_bindings",
+            description=(
+                "List service bindings for a MiniApp: the implicit builtin.dataset "
+                "binding plus any connector/external bindings. Binding changes are "
+                "owner/admin actions in the dashboard."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_add_service,
+            name="app_add_service",
+            description=(
+                "Declare a read-only external service for a MiniApp page: one "
+                "connector instance, an allowlist of read-only tools, URL prefixes, "
+                "cache TTL and per-minute limit. Owner/admin only; the owner must "
+                "also enable external.fetch before the page can call it."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_list_services,
+            name="app_list_services",
+            description="List the external services declared for a MiniApp.",
+        ),
+        StructuredTool.from_function(
+            coroutine=app_remove_service,
+            name="app_remove_service",
+            description="Remove a declared external service and its cached responses. "
+            "Owner/admin only.",
         ),
         StructuredTool.from_function(
             coroutine=app_open,

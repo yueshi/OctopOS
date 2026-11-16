@@ -16,6 +16,22 @@ describe("MiniApp capabilities", () => {
     expect(isMethodAllowed("asset", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("composeMessage", [CAP.CHAT_COMPOSE])).toBe(true);
     expect(isMethodAllowed("composeMessage", [CAP.DATA_READ])).toBe(false);
+    expect(isMethodAllowed("service", [CAP.EXTERNAL_FETCH])).toBe(true);
+    expect(isMethodAllowed("service", [CAP.DATA_READ])).toBe(false);
+    expect(isMethodAllowed("serviceImage", [CAP.EXTERNAL_FETCH])).toBe(true);
+    expect(isMethodAllowed("serviceImage", [CAP.DATA_READ])).toBe(false);
+    expect(isMethodAllowed("events", [CAP.EVENTS_READ])).toBe(true);
+    expect(isMethodAllowed("ackEvents", [CAP.EVENTS_READ])).toBe(true);
+    expect(isMethodAllowed("events", [CAP.DATA_READ])).toBe(false);
+  });
+
+  it("gates the row write methods behind data.write", () => {
+    expect(isMethodAllowed("update", [CAP.DATA_WRITE])).toBe(true);
+    expect(isMethodAllowed("updateMany", [CAP.DATA_WRITE])).toBe(true);
+    expect(isMethodAllowed("remove", [CAP.DATA_WRITE])).toBe(true);
+    expect(isMethodAllowed("update", [CAP.DATA_READ])).toBe(false);
+    expect(isMethodAllowed("updateMany", [CAP.DATA_READ])).toBe(false);
+    expect(isMethodAllowed("remove", [CAP.DATA_READ])).toBe(false);
   });
 
   it("always allows the page to ask about itself", () => {

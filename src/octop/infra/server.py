@@ -322,6 +322,7 @@ class AppRuntime:
         if self.source_scheduler is not None:
             self.source_scheduler.replace_persistence(
                 repo=services.light_app_repo,
+                schedule_repo=services.repos.app_schedule_repo,
                 service=build_source_service(
                     services=services, workspaces=self.agent_registry, config=config
                 ),

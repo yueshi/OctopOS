@@ -60,6 +60,7 @@ import {
 } from "../../api/modules/boards";
 import PageShell from "../../layouts/PageShell";
 import CreateMiniAppModal from "./CreateMiniAppModal";
+import AllAppsGallery from "./AllAppsGallery";
 import BoardGallery from "./BoardGallery";
 import BoardGrid from "./BoardGrid";
 import DesktopGrid from "./DesktopGrid";
@@ -84,7 +85,7 @@ import { useAgent } from "../../context/AgentContext";
 import styles from "./index.module.less";
 
 const { Text } = Typography;
-type ViewMode = "board" | "desktop";
+type AppsView = "board" | "all" | "desktop";
 
 type BoardDialog = { mode: "create" } | { mode: "rename"; board: BoardSummary };
 
@@ -199,21 +200,21 @@ export default function AppsPage() {
   const [boardPreviews, setBoardPreviews] = useState<
     Record<string, BoardDetail>
   >({});
-  const [viewMode, setViewMode] = useState<ViewMode>("board");
-  const [autoFullscreen, setAutoFullscreen] = useState(false);
-  const changeViewMode = useCallback((next: ViewMode) => {
-    if (next === "desktop") setAutoFullscreen(true);
-    setViewMode(next);
-  }, []);
-
-  // The Workbench nav always lands on the board gallery (never the desktop or
-  // the last board). A new location key also covers clicking the active nav
-  // item while already on /apps; a board URL is always a board view.
-  useEffect(() => {
-    if (location.pathname !== "/apps" && !routeBoardId) return;
-    setViewMode("board");
-    setAutoFullscreen(false);
-  }, [location.key, location.pathname, routeBoardId]);
+  const allAppsVisible = location.pathname === "/apps/all";
+  const desktopVisible = location.pathname === "/apps/desktop";
+  const viewValue: AppsView = allAppsVisible
+    ? "all"
+    : desktopVisible
+    ? "desktop"
+    : "board";
+  const changeView = useCallback(
+    (next: AppsView) => {
+      if (next === "all") navigate("/apps/all");
+      else if (next === "desktop") navigate("/apps/desktop");
+      else navigate("/apps");
+    },
+    [navigate],
+  );
 
   const boardRef = useRef<BoardDetail | null>(null);
   const itemsRef = useRef<BoardItem[]>([]);
@@ -419,8 +420,8 @@ export default function AppsPage() {
     navigate("/apps");
   }, [navigate]);
 
-  const galleryVisible = viewMode === "board" && !routeBoardId;
-  const boardDetailVisible = viewMode === "board" && Boolean(routeBoardId);
+  const galleryVisible = !routeBoardId && !allAppsVisible && !desktopVisible;
+  const boardDetailVisible = Boolean(routeBoardId);
 
   // Gallery thumbnails need each board's real layout. Fetch them lazily once
   // the gallery is visible; failures leave a plain empty canvas on the card.
@@ -799,8 +800,21 @@ export default function AppsPage() {
   };
 
   const loading =
-    appsLoading || (viewMode === "board" && boardsLoading && !galleryVisible);
+    appsLoading ||
+    (!allAppsVisible && !desktopVisible && boardsLoading && !galleryVisible);
   const pinned = new Set(items.map((item) => item.app_id));
+  const moreMenu = {
+    items: [
+      {
+        key: "restore",
+        icon: <ArchiveRestore size={14} />,
+        label: t("apps.restoreBackup", "Restore backup"),
+      },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === "restore") openRestore();
+    },
+  };
 
   return (
     <PageShell
@@ -810,111 +824,126 @@ export default function AppsPage() {
       subtitle={t("apps.subtitle", "MiniApps built by your agents")}
       actions={
         <Space wrap size={12} align="center">
-          {!routeBoardId && (
-            <Segmented
-              value={viewMode}
-              onChange={(value) => changeViewMode(value as ViewMode)}
-              options={[
-                {
-                  label: t("apps.viewMode.board", "Board"),
-                  value: "board",
-                },
-                {
-                  label: t("apps.viewMode.desktop", "Desktop"),
-                  value: "desktop",
-                },
-              ]}
-            />
-          )}
-          {viewMode === "board" && boardDetailVisible && (
-            <Space.Compact>
-              <Tooltip title={t("apps.board.allBoards", "All boards")}>
-                <Button
-                  aria-label={t("apps.board.allBoards", "All boards")}
-                  icon={<ChevronLeft size={16} />}
-                  onClick={openBoardGallery}
-                />
-              </Tooltip>
-              {boards.length > 0 && (
-                <Select
-                  aria-label={t("apps.board.select", "Switch board")}
-                  value={activeId ?? undefined}
-                  style={{
-                    minWidth: isMobile ? 120 : 160,
-                    maxWidth: isMobile ? 160 : 240,
-                  }}
-                  options={boards.map((item) => ({
-                    value: item.board_id,
-                    label: item.name,
-                  }))}
-                  onChange={selectBoard}
-                />
-              )}
-            </Space.Compact>
-          )}
-          {viewMode === "board" && boardDetailVisible && (
-            <Space size={6} align="center">
-              {saving && (
-                <Text className={styles.savingHint}>
-                  {t("apps.board.saving", "Saving…")}
-                </Text>
-              )}
-              <Tooltip
-                title={t(
-                  "apps.board.presentHint",
-                  "Open fullscreen in a new tab",
-                )}
-              >
-                <Button
-                  icon={<Maximize2 size={16} />}
-                  aria-label={t("apps.board.present", "Present")}
-                  disabled={items.length === 0}
-                  onClick={openPresent}
-                >
-                  {isMobile ? null : t("apps.board.present", "Present")}
-                </Button>
-              </Tooltip>
-              <Dropdown menu={boardMenu} trigger={["click"]}>
-                <Button
-                  type="text"
-                  aria-label={t("apps.board.menu", "Board actions")}
-                  icon={<MoreHorizontal size={16} />}
-                />
-              </Dropdown>
-            </Space>
-          )}
-          {viewMode === "board" && !boardDetailVisible && (
+          <Segmented
+            value={viewValue}
+            onChange={(value) => changeView(value as AppsView)}
+            options={[
+              {
+                label: t("apps.viewMode.board", "Board"),
+                value: "board",
+              },
+              {
+                label: t("apps.viewMode.all", "All MiniApps"),
+                value: "all",
+              },
+              {
+                label: t("apps.viewMode.desktop", "Desktop"),
+                value: "desktop",
+              },
+            ]}
+          />
+          <Button type="primary" onClick={() => setCreateOpen(true)}>
+            {t("apps.create.button", "New MiniApp")}
+          </Button>
+          <Dropdown menu={moreMenu} trigger={["click"]}>
             <Button
-              icon={<ArchiveRestore size={16} />}
-              aria-label={t("apps.restoreBackup", "Restore backup")}
-              onClick={openRestore}
-            >
-              {isMobile ? null : t("apps.restoreBackup", "Restore backup")}
-            </Button>
-          )}
-          <Space.Compact>
-            {viewMode === "board" && boardDetailVisible && (
-              <Button
-                icon={<LayoutGrid size={16} />}
-                aria-label={t("apps.all.title", "Add MiniApps")}
-                onClick={() => setCatalogOpen(true)}
-              >
-                {isMobile ? null : t("apps.all.title", "Add MiniApps")}
-              </Button>
-            )}
-            <Button type="primary" onClick={() => setCreateOpen(true)}>
-              {t("apps.create.button", "Create MiniApp")}
-            </Button>
-          </Space.Compact>
+              type="text"
+              aria-label={t("common.more", "More")}
+              icon={<MoreHorizontal size={16} />}
+            />
+          </Dropdown>
         </Space>
       }
     >
+      {boardDetailVisible && (
+        <div className={styles.boardToolbar}>
+          <Space.Compact>
+            <Tooltip title={t("apps.board.backToBoards", "Back to boards")}>
+              <Button
+                aria-label={t("apps.board.backToBoards", "Back to boards")}
+                icon={<ChevronLeft size={16} />}
+                onClick={openBoardGallery}
+              >
+                {isMobile
+                  ? null
+                  : t("apps.board.backToBoards", "Back to boards")}
+              </Button>
+            </Tooltip>
+            {boards.length > 0 && (
+              <Select
+                aria-label={t("apps.board.select", "Switch board")}
+                value={activeId ?? undefined}
+                style={{
+                  minWidth: isMobile ? 120 : 160,
+                  maxWidth: isMobile ? 160 : 240,
+                }}
+                options={boards.map((item) => ({
+                  value: item.board_id,
+                  label: item.name,
+                }))}
+                onChange={selectBoard}
+              />
+            )}
+          </Space.Compact>
+          <Space size={6} align="center">
+            {saving && (
+              <Text className={styles.savingHint}>
+                {t("apps.board.saving", "Saving…")}
+              </Text>
+            )}
+            <Tooltip
+              title={t(
+                "apps.board.presentHint",
+                "Open fullscreen in a new tab",
+              )}
+            >
+              <Button
+                icon={<Maximize2 size={16} />}
+                aria-label={t("apps.board.present", "Fullscreen")}
+                disabled={items.length === 0}
+                onClick={openPresent}
+              >
+                {isMobile ? null : t("apps.board.present", "Fullscreen")}
+              </Button>
+            </Tooltip>
+            <Button
+              icon={<LayoutGrid size={16} />}
+              aria-label={t("apps.board.addExisting", "Add existing")}
+              onClick={() => setCatalogOpen(true)}
+            >
+              {isMobile ? null : t("apps.board.addExisting", "Add existing")}
+            </Button>
+            <Dropdown menu={boardMenu} trigger={["click"]}>
+              <Button
+                type="text"
+                aria-label={t("apps.board.menu", "Board menu")}
+                icon={<MoreHorizontal size={16} />}
+              />
+            </Dropdown>
+          </Space>
+        </div>
+      )}
       {loading ? (
         <div className={styles.boardState}>
           <Spin />
         </div>
-      ) : viewMode === "desktop" ? (
-        <DesktopGrid apps={apps} autoFullscreen={autoFullscreen} />
+      ) : allAppsVisible ? (
+        apps.length === 0 ? (
+          <div className={styles.boardState}>
+            <Empty
+              image={<AppWindow size={48} strokeWidth={1.2} opacity={0.45} />}
+              description={t("apps.empty", "No MiniApps yet.")}
+            >
+              <Button type="primary" onClick={() => setCreateOpen(true)}>
+                {t("apps.create.button", "Create MiniApp")}
+              </Button>
+            </Empty>
+          </div>
+        ) : (
+          <AllAppsGallery apps={apps} timeZone={timeZone} onOpen={openApp} />
+        )
+      ) : desktopVisible ? (
+        <DesktopGrid apps={apps} autoFullscreen />
       ) : galleryVisible ? (
         <BoardGallery
           boards={boards}

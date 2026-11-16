@@ -98,6 +98,8 @@ class LightAppTableRow:
     schema_version: int
     data_version: int
     public_visible: bool
+    row_scope: str
+    rules_json: str
     created_at: int
     updated_at: int
 
@@ -113,6 +115,8 @@ class LightAppTableRow:
             schema_version=int(r["schema_version"] or 1),
             data_version=int(r["data_version"] or 0),
             public_visible=bool(int(r["public_visible"] or 0)),
+            row_scope=str(r["row_scope"] or "app"),
+            rules_json=str(r["rules_json"] or "{}"),
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
         )
@@ -159,6 +163,7 @@ class LightAppDataRow:
     values: dict[str, str]
     version: int
     source: str
+    created_by: int | None
     created_at: int
     updated_at: int
 
@@ -177,6 +182,7 @@ class LightAppDataRow:
             values=values,
             version=int(r["version"] or 1),
             source=str(r["source"] or "manual"),
+            created_by=int(r["created_by"]) if r["created_by"] is not None else None,
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
         )
@@ -492,16 +498,21 @@ class LightAppRepo:
         *,
         limit: int,
         offset: int,
+        created_by: int | None = None,
     ) -> tuple[list[LightAppDataRow], int]:
+        where = "app_id = ? AND table_key = ?"
+        params: list[object] = [app_id, table_key]
+        if created_by is not None:
+            where += " AND created_by = ?"
+            params.append(created_by)
         with self._db.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM light_app_rows WHERE app_id = ? AND table_key = ? "
-                "ORDER BY id LIMIT ? OFFSET ?",
-                (app_id, table_key, limit, offset),
+                f"SELECT * FROM light_app_rows WHERE {where} ORDER BY id LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
             total = conn.execute(
-                "SELECT COUNT(*) AS c FROM light_app_rows WHERE app_id = ? AND table_key = ?",
-                (app_id, table_key),
+                f"SELECT COUNT(*) AS c FROM light_app_rows WHERE {where}",
+                tuple(params),
             ).fetchone()
         return map_rows(rows, LightAppDataRow), int(total["c"]) if total else 0
 
@@ -525,6 +536,34 @@ class LightAppRepo:
                 "SELECT * FROM light_app_rows WHERE app_id = ? AND table_key = ? "
                 "AND source_id = ? AND source_key = ?",
                 (app_id, table_key, source_id, source_key),
+            ).fetchone()
+        return LightAppDataRow.from_row(r) if r else None
+
+    def existing_client_request_ids(self, app_id: str, prefix: str) -> set[str]:
+        """Ids already written for one idempotent prefix (used before limits)."""
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT client_request_id FROM light_app_rows "
+                "WHERE app_id = ? AND client_request_id LIKE ? ESCAPE '\\'",
+                (app_id, f"{escaped}:%"),
+            ).fetchall()
+        needle = f"{prefix}:"
+        return {
+            str(r["client_request_id"])
+            for r in rows
+            if r["client_request_id"] and str(r["client_request_id"]).startswith(needle)
+        }
+
+    def find_data_row_by_client_request_id(
+        self,
+        app_id: str,
+        client_request_id: str,
+    ) -> LightAppDataRow | None:
+        with self._db.connect() as conn:
+            r = conn.execute(
+                "SELECT * FROM light_app_rows WHERE app_id = ? AND client_request_id = ?",
+                (app_id, client_request_id),
             ).fetchone()
         return LightAppDataRow.from_row(r) if r else None
 
@@ -679,12 +718,20 @@ class LightAppRepo:
             )
             self._refresh_app_totals_conn(conn, app_id)
 
-    def count_data_rows(self, app_id: str, table_key: str) -> int:
+    def count_data_rows(
+        self,
+        app_id: str,
+        table_key: str,
+        *,
+        created_by: int | None = None,
+    ) -> int:
+        sql = "SELECT COUNT(*) AS c FROM light_app_rows WHERE app_id = ? AND table_key = ?"
+        params: list[object] = [app_id, table_key]
+        if created_by is not None:
+            sql += " AND created_by = ?"
+            params.append(created_by)
         with self._db.connect() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) AS c FROM light_app_rows WHERE app_id = ? AND table_key = ?",
-                (app_id, table_key),
-            ).fetchone()
+            row = conn.execute(sql, tuple(params)).fetchone()
         return int(row["c"]) if row else 0
 
     def set_storage_version(self, app_id: str, version: int) -> None:
@@ -923,14 +970,16 @@ class LightAppRepo:
         label: str = "",
         *,
         public_visible: bool = False,
+        row_scope: str = "app",
     ) -> LightAppTableRow:
         ts = now_ts()
         with self._db.transaction() as conn:
             conn.execute(
                 "INSERT INTO light_app_tables("
-                "app_id, table_key, label, row_count, public_visible, created_at, updated_at"
-                ") VALUES (?, ?, ?, 0, ?, ?, ?)",
-                (app_id, table_key, label, int(public_visible), ts, ts),
+                "app_id, table_key, label, row_count, public_visible, row_scope, "
+                "created_at, updated_at"
+                ") VALUES (?, ?, ?, 0, ?, ?, ?, ?)",
+                (app_id, table_key, label, int(public_visible), row_scope, ts, ts),
             )
         row = self.get_table(app_id, table_key)
         if row is None:
@@ -949,6 +998,22 @@ class LightAppRepo:
                 "UPDATE light_app_tables SET public_visible = ?, updated_at = ? "
                 "WHERE app_id = ? AND table_key = ?",
                 (int(public_visible), now_ts(), app_id, table_key),
+            )
+
+    def set_table_row_scope(self, app_id: str, table_key: str, *, row_scope: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE light_app_tables SET row_scope = ?, updated_at = ? "
+                "WHERE app_id = ? AND table_key = ?",
+                (row_scope, now_ts(), app_id, table_key),
+            )
+
+    def set_table_rules(self, app_id: str, table_key: str, *, rules_json: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE light_app_tables SET rules_json = ?, updated_at = ? "
+                "WHERE app_id = ? AND table_key = ?",
+                (rules_json, now_ts(), app_id, table_key),
             )
 
     def set_table_row_count(self, app_id: str, table_key: str, row_count: int) -> None:
@@ -1129,12 +1194,18 @@ class LightAppRepo:
         return map_rows(rows, LightAppSourceRow)
 
     def list_due_sources(self, now: int) -> list[LightAppSourceRow]:
-        """Scheduled sources whose next run is due (NULL next_run_at = due now)."""
+        """Legacy source rows that do not have a migrated schedule row.
+
+        New scheduling runs through ``light_app_schedules``; this query keeps
+        pre-v38 databases working only until the migration has run.
+        """
         with self._db.connect() as conn:
             rows = conn.execute(
                 "SELECT s.* FROM light_app_sources s "
                 "JOIN light_apps a ON a.app_id = s.app_id "
-                "WHERE s.schedule_seconds > 0 AND COALESCE(s.next_run_at, 0) <= ?",
+                "WHERE s.schedule_seconds > 0 AND COALESCE(s.next_run_at, 0) <= ? "
+                "AND NOT EXISTS (SELECT 1 FROM light_app_schedules sch "
+                "WHERE sch.schedule_id = 'sch_src_' || s.source_id)",
                 (now,),
             ).fetchall()
         return map_rows(rows, LightAppSourceRow)
@@ -1245,6 +1316,15 @@ class LightAppRepo:
             conn.execute(
                 "UPDATE light_app_sources SET params_json = ?, updated_at = ? WHERE source_id = ?",
                 (params_json, now_ts(), source_id),
+            )
+
+    def set_source_schedule(self, source_id: str, schedule_seconds: int) -> None:
+        """Change only the interval; next run is re-armed by the service."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE light_app_sources SET schedule_seconds = ?, updated_at = ? "
+                "WHERE source_id = ?",
+                (int(schedule_seconds), now_ts(), source_id),
             )
 
     def delete_source(self, app_id: str, source_id: str) -> bool:

@@ -43,8 +43,23 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     CAP_SCHEDULES_MANAGE,
 )
 
-LEGACY_CAPABILITIES: frozenset[str] = frozenset(ALL_CAPABILITIES)
-"""What apps created before the manifest existed keep using."""
+# Frozen at the capabilities that existed when the manifest shipped. Do not
+# derive this from ALL_CAPABILITIES: a capability added in a later release must
+# be opt-in for new apps, never silently granted to every legacy app or to an
+# app restored from an older backup.
+LEGACY_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        CAP_DATA_READ,
+        CAP_DATA_WRITE,
+        CAP_ASSET_READ,
+        CAP_EXTERNAL_OPEN,
+        CAP_CHAT_COMPOSE,
+        CAP_EVENTS_READ,
+        CAP_AI_GENERATE,
+        CAP_GAME_LAUNCH,
+    }
+)
+"""What apps created before the manifest existed keep using (the R1 set)."""
 
 NEW_APP_CAPABILITIES: frozenset[str] = frozenset(
     {
@@ -62,6 +77,22 @@ Costly or externally visible actions (LLM calls, games, connector fetches,
 event egress, schedules) stay off until the app or its owner declares them.
 """
 
+AGENT_SETTABLE_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        CAP_DATA_READ,
+        CAP_DATA_WRITE,
+        CAP_ASSET_READ,
+        CAP_EXTERNAL_OPEN,
+        CAP_CHAT_COMPOSE,
+        CAP_EVENTS_READ,
+    }
+)
+"""Capabilities an agent tool may set without the owner's explicit approval.
+
+High-risk actions stay out of this set: the page is allowed to use them only
+after the owner enables them from the app detail page.
+"""
+
 
 def validate(values: Iterable[str]) -> frozenset[str]:
     """Return a cleaned capability set; reject names this build cannot enforce."""
@@ -73,6 +104,22 @@ def validate(values: Iterable[str]) -> frozenset[str]:
             f"unknown capability: {', '.join(sorted(unknown))}",
         )
     return cleaned
+
+
+def validate_agent_settable(values: Iterable[str]) -> frozenset[str]:
+    """Validate a capability list an agent tool wants to apply.
+
+    High-risk capabilities must be enabled by the owner in the dashboard; an
+    agent tool cannot elevate an app on its own.
+    """
+    clean = validate(values)
+    forbidden = clean - AGENT_SETTABLE_CAPABILITIES
+    if forbidden:
+        raise OctopError(
+            ErrorCode.APP_CAPABILITY_INVALID,
+            "capability requires owner approval: " + ", ".join(sorted(forbidden)),
+        )
+    return clean
 
 
 def parse(raw: str | None) -> frozenset[str]:
@@ -105,6 +152,7 @@ def describe(raw: str | None) -> list[str]:
 
 
 __all__ = [
+    "AGENT_SETTABLE_CAPABILITIES",
     "ALL_CAPABILITIES",
     "CAP_AI_GENERATE",
     "CAP_ASSET_READ",
@@ -123,4 +171,5 @@ __all__ = [
     "dump",
     "parse",
     "validate",
+    "validate_agent_settable",
 ]

@@ -51,7 +51,7 @@ const { Text } = Typography;
 const TARGET_MODES: Record<ExternalTargetType, ExternalTargetMode[]> = {
   expert: ["expert.turn", "expert.notify"],
   team: ["team.judge", "team.notify"],
-  app: ["app.refresh", "app.import"],
+  app: ["app.refresh", "app.import", "app.inbox"],
 };
 
 const MODE_LABEL: Record<ExternalTargetMode, string> = {
@@ -61,6 +61,7 @@ const MODE_LABEL: Record<ExternalTargetMode, string> = {
   "team.notify": "externalEvents.mode.teamNotify",
   "app.refresh": "externalEvents.mode.appRefresh",
   "app.import": "externalEvents.mode.appImport",
+  "app.inbox": "externalEvents.mode.appInbox",
 };
 
 const STATUS_COLOR: Record<string, string> = {

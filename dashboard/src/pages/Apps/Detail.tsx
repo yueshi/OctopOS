@@ -1,31 +1,17 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
   Button,
   Checkbox,
-  Descriptions,
-  Drawer,
   Dropdown,
   Empty,
   Form,
   Input,
   Modal,
-  Popconfirm,
   Select,
   Space,
   Spin,
-  Switch,
-  Table,
   Tabs,
   Tag,
   Tooltip,
@@ -34,37 +20,25 @@ import {
 } from "antd";
 import type { MenuProps, UploadFile } from "antd";
 import {
-  AlignCenterHorizontal,
   ArrowLeft,
   ChevronDown,
-  ChevronsLeft,
-  ChevronsRight,
-  Download,
   Edit3,
-  FileCode,
   History,
   Info,
   Link2,
-  MessageSquareText,
   MoreHorizontal,
-  Plus,
-  RefreshCw,
   Share2,
   Sparkles,
-  Table2,
   Trash2,
   Upload as UploadIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { message } from "../../utils/antdMessage";
 
 import {
   appsApi,
-  askAppAssistant,
-  type AppAssistantChart,
-  type AppAssistantMessage,
+  type AppAccessRequest,
   type AppColumn,
   type AppDetail,
   type AppFile,
@@ -72,6 +46,7 @@ import {
   type AppImportMode,
   type AppPublication,
   type AppRowMeta,
+  type AppSchedule,
   type AppSource,
   type AppSourceKind,
   type AppSourceTool,
@@ -81,11 +56,8 @@ import {
   type ConnectorInstance,
 } from "../../api/modules/connectors";
 import PageShell, { pageShellStyles } from "../../layouts/PageShell";
-import Markdown from "../../components/Markdown";
 import { fullscreenContainer } from "../../utils/overlayContainer";
 import { apiErrorMessage, isNotFoundApiError } from "../../utils/apiError";
-import { formatBytes } from "../../utils/formatBytes";
-import { formatServerDateTime } from "../../utils/formatMessageTime";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -103,172 +75,23 @@ import {
   type AppViolation,
   type BridgeParams,
 } from "../../components/MiniAppFrame/bridge";
-import {
-  CAP,
-  effectiveCapabilities,
-} from "../../components/MiniAppFrame/capabilities";
+import { effectiveCapabilities } from "../../components/MiniAppFrame/capabilities";
+import { useMiniAppDataVersion } from "../../components/MiniAppFrame/useMiniAppDataVersion";
+import AppAccessRequestsModal from "./detail/AppAccessRequestsModal";
+import AppAssistantDrawer from "./detail/AppAssistantDrawer";
+import AppDataTab, {
+  ACTIONS_COLUMN_WIDTH,
+  SOURCE_COLUMN_WIDTH,
+  dataColumnWidth,
+} from "./detail/AppDataTab";
+import AppInfoDrawer from "./detail/AppInfoDrawer";
+import AppInterfaceTab from "./detail/AppInterfaceTab";
+import AppPublishModal from "./detail/AppPublishModal";
+import AppShareModal from "./detail/AppShareModal";
+import { permissionLabel } from "./detail/shared";
+import type { ShareDraft } from "./detail/types";
 
 const { Text } = Typography;
-
-const AssistantChart = lazy(() => import("./AssistantChart"));
-
-/** Assistant drawer width presets (px) shared by the drag handle and the
- *  min/mid/max quick buttons; min and max follow the viewport. */
-const assistantMinWidth = () => Math.floor(window.innerWidth * 0.35);
-const assistantMaxWidth = () =>
-  Math.max(assistantMinWidth(), Math.floor(window.innerWidth * 0.9));
-
-function permissionLabel(
-  permission: AppDetail["permission"],
-  t: (key: string) => string,
-  isOwner?: boolean,
-): string {
-  if (permission === "edit_structure") {
-    return isOwner === false
-      ? t("apps.permissionAdmin")
-      : t("apps.editStructure");
-  }
-  if (permission === "edit_data") return t("apps.editData");
-  return t("apps.viewOnly");
-}
-
-/** One titled block in the details drawer; keeps section rhythm consistent. */
-function InfoSection({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section style={{ marginTop: 24 }}>
-      <Text strong>{title}</Text>
-      {hint ? (
-        <div style={{ marginTop: 4 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {hint}
-          </Text>
-        </div>
-      ) : null}
-      <div style={{ marginTop: 10 }}>{children}</div>
-    </section>
-  );
-}
-
-const SOURCE_COLUMN_WIDTH = 90;
-const ACTIONS_COLUMN_WIDTH = 150;
-
-const CAPABILITY_OPTIONS: {
-  value: string;
-  labelKey: string;
-  fallback: string;
-}[] = [
-  {
-    value: CAP.DATA_READ,
-    labelKey: "apps.capabilities.dataRead",
-    fallback: "Read tables and rows",
-  },
-  {
-    value: CAP.DATA_WRITE,
-    labelKey: "apps.capabilities.dataWrite",
-    fallback: "Append rows",
-  },
-  {
-    value: CAP.ASSET_READ,
-    labelKey: "apps.capabilities.assetRead",
-    fallback: "Load app images",
-  },
-  {
-    value: CAP.EXTERNAL_OPEN,
-    labelKey: "apps.capabilities.externalOpen",
-    fallback: "Open external links",
-  },
-  {
-    value: CAP.CHAT_COMPOSE,
-    labelKey: "apps.capabilities.chatCompose",
-    fallback: "Prepare a chat message",
-  },
-  {
-    value: CAP.EVENTS_READ,
-    labelKey: "apps.capabilities.eventsRead",
-    fallback: "Read app events",
-  },
-  {
-    value: CAP.AI_GENERATE,
-    labelKey: "apps.capabilities.aiGenerate",
-    fallback: "Call the AI model",
-  },
-  {
-    value: CAP.GAME_LAUNCH,
-    labelKey: "apps.capabilities.gameLaunch",
-    fallback: "Launch external games",
-  },
-  {
-    value: CAP.EXTERNAL_FETCH,
-    labelKey: "apps.capabilities.externalFetch",
-    fallback: "Call external services",
-  },
-  {
-    value: CAP.EVENTS_EMIT,
-    labelKey: "apps.capabilities.eventsEmit",
-    fallback: "Send events and alerts",
-  },
-  {
-    value: CAP.SCHEDULES_MANAGE,
-    labelKey: "apps.capabilities.schedulesManage",
-    fallback: "Manage schedules",
-  },
-];
-
-/**
- * Fixed width for a data column, by its schema type.
- *
- * The data table must not use auto layout: a long free-text value (ex. the
- * 内容 column of a reading tracker) would otherwise stretch its column to the
- * full text width and push the whole table into a huge horizontal scroll.
- * Every column gets an explicit width, and cells truncate with an ellipsis
- * (the full value stays available as the cell tooltip and in the row editor).
- */
-function staleReasonLabel(reason: string, t: TFunction): string {
-  switch (reason) {
-    case "html":
-      return t("apps.publishStaleHtml", "HTML changed");
-    case "schema":
-    case "visibility":
-      return t("apps.publishStaleSchema", "Table structure changed");
-    case "not_published":
-      return t(
-        "apps.publishNotFixed",
-        "This link has not fixed a version yet; publish to freeze the current one.",
-      );
-    case "workspace":
-      return t("apps.publishStaleWorkspace", "Workspace unavailable");
-    default:
-      return reason;
-  }
-}
-
-function dataColumnWidth(type: string): number {
-  switch (type) {
-    case "integer":
-    case "number":
-      return 110;
-    case "boolean":
-      return 100;
-    case "date":
-      return 130;
-    case "datetime":
-      return 170;
-    case "enum":
-      return 140;
-    case "text":
-      return 260;
-    default:
-      return 180;
-  }
-}
 
 const SOURCE_SCHEDULE_OPTIONS: { value: number; labelKey: string }[] = [
   { value: 0, labelKey: "apps.sourceScheduleManual" },
@@ -279,25 +102,11 @@ const SOURCE_SCHEDULE_OPTIONS: { value: number; labelKey: string }[] = [
   { value: 86400, labelKey: "apps.sourceSchedule1d" },
 ];
 
-function sourceScheduleLabel(seconds: number, t: TFunction): string {
-  if (seconds % 86400 === 0)
-    return t("apps.scheduleDays", { count: seconds / 86400 });
-  if (seconds % 3600 === 0)
-    return t("apps.scheduleHours", { count: seconds / 3600 });
-  return t("apps.scheduleMinutes", {
-    count: Math.max(1, Math.round(seconds / 60)),
-  });
-}
-
-interface ShareDraft {
-  username: string;
-  permission: "view" | "edit_data";
-}
-
 export default function AppDetailPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { appId = "" } = useParams<{ appId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { modal } = App.useApp();
   const isMobile = useIsMobile();
   const currentUser = useCurrentUser();
@@ -306,8 +115,22 @@ export default function AppDetailPage() {
   const capabilitiesRef = useRef<readonly string[] | undefined>(undefined);
 
   const [detail, setDetail] = useState<AppDetail | null>(null);
+  // Administrative actions are owner/admin only; edit_structure collaborators
+  // keep schema/data editing but cannot delete, publish, share or elevate.
+  const isOwner =
+    currentUser && detail
+      ? detail.owner_username === currentUser.username
+      : undefined;
+  const isAdmin = currentUser?.role === "admin";
+  const canManage =
+    detail?.permission === "edit_structure" &&
+    (isOwner === true || isAdmin === true);
   const [capabilityDraft, setCapabilityDraft] = useState<string[]>([]);
   const [savingCapabilities, setSavingCapabilities] = useState(false);
+  const [accessRequests, setAccessRequests] = useState<AppAccessRequest[]>([]);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [accessBusy, setAccessBusy] = useState(false);
+  const shareDeepLinkRef = useRef(false);
   useEffect(() => {
     capabilitiesRef.current = detail?.capabilities;
     setCapabilityDraft(detail?.capabilities ?? []);
@@ -356,6 +179,10 @@ export default function AppDetailPage() {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publication, setPublication] = useState<AppPublication | null>(null);
   const [publicationBusy, setPublicationBusy] = useState(false);
+  const [schedules, setSchedules] = useState<AppSchedule[]>([]);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const snapshotSchedule =
+    schedules.find((item) => item.action === "snapshot_publication") ?? null;
   // The API returns the public origin (scheme/host/port) the server is reached
   // at; fall back to the browser origin when the server has no public_base_url.
   const publishUrl =
@@ -371,16 +198,6 @@ export default function AppDetailPage() {
   const [filesLoading, setFilesLoading] = useState(false);
 
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const [assistantMsgs, setAssistantMsgs] = useState<AppAssistantMessage[]>([]);
-  const [assistantLoading, setAssistantLoading] = useState(false);
-  const [assistantBusy, setAssistantBusy] = useState(false);
-  const [assistantTool, setAssistantTool] = useState("");
-  const [assistantError, setAssistantError] = useState("");
-  const [assistantInput, setAssistantInput] = useState("");
-  const [assistantWidth, setAssistantWidth] = useState(assistantMinWidth);
-  const [assistantResizing, setAssistantResizing] = useState(false);
-  const [assistantResizeHover, setAssistantResizeHover] = useState(false);
-  const assistantListRef = useRef<HTMLDivElement>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importTable, setImportTable] = useState("main");
   const [importMode, setImportMode] = useState<AppImportMode>("append");
@@ -561,6 +378,8 @@ export default function AppDetailPage() {
               params.limit,
               params.offset,
               params.table || "main",
+              params.filters,
+              params.sort,
             );
           }
           if (method === "append") {
@@ -584,6 +403,50 @@ export default function AppDetailPage() {
                 ),
               };
             });
+            return result;
+          }
+          if (method === "update") {
+            return await appsApi.updateRow(
+              appId,
+              String(params.rowId ?? ""),
+              params.row ?? {},
+              params.expectedVersion,
+            );
+          }
+          if (method === "updateMany") {
+            // One request per row: each write keeps its own CAS check and its
+            // own row scope, so a batch never turns into one big transaction.
+            const items = Array.isArray(params.rows) ? params.rows : [];
+            const failures: { row_id: string; error: string }[] = [];
+            let updated = 0;
+            for (const item of items) {
+              const rowId = String(item?.row_id ?? "");
+              try {
+                await appsApi.updateRow(
+                  appId,
+                  rowId,
+                  item?.row ?? {},
+                  item?.expected_version,
+                );
+                updated += 1;
+              } catch (err) {
+                failures.push({
+                  row_id: rowId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            }
+            return { updated, failed: failures.length, failures };
+          }
+          if (method === "remove") {
+            const result = await appsApi.deleteRow(
+              appId,
+              String(params.rowId ?? ""),
+              params.expectedVersion,
+            );
+            // The row id alone names the table on the server, so refresh the
+            // counts instead of guessing which table just shrank.
+            void loadDetail();
             return result;
           }
           if (method === "generate") {
@@ -632,6 +495,32 @@ export default function AppDetailPage() {
             });
             return { opened: true };
           }
+          if (method === "events") {
+            const since = Number(params.since) || 0;
+            const limit = Number(params.limit) || 100;
+            return appsApi.events(appId, since, limit);
+          }
+          if (method === "ackEvents") {
+            return appsApi.ackEvents(appId, params.event_ids || []);
+          }
+          if (method === "service") {
+            const name = String(params.name ?? "").trim();
+            const tool = String(params.tool ?? "").trim();
+            const args =
+              params.args &&
+              typeof params.args === "object" &&
+              !Array.isArray(params.args)
+                ? params.args
+                : {};
+            const result = await appsApi.callService(appId, name, tool, args);
+            return result.value;
+          }
+          if (method === "serviceImage") {
+            const name = String(params.name ?? "").trim();
+            const url = String(params.url ?? "").trim();
+            const result = await appsApi.serviceImage(appId, name, url);
+            return result.asset;
+          }
           if (method === "asset") {
             const name = String(params.name ?? "").trim();
             // The parent fetches the asset with the JWT and hands the iframe
@@ -653,7 +542,7 @@ export default function AppDetailPage() {
       () => iframeRef.current?.contentWindow ?? null,
     );
     return detach;
-  }, [appId, navigate, reportViolation, t]);
+  }, [appId, loadDetail, navigate, reportViolation, t]);
 
   const srcDoc = useMemo(
     () => (html ? buildWrapperDoc(buildSrcDoc(html)) : ""),
@@ -707,6 +596,20 @@ export default function AppDetailPage() {
   useEffect(() => {
     if (activeView === "data") void loadData(1);
   }, [activeView, dataTable, loadData]);
+
+  // Keep the dashboard data tab in sync with writes from other windows. The
+  // same poll also forwards `data-changed` to the app iframe.
+  const dataVersion = useMiniAppDataVersion(
+    appId,
+    iframeRef,
+    Boolean(html) || activeView === "data",
+  );
+  const seenDataVersion = useRef(0);
+  useEffect(() => {
+    if (dataVersion === seenDataVersion.current) return;
+    seenDataVersion.current = dataVersion;
+    if (activeView === "data") void loadData(dataPage);
+  }, [dataVersion, activeView, dataPage, loadData]);
 
   const openAddRow = () => {
     setRowEdit(null);
@@ -839,7 +742,7 @@ export default function AppDetailPage() {
     }
   };
 
-  const openShare = async () => {
+  const openShare = useCallback(async () => {
     setShareOpen(true);
     setShareLoading(true);
     try {
@@ -856,6 +759,74 @@ export default function AppDetailPage() {
     } finally {
       setShareLoading(false);
     }
+  }, [appId, t]);
+
+  const refreshAccessRequests = useCallback(async () => {
+    try {
+      const data = await appsApi.accessRequests({
+        scope: "owner",
+        app_id: appId,
+      });
+      setAccessRequests(data.requests);
+    } catch {
+      // A failed poll must not block the app page.
+    }
+  }, [appId]);
+
+  useEffect(() => {
+    if (!detail || !canManage) return;
+    void refreshAccessRequests();
+  }, [detail, canManage, refreshAccessRequests]);
+
+  // The permission card links the owner here with ?share=1 to open the
+  // collaborator dialog directly.
+  useEffect(() => {
+    if (shareDeepLinkRef.current || !detail || !canManage) return;
+    if (searchParams.get("share") !== "1") return;
+    shareDeepLinkRef.current = true;
+    void openShare();
+    const next = new URLSearchParams(searchParams);
+    next.delete("share");
+    setSearchParams(next, { replace: true });
+  }, [detail, canManage, openShare, searchParams, setSearchParams]);
+
+  const resolveAccess = async (request: AppAccessRequest, approve: boolean) => {
+    setAccessBusy(true);
+    try {
+      const updated = approve
+        ? await appsApi.approveAccessRequest(request.request_id)
+        : await appsApi.rejectAccessRequest(request.request_id);
+      if (approve && updated.status === "pending") {
+        message.info(
+          t(
+            "apps.accessRequests.partiallyApproved",
+            "Your part is done; waiting for the other owner.",
+          ),
+        );
+        return;
+      }
+      message.success(
+        t(
+          approve
+            ? "apps.accessRequests.approved"
+            : "apps.accessRequests.rejected",
+          approve ? "Access approved" : "Access rejected",
+        ),
+      );
+      setAccessRequests((prev) =>
+        prev.filter((item) => item.request_id !== request.request_id),
+      );
+    } catch (err) {
+      message.error(
+        apiErrorMessage(
+          err,
+          t("apps.accessRequests.failed", "Could not resolve the request"),
+          t,
+        ),
+      );
+    } finally {
+      setAccessBusy(false);
+    }
   };
 
   const openPublish = async () => {
@@ -863,11 +834,69 @@ export default function AppDetailPage() {
     setPublicationBusy(true);
     try {
       setPublication(await appsApi.publication(appId));
+      try {
+        setSchedules((await appsApi.listSchedules(appId)).schedules);
+      } catch {
+        setSchedules([]);
+      }
     } catch (err) {
       message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
       setPublishOpen(false);
     } finally {
       setPublicationBusy(false);
+    }
+  };
+
+  const toggleSnapshotSchedule = async (enabled: boolean) => {
+    setScheduleBusy(true);
+    try {
+      if (snapshotSchedule) {
+        const updated = await appsApi.updateSchedule(
+          appId,
+          snapshotSchedule.schedule_id,
+          {
+            interval_seconds: snapshotSchedule.interval_seconds,
+            enabled,
+          },
+        );
+        setSchedules((prev) =>
+          prev.map((item) =>
+            item.schedule_id === updated.schedule_id ? updated : item,
+          ),
+        );
+      } else if (enabled) {
+        const created = await appsApi.saveSchedule(appId, {
+          action: "snapshot_publication",
+          interval_seconds: 3600,
+          enabled: true,
+        });
+        setSchedules((prev) => [...prev, created]);
+      }
+    } catch (err) {
+      message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
+
+  const changeSnapshotInterval = async (seconds: number) => {
+    if (!snapshotSchedule) return;
+    setScheduleBusy(true);
+    try {
+      const updated = await appsApi.updateSchedule(
+        appId,
+        snapshotSchedule.schedule_id,
+        { interval_seconds: seconds, enabled: true },
+      );
+      setSchedules((prev) =>
+        prev.map((item) =>
+          item.schedule_id === updated.schedule_id ? updated : item,
+        ),
+      );
+    } catch (err) {
+      message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
+    } finally {
+      setScheduleBusy(false);
     }
   };
 
@@ -898,6 +927,9 @@ export default function AppDetailPage() {
     setPublicationBusy(true);
     try {
       setPublication(await appsApi.revokePublication(appId));
+      setSchedules((prev) =>
+        prev.filter((item) => item.action !== "snapshot_publication"),
+      );
     } catch (err) {
       message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
     } finally {
@@ -936,121 +968,6 @@ export default function AppDetailPage() {
       setFilesLoading(false);
     }
   };
-
-  const openAssistant = async () => {
-    setAssistantOpen(true);
-    setAssistantLoading(true);
-    try {
-      const data = await appsApi.assistantHistory(appId);
-      setAssistantMsgs(data.messages);
-    } catch (err) {
-      message.error(apiErrorMessage(err, t("apps.assistantLoadFailed"), t));
-    } finally {
-      setAssistantLoading(false);
-    }
-  };
-
-  const sendAssistant = async () => {
-    const question = assistantInput.trim();
-    if (!question || assistantBusy) return;
-    setAssistantInput("");
-    setAssistantError("");
-    setAssistantBusy(true);
-    setAssistantMsgs((prev) => [
-      ...prev,
-      { role: "user", content: question, created_at: 0 },
-      { role: "assistant", content: "", created_at: 0 },
-    ]);
-    try {
-      await askAppAssistant(appId, question, (event) => {
-        if (event.type === "token") {
-          setAssistantMsgs((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                content: last.content + event.text,
-              };
-            }
-            return next;
-          });
-        } else if (event.type === "tool") {
-          setAssistantTool(event.name);
-        } else if (event.type === "chart") {
-          setAssistantMsgs((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                charts: [...(last.charts ?? []), event.chart],
-              };
-            }
-            return next;
-          });
-        } else if (event.type === "done") {
-          const citations = event.citations ?? [];
-          const charts = event.charts;
-          setAssistantMsgs((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                citations,
-                // `done` carries the authoritative list; chart events are for
-                // rendering while the answer is still streaming.
-                ...(charts ? { charts } : {}),
-              };
-            }
-            return next;
-          });
-        } else if (event.type === "error") {
-          setAssistantError(event.message);
-        }
-      });
-    } catch (err) {
-      setAssistantError(
-        apiErrorMessage(err, t("apps.assistantRequestFailed"), t),
-      );
-    } finally {
-      setAssistantTool("");
-      setAssistantBusy(false);
-    }
-  };
-
-  // Drag the handle on the drawer's left edge to resize. Pointer capture
-  // keeps the drag alive outside the handle; the drawer wrapper's own
-  // width transition is disabled while dragging so it follows the cursor.
-  const startAssistantResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setAssistantResizing(true);
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  const moveAssistantResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!assistantResizing) return;
-    setAssistantWidth(
-      Math.min(
-        Math.max(window.innerWidth - e.clientX, assistantMinWidth()),
-        assistantMaxWidth(),
-      ),
-    );
-  };
-  const endAssistantResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!assistantResizing) return;
-    setAssistantResizing(false);
-    e.currentTarget.releasePointerCapture(e.pointerId);
-  };
-  const setAssistantPreset = (width: number) =>
-    setAssistantWidth(
-      Math.min(Math.max(width, assistantMinWidth()), assistantMaxWidth()),
-    );
-
-  useEffect(() => {
-    const el = assistantListRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [assistantMsgs, assistantTool, assistantOpen]);
 
   const openImport = (tableKey: string) => {
     setImportTable(tableKey);
@@ -1356,9 +1273,6 @@ export default function AppDetailPage() {
   const canEditData = detail.permission !== "view";
   // `edit_structure` covers both the owner and admins; only the owner should
   // see the permissions tag, while admins get an explicit label.
-  const isOwner = currentUser
-    ? detail.owner_username === currentUser.username
-    : undefined;
   const permissionText = permissionLabel(detail.permission, t, isOwner);
   const showPermissionTag =
     detail.permission !== "edit_structure" || isOwner === false;
@@ -1390,13 +1304,17 @@ export default function AppDetailPage() {
             },
           ]
         : []),
-      { type: "divider" as const },
-      {
-        key: "delete",
-        icon: <Trash2 size={14} />,
-        label: t("apps.delete"),
-        danger: true,
-      },
+      ...(canManage
+        ? [
+            { type: "divider" as const },
+            {
+              key: "delete",
+              icon: <Trash2 size={14} />,
+              label: t("apps.delete"),
+              danger: true,
+            },
+          ]
+        : []),
     ],
     onClick: ({ key }) => {
       if (key === "rename") openRename();
@@ -1432,12 +1350,12 @@ export default function AppDetailPage() {
               type="text"
               icon={<Sparkles size={16} />}
               aria-label={t("apps.assistant")}
-              onClick={() => void openAssistant()}
+              onClick={() => setAssistantOpen(true)}
             >
               {isMobile ? null : t("apps.assistant")}
             </Button>
           </Tooltip>
-          {canEditStructure && (
+          {canManage && (
             <Dropdown menu={sharePublishMenu} trigger={["click"]}>
               <Button
                 icon={<Share2 size={16} />}
@@ -1475,6 +1393,26 @@ export default function AppDetailPage() {
       }
     >
       <div className={pageShellStyles.fillTabs}>
+        {canManage && accessRequests.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12, flex: "none" }}
+            message={
+              <Space size={8} wrap>
+                <Text>
+                  {t("apps.accessRequests.pending", "Access requests waiting")}
+                </Text>
+                <Tag style={{ marginInlineEnd: 0 }}>
+                  {accessRequests.length}
+                </Tag>
+                <Button size="small" onClick={() => setAccessOpen(true)}>
+                  {t("apps.accessRequests.review", "Review")}
+                </Button>
+              </Space>
+            }
+          />
+        )}
         <Tabs
           activeKey={activeView}
           onChange={(key) => setActiveView(key as "ui" | "data")}
@@ -1483,239 +1421,49 @@ export default function AppDetailPage() {
               key: "ui",
               label: t("apps.uiTab"),
               children: (
-                <div
-                  style={{
-                    height: "100%",
-                    minHeight: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                  }}
-                >
-                  {htmlLoading ? (
-                    <div style={{ padding: 48, textAlign: "center" }}>
-                      <Spin />
-                    </div>
-                  ) : appEscaped ? (
-                    <div style={{ padding: 24 }}>
-                      <Text type="warning">
-                        {t(
-                          "apps.sandboxEscaped",
-                          "This MiniApp tried to leave its sandbox, so it was stopped.",
-                        )}
-                      </Text>
-                    </div>
-                  ) : htmlBlocked ? (
-                    <div style={{ padding: 24 }}>
-                      <Text type="warning">
-                        {t(
-                          "apps.sandboxEmbeddedFrame",
-                          "This MiniApp embeds a frame, which is not allowed. Regenerate it.",
-                        )}
-                      </Text>
-                    </div>
-                  ) : detail.has_html && html ? (
-                    <iframe
-                      key={htmlReloadKey}
-                      ref={iframeRef}
-                      title={t("apps.iframeTitle")}
-                      sandbox="allow-scripts"
-                      srcDoc={srcDoc}
-                      style={{
-                        flex: 1,
-                        width: "100%",
-                        minHeight: 0,
-                        border: 0,
-                        borderRadius: 8,
-                        background: "#fff",
-                      }}
-                    />
-                  ) : (
-                    <Empty
-                      image={
-                        <MessageSquareText
-                          size={48}
-                          strokeWidth={1.2}
-                          opacity={0.45}
-                        />
-                      }
-                      description={t("apps.noHtml")}
-                      style={{ padding: "64px 0" }}
-                    >
-                      <Button
-                        type="primary"
-                        onClick={() =>
-                          navigate(
-                            `/chat/${encodeURIComponent(detail.agent_id)}`,
-                          )
-                        }
-                      >
-                        {t("apps.openChat")}
-                      </Button>
-                    </Empty>
-                  )}
-                </div>
+                <AppInterfaceTab
+                  loading={htmlLoading}
+                  escaped={appEscaped}
+                  blocked={htmlBlocked}
+                  hasHtml={detail.has_html}
+                  html={html}
+                  reloadKey={htmlReloadKey}
+                  frameRef={iframeRef}
+                  srcDoc={srcDoc}
+                  onOpenChat={() =>
+                    navigate(`/chat/${encodeURIComponent(detail.agent_id)}`)
+                  }
+                />
               ),
             },
             {
               key: "data",
               label: t("apps.dataTab"),
               children: (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 12,
-                    minHeight: 0,
+                <AppDataTab
+                  tables={detail.tables}
+                  dataTable={dataTable}
+                  onTableChange={(value) => {
+                    setDataTable(value);
+                    setDataPage(1);
                   }}
-                >
-                  <Space wrap>
-                    {detail.tables.length > 1 && (
-                      <Space size={4}>
-                        <Text type="secondary">{t("apps.tableLabel")}</Text>
-                        <Select
-                          size="small"
-                          value={dataTable}
-                          onChange={(value) => {
-                            setDataTable(value);
-                            setDataPage(1);
-                          }}
-                          options={detail.tables.map((item) => ({
-                            value: item.table_key,
-                            label: item.label || item.table_key,
-                          }))}
-                        />
-                      </Space>
-                    )}
-                    {canEditRows && (
-                      <Button
-                        type="primary"
-                        size="small"
-                        icon={<Plus size={14} />}
-                        onClick={openAddRow}
-                      >
-                        {t("apps.addRow")}
-                      </Button>
-                    )}
-                    <Button
-                      size="small"
-                      icon={<UploadIcon size={14} />}
-                      onClick={() => void exportData()}
-                    >
-                      {t("apps.exportCsv")}
-                    </Button>
-                    <Button
-                      size="small"
-                      icon={<Download size={14} />}
-                      onClick={() => void backupApp()}
-                    >
-                      {t("apps.backup")}
-                    </Button>
-                    <Input.Search
-                      size="small"
-                      allowClear
-                      value={dataSearch}
-                      placeholder={t("apps.searchRows")}
-                      onChange={(event) => setDataSearch(event.target.value)}
-                      style={{ width: 200 }}
-                    />
-                  </Space>
-                  {dataColumns.some((column) => column.pii) && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      message={t("apps.piiNotice")}
-                      style={{ marginBottom: 8 }}
-                    />
-                  )}
-                  <Table
-                    size="small"
-                    rowKey={(_, index) => `${dataPage}-${index ?? 0}`}
-                    loading={dataLoading}
-                    dataSource={visibleRows.map((item) => item.row)}
-                    locale={{ emptyText: t("apps.emptyRows") }}
-                    scroll={{ x: dataTableWidth }}
-                    pagination={{
-                      current: dataPage,
-                      pageSize: dataPageSize,
-                      total: dataTotal,
-                      showSizeChanger: false,
-                      onChange: (page) => void loadData(page),
-                    }}
-                    columns={[
-                      ...dataColumns.map((column) => ({
-                        title: (
-                          <Space size={4}>
-                            {column.label || column.name}
-                            {column.pii ? (
-                              <Tag color="red">{t("apps.piiTag")}</Tag>
-                            ) : null}
-                          </Space>
-                        ),
-                        dataIndex: column.name,
-                        key: column.name,
-                        width: dataColumnWidth(column.type),
-                        ellipsis: true,
-                      })),
-                      {
-                        title: t("apps.source"),
-                        key: "__source",
-                        width: SOURCE_COLUMN_WIDTH,
-                        render: (_: unknown, __: unknown, index: number) =>
-                          visibleRows[index]?.meta?.source || "manual",
-                      },
-                      ...(canEditRows
-                        ? [
-                            {
-                              title: t("apps.actions"),
-                              key: "__actions",
-                              width: ACTIONS_COLUMN_WIDTH,
-                              render: (
-                                _: unknown,
-                                __: unknown,
-                                index: number,
-                              ) => (
-                                <Space size={4}>
-                                  <Button
-                                    size="small"
-                                    type="link"
-                                    disabled={!visibleRows[index]?.meta?.row_id}
-                                    onClick={() =>
-                                      openEditRow(
-                                        visibleRows[index]?.meta,
-                                        visibleRows[index]?.row ?? {},
-                                      )
-                                    }
-                                  >
-                                    {t("apps.editRow")}
-                                  </Button>
-                                  <Popconfirm
-                                    title={t("apps.rowDeleteConfirm")}
-                                    okText={t("apps.delete")}
-                                    cancelText={t("common.cancel")}
-                                    okButtonProps={{ danger: true }}
-                                    onConfirm={() =>
-                                      void removeRow(visibleRows[index]?.meta)
-                                    }
-                                  >
-                                    <Button
-                                      size="small"
-                                      type="link"
-                                      danger
-                                      disabled={
-                                        !visibleRows[index]?.meta?.row_id
-                                      }
-                                    >
-                                      {t("apps.deleteRow")}
-                                    </Button>
-                                  </Popconfirm>
-                                </Space>
-                              ),
-                            },
-                          ]
-                        : []),
-                    ]}
-                  />
-                </div>
+                  canEditRows={canEditRows}
+                  columns={dataColumns}
+                  rows={visibleRows}
+                  loading={dataLoading}
+                  page={dataPage}
+                  pageSize={dataPageSize}
+                  total={dataTotal}
+                  tableWidth={dataTableWidth}
+                  search={dataSearch}
+                  onSearchChange={setDataSearch}
+                  onPageChange={(page) => void loadData(page)}
+                  onAddRow={openAddRow}
+                  onExport={() => void exportData()}
+                  onBackup={() => void backupApp()}
+                  onEditRow={openEditRow}
+                  onDeleteRow={(meta) => void removeRow(meta)}
+                />
               ),
             },
           ]}
@@ -1768,120 +1516,26 @@ export default function AppDetailPage() {
         </Form>
       </Modal>
 
-      <Modal
-        title={t("apps.publishTitle")}
+      <AppPublishModal
         open={publishOpen}
-        onCancel={() => setPublishOpen(false)}
-        footer={null}
-        destroyOnHidden
-      >
-        {publicationBusy ? (
-          <div style={{ padding: 24, textAlign: "center" }}>
-            <Spin />
-          </div>
-        ) : (
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            <Text type="secondary">{t("apps.publishHint")}</Text>
-            {detail.columns.some((column) => column.pii) && (
-              <Alert
-                type="warning"
-                showIcon
-                message={t("apps.piiShareWarning")}
-              />
-            )}
-            <Text>
-              {publication?.active
-                ? t("apps.publishActive")
-                : t("apps.publishInactive")}
-            </Text>
-            {publication?.active && (
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                {publication.published_at ? (
-                  <Text type="secondary">
-                    {t("apps.publishedAt", "Published {{time}}", {
-                      time: formatServerDateTime(
-                        publication.published_at,
-                        timeZone,
-                      ),
-                    })}
-                  </Text>
-                ) : (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message={t(
-                      "apps.publishNotFixed",
-                      "This link has not fixed a version yet; publish to freeze the current one.",
-                    )}
-                  />
-                )}
-                {publication.snapshot_stale && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={t(
-                      "apps.publishStale",
-                      "The MiniApp changed since the last publish",
-                    )}
-                    description={(publication.stale_reasons ?? [])
-                      .map((reason) => staleReasonLabel(reason, t))
-                      .join(" · ")}
-                  />
-                )}
-              </Space>
-            )}
-            {publishUrl && (
-              <Input
-                readOnly
-                value={publishUrl}
-                addonAfter={
-                  <Button
-                    type="link"
-                    size="small"
-                    onClick={() => {
-                      void navigator.clipboard?.writeText(publishUrl);
-                      message.success(t("apps.publishCopy"));
-                    }}
-                  >
-                    {t("apps.publishCopy")}
-                  </Button>
-                }
-              />
-            )}
-            <Space>
-              {publication?.active && (
-                <Button
-                  type={publication.snapshot_stale ? "primary" : "default"}
-                  onClick={() => void publishNow()}
-                  loading={publicationBusy}
-                >
-                  {t("apps.publishNow", "Publish updates")}
-                </Button>
-              )}
-              <Button
-                type={publication?.active ? "default" : "primary"}
-                onClick={() => void createPublish()}
-                loading={publicationBusy}
-              >
-                {publication?.active
-                  ? t("apps.publishRotate")
-                  : t("apps.publishCreate")}
-              </Button>
-              {publication?.active && (
-                <Popconfirm
-                  title={t("apps.publishRevokeConfirm")}
-                  okText={t("apps.publishRevoke")}
-                  cancelText={t("common.cancel")}
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => void revokePublish()}
-                >
-                  <Button danger>{t("apps.publishRevoke")}</Button>
-                </Popconfirm>
-              )}
-            </Space>
-          </Space>
-        )}
-      </Modal>
+        tables={detail.tables}
+        publication={publication}
+        publishUrl={publishUrl}
+        busy={publicationBusy}
+        timeZone={timeZone}
+        snapshotSchedule={snapshotSchedule}
+        scheduleBusy={scheduleBusy}
+        onToggleSnapshotSchedule={(enabled) =>
+          void toggleSnapshotSchedule(enabled)
+        }
+        onSnapshotIntervalChange={(seconds) =>
+          void changeSnapshotInterval(seconds)
+        }
+        onClose={() => setPublishOpen(false)}
+        onCreate={() => void createPublish()}
+        onPublishNow={() => void publishNow()}
+        onRevoke={() => void revokePublish()}
+      />
 
       <Modal
         title={t("apps.renameTitle")}
@@ -2163,647 +1817,60 @@ export default function AppDetailPage() {
         </Form>
       </Modal>
 
-      <Modal
-        title={t("apps.shareTitle", { name: detail.name })}
+      <AppShareModal
         open={shareOpen}
-        onCancel={() => setShareOpen(false)}
-        onOk={() => void submitShare()}
-        okText={t("apps.shareSave")}
-        cancelText={t("common.cancel")}
-        confirmLoading={savingShare}
-        destroyOnHidden
-      >
-        <Text type="secondary">{t("apps.shareHint")}</Text>
-        {detail.columns.some((column) => column.pii) && (
-          <Alert
-            type="warning"
-            showIcon
-            message={t("apps.piiShareWarning")}
-            style={{ marginTop: 12 }}
-          />
-        )}
-        <div style={{ marginTop: 12 }}>
-          {shareLoading ? (
-            <div style={{ padding: 24, textAlign: "center" }}>
-              <Spin />
-            </div>
-          ) : (
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
-              {shares.length === 0 && (
-                <Text type="secondary">{t("apps.shareEmpty")}</Text>
-              )}
-              {shares.map((item, index) => (
-                <Space.Compact key={index} style={{ width: "100%" }}>
-                  <Input
-                    placeholder={t("apps.shareUser")}
-                    value={item.username}
-                    onChange={(event) => {
-                      const next = [...shares];
-                      next[index] = {
-                        ...next[index],
-                        username: event.target.value,
-                      };
-                      setShares(next);
-                    }}
-                  />
-                  <Select
-                    style={{ width: 190 }}
-                    value={item.permission}
-                    options={[
-                      { value: "view", label: t("apps.permissionView") },
-                      {
-                        value: "edit_data",
-                        label: t("apps.permissionEditData"),
-                      },
-                    ]}
-                    onChange={(permission) => {
-                      const next = [...shares];
-                      next[index] = { ...next[index], permission };
-                      setShares(next);
-                    }}
-                  />
-                  <Button
-                    danger
-                    icon={<Trash2 size={14} />}
-                    onClick={() =>
-                      setShares(shares.filter((_, i) => i !== index))
-                    }
-                  />
-                </Space.Compact>
-              ))}
-              <Button
-                type="dashed"
-                icon={<Plus size={14} />}
-                onClick={() =>
-                  setShares([...shares, { username: "", permission: "view" }])
-                }
-                block
-              >
-                {t("apps.shareAdd")}
-              </Button>
-            </Space>
-          )}
-        </div>
-      </Modal>
+        appName={detail.name}
+        columns={detail.columns}
+        shares={shares}
+        loading={shareLoading}
+        saving={savingShare}
+        onChange={setShares}
+        onClose={() => setShareOpen(false)}
+        onSave={() => void submitShare()}
+      />
 
-      <Drawer
-        title={t("apps.infoTitle")}
+      <AppAccessRequestsModal
+        open={accessOpen}
+        requests={accessRequests}
+        busy={accessBusy}
+        onClose={() => setAccessOpen(false)}
+        onResolve={(request, approve) => void resolveAccess(request, approve)}
+      />
+
+      <AppInfoDrawer
         open={infoOpen}
         onClose={() => setInfoOpen(false)}
-        width={isMobile ? "100%" : 560}
-        styles={{ body: { padding: "20px 24px 28px" } }}
-      >
-        {detail && (
-          <Descriptions
-            column={1}
-            size="small"
-            bordered
-            labelStyle={{ width: 120, whiteSpace: "nowrap" }}
-          >
-            <Descriptions.Item label={t("apps.createdByLabel")}>
-              {detail.owner_username || "—"}
-            </Descriptions.Item>
-            <Descriptions.Item label={t("apps.agentLabel")}>
-              {detail.agent_name || detail.agent_id}
-            </Descriptions.Item>
-            <Descriptions.Item label={t("apps.permissionLabel")}>
-              {permissionText}
-            </Descriptions.Item>
-            <Descriptions.Item label={t("apps.rowsLabel")}>
-              {t("apps.rows", { count: detail.row_count })}
-            </Descriptions.Item>
-            <Descriptions.Item label={t("apps.createdAt")}>
-              {formatServerDateTime(detail.created_at, timeZone)}
-            </Descriptions.Item>
-            <Descriptions.Item label={t("apps.updatedAt")}>
-              {formatServerDateTime(detail.updated_at, timeZone)}
-            </Descriptions.Item>
-            <Descriptions.Item label={t("apps.appId")}>
-              <Text code copyable={{ text: detail.app_id }}>
-                {detail.app_id}
-              </Text>
-            </Descriptions.Item>
-          </Descriptions>
-        )}
-
-        {detail && (
-          <InfoSection
-            title={t("apps.capabilities.title", "Page capabilities")}
-            hint={t(
-              "apps.capabilities.hint",
-              "Controls what the MiniApp page may ask the host to do; agent tools and this dashboard are not affected.",
-            )}
-          >
-            <Checkbox.Group
-              value={capabilityDraft}
-              onChange={(values) => setCapabilityDraft(values as string[])}
-              disabled={
-                detail.permission !== "edit_structure" || savingCapabilities
-              }
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))",
-                columnGap: 12,
-                rowGap: 8,
-              }}
-            >
-              {CAPABILITY_OPTIONS.map((option) => (
-                <Checkbox key={option.value} value={option.value}>
-                  {t(option.labelKey, option.fallback)}
-                </Checkbox>
-              ))}
-            </Checkbox.Group>
-            {detail.permission === "edit_structure" && (
-              <Button
-                type="primary"
-                size="small"
-                style={{ marginTop: 12 }}
-                loading={savingCapabilities}
-                onClick={() => void saveCapabilities()}
-              >
-                {t("apps.capabilities.save", "Save")}
-              </Button>
-            )}
-          </InfoSection>
-        )}
-
-        <InfoSection title={t("apps.tablesTitle")} hint={t("apps.tablesHint")}>
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
-            {detail.tables.map((table) => {
-              const source = sources.find(
-                (item) => item.table_key === table.table_key,
-              );
-              return (
-                <div
-                  key={table.table_key}
-                  style={{
-                    padding: "10px 12px",
-                    border: "1px solid rgba(5, 5, 5, 0.06)",
-                    borderRadius: 8,
-                    background: "#fafafa",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      minWidth: 0,
-                    }}
-                  >
-                    <Table2 size={14} style={{ flexShrink: 0 }} />
-                    <Text
-                      strong
-                      ellipsis
-                      style={{ fontSize: 13, minWidth: 0, flex: "1 1 auto" }}
-                    >
-                      {table.label || table.table_key}
-                    </Text>
-                    {table.is_main && (
-                      <Tag style={{ marginInlineEnd: 0, flexShrink: 0 }}>
-                        {t("apps.mainTable")}
-                      </Tag>
-                    )}
-                    <Text
-                      type="secondary"
-                      style={{
-                        fontSize: 12,
-                        whiteSpace: "nowrap",
-                        flexShrink: 0,
-                      }}
-                    >
-                      {t("apps.tableRows", { count: table.row_count })}
-                    </Text>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      flexWrap: "wrap",
-                      gap: 8,
-                      marginTop: 8,
-                    }}
-                  >
-                    {canEditStructure && (
-                      <Tooltip title={t("apps.tableVisibilityHint")}>
-                        <Space size={4}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            {t("apps.publicTable")}
-                          </Text>
-                          <Switch
-                            size="small"
-                            checked={table.public_visible}
-                            onChange={(checked) =>
-                              void setTableVisibility(table.table_key, checked)
-                            }
-                          />
-                        </Space>
-                      </Tooltip>
-                    )}
-                    <span style={{ flex: 1 }} />
-                    {canEditData && (
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<UploadIcon size={13} />}
-                        onClick={() => openImport(table.table_key)}
-                      >
-                        {t("apps.importButton")}
-                      </Button>
-                    )}
-                    {canEditStructure && (
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<Link2 size={13} />}
-                        onClick={() => openSourceModal(table.table_key)}
-                      >
-                        {t("apps.sourceButton")}
-                      </Button>
-                    )}
-                  </div>
-                  {source && (
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                        gap: 8,
-                        marginTop: 8,
-                        paddingTop: 8,
-                        borderTop: "1px dashed rgba(5, 5, 5, 0.08)",
-                      }}
-                    >
-                      <Tag
-                        color={
-                          source.last_status === "error"
-                            ? "red"
-                            : source.last_status === "ok"
-                            ? "green"
-                            : "default"
-                        }
-                        style={{
-                          marginInlineEnd: 0,
-                          fontSize: 11,
-                          lineHeight: "18px",
-                        }}
-                      >
-                        {source.last_status === "error"
-                          ? t("apps.sourceStatusError")
-                          : source.last_status === "ok"
-                          ? t("apps.sourceStatusOk")
-                          : t("apps.sourceStatusPending")}
-                      </Tag>
-                      <Text
-                        type="secondary"
-                        style={{ fontSize: 12, flex: "1 1 200px", minWidth: 0 }}
-                        ellipsis
-                      >
-                        {source.kind === "workspace_file"
-                          ? String(source.params.path || "")
-                          : String(source.params.tool || "")}
-                        {source.schedule_seconds > 0 &&
-                          ` · ${t("apps.sourceEvery", {
-                            text: sourceScheduleLabel(
-                              source.schedule_seconds,
-                              t,
-                            ),
-                          })}`}
-                        {source.last_run_at &&
-                          ` · ${t(
-                            "apps.sourceLastSync",
-                          )} ${formatServerDateTime(
-                            source.last_run_at,
-                            timeZone,
-                          )}`}
-                        {source.last_status === "ok" &&
-                          source.last_row_count !== null &&
-                          ` · ${t("apps.tableRows", {
-                            count: source.last_row_count,
-                          })}`}
-                      </Text>
-                      {canEditData && (
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<RefreshCw size={13} />}
-                          onClick={() => void runSourceNow(source)}
-                        >
-                          {t("apps.sourceRun")}
-                        </Button>
-                      )}
-                      {canEditStructure && (
-                        <Popconfirm
-                          title={t("apps.sourceDeleteTitle")}
-                          description={t("apps.sourceDeleteConfirm")}
-                          okButtonProps={{ danger: true }}
-                          okText={t("apps.delete")}
-                          cancelText={t("common.cancel")}
-                          onConfirm={() => void removeSource(source)}
-                        >
-                          <Button
-                            type="text"
-                            size="small"
-                            danger
-                            icon={<Trash2 size={13} />}
-                          />
-                        </Popconfirm>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </Space>
-        </InfoSection>
-
-        <InfoSection title={t("apps.filesTitle")} hint={t("apps.filesHint")}>
-          {filesLoading ? (
-            <div style={{ padding: 24, textAlign: "center" }}>
-              <Spin />
-            </div>
-          ) : (
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
-              {files.map((file) => (
-                <div
-                  key={file.name}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    padding: "10px 12px",
-                    border: "1px solid rgba(5, 5, 5, 0.06)",
-                    borderRadius: 8,
-                    background: "#fafafa",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      minWidth: 0,
-                      flex: 1,
-                    }}
-                  >
-                    <FileCode size={14} style={{ flexShrink: 0 }} />
-                    <Text ellipsis style={{ fontSize: 13, minWidth: 0 }}>
-                      {file.name}
-                    </Text>
-                  </div>
-                  <Text
-                    type="secondary"
-                    style={{ fontSize: 12, whiteSpace: "nowrap" }}
-                  >
-                    {formatBytes(file.size)}
-                  </Text>
-                </div>
-              ))}
-            </Space>
-          )}
-        </InfoSection>
-      </Drawer>
-
-      <Drawer
-        title={
-          <Space size={8}>
-            <Sparkles size={16} />
-            {t("apps.assistantTitle")}
-          </Space>
+        detail={detail}
+        permissionText={permissionText}
+        sources={sources}
+        files={files}
+        filesLoading={filesLoading}
+        canManage={canManage}
+        canEditData={canEditData}
+        canEditStructure={canEditStructure}
+        capabilityDraft={capabilityDraft}
+        savingCapabilities={savingCapabilities}
+        onCapabilityDraftChange={setCapabilityDraft}
+        onSaveCapabilities={() => void saveCapabilities()}
+        onSetTableVisibility={(tableKey, checked) =>
+          void setTableVisibility(tableKey, checked)
         }
+        onOpenImport={openImport}
+        onOpenSourceModal={openSourceModal}
+        onRunSource={(source) => void runSourceNow(source)}
+        onRemoveSource={(source) => void removeSource(source)}
+      />
+
+      <AppAssistantDrawer
+        appId={appId}
         open={assistantOpen}
         onClose={() => setAssistantOpen(false)}
-        width={assistantWidth}
-        extra={
-          // The drawer hugs the right edge: dragging its left border outward
-          // (leftwards) widens it, inwards shrinks it — the chevrons mirror
-          // exactly that, so left = widen, right = narrow.
-          <Space size={0}>
-            <Tooltip title={t("apps.assistantWidthMax")}>
-              <Button
-                type="text"
-                size="small"
-                aria-label={t("apps.assistantWidthMax")}
-                icon={<ChevronsLeft size={14} />}
-                onClick={() => setAssistantPreset(assistantMaxWidth())}
-              />
-            </Tooltip>
-            <Tooltip title={t("apps.assistantWidthMid")}>
-              <Button
-                type="text"
-                size="small"
-                aria-label={t("apps.assistantWidthMid")}
-                icon={<AlignCenterHorizontal size={14} />}
-                onClick={() =>
-                  setAssistantPreset(Math.floor(window.innerWidth * 0.5))
-                }
-              />
-            </Tooltip>
-            <Tooltip title={t("apps.assistantWidthMin")}>
-              <Button
-                type="text"
-                size="small"
-                aria-label={t("apps.assistantWidthMin")}
-                icon={<ChevronsRight size={14} />}
-                onClick={() => setAssistantPreset(assistantMinWidth())}
-              />
-            </Tooltip>
-          </Space>
-        }
-        styles={{
-          body: { display: "flex", flexDirection: "column" },
-          // antd animates wrapper width changes; freeze it mid-drag.
-          wrapper: { transition: assistantResizing ? "none" : undefined },
+        onOpenCitation={(table) => {
+          setDataTable(table);
+          setActiveView("data");
+          setAssistantOpen(false);
         }}
-        footer={
-          <div>
-            <Space.Compact style={{ width: "100%" }}>
-              <Input
-                value={assistantInput}
-                onChange={(event) => setAssistantInput(event.target.value)}
-                placeholder={t("apps.assistantPlaceholder")}
-                maxLength={4000}
-                disabled={assistantBusy}
-                onPressEnter={() => void sendAssistant()}
-              />
-              <Button
-                type="primary"
-                loading={assistantBusy}
-                disabled={!assistantInput.trim()}
-                onClick={() => void sendAssistant()}
-              >
-                {t("apps.assistantSend")}
-              </Button>
-            </Space.Compact>
-            <Text
-              type="secondary"
-              style={{ fontSize: 12, display: "block", marginTop: 6 }}
-            >
-              {t("apps.assistantHint")}
-            </Text>
-          </div>
-        }
-      >
-        {/* Resize grip: absolute against the drawer content-wrapper (the
-            nearest positioned ancestor), so it spans the full panel height
-            and escapes the scrolling body's clipping. */}
-        <div
-          onPointerDown={startAssistantResize}
-          onPointerMove={moveAssistantResize}
-          onPointerUp={endAssistantResize}
-          onPointerCancel={endAssistantResize}
-          onMouseEnter={() => setAssistantResizeHover(true)}
-          onMouseLeave={() => setAssistantResizeHover(false)}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 8,
-            cursor: "col-resize",
-            zIndex: 10,
-            touchAction: "none",
-            background:
-              assistantResizeHover || assistantResizing
-                ? "rgba(22, 119, 255, 0.18)"
-                : "transparent",
-          }}
-        />
-        <div
-          ref={assistantListRef}
-          style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-          }}
-        >
-          {assistantLoading ? (
-            <div style={{ padding: 24, textAlign: "center" }}>
-              <Spin />
-            </div>
-          ) : (
-            <>
-              {assistantMsgs.length === 0 && (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {t("apps.assistantEmpty")}
-                </Text>
-              )}
-              {assistantMsgs.map((item, index) => {
-                const isUser = item.role === "user";
-                const hasCharts = Boolean(item.charts?.length);
-                const streaming =
-                  assistantBusy && index === assistantMsgs.length - 1;
-                return (
-                  <div
-                    key={index}
-                    style={{
-                      // Charts need a concrete parent width for
-                      // ResponsiveContainer; give the bubble the full drawer
-                      // width (capped on wide screens) instead of letting it
-                      // shrink to the chart's min-content width.
-                      alignSelf: hasCharts
-                        ? "flex-start"
-                        : isUser
-                        ? "flex-end"
-                        : "flex-start",
-                      width: hasCharts ? "100%" : undefined,
-                      maxWidth: hasCharts ? "min(100%, 720px)" : "85%",
-                      minWidth: 0,
-                      boxSizing: "border-box",
-                      background: isUser
-                        ? "rgba(22, 119, 255, 0.08)"
-                        : "rgba(0, 0, 0, 0.03)",
-                      padding: "8px 12px",
-                      borderRadius: 10,
-                      whiteSpace: isUser ? "pre-wrap" : "normal",
-                      wordBreak: "break-word",
-                      fontSize: 13,
-                    }}
-                  >
-                    {item.content ? (
-                      isUser ? (
-                        item.content
-                      ) : (
-                        <Markdown
-                          content={item.content}
-                          isStreaming={streaming}
-                        />
-                      )
-                    ) : streaming ? (
-                      <Spin size="small" />
-                    ) : hasCharts ? null : (
-                      "…"
-                    )}
-                    {!isUser && hasCharts ? (
-                      <div
-                        style={{
-                          marginTop: 8,
-                          display: "grid",
-                          gap: 12,
-                          minWidth: 0,
-                        }}
-                      >
-                        {item.charts?.map(
-                          (chart: AppAssistantChart, chartIndex) => (
-                            <Suspense
-                              key={`${chart.title}-${chartIndex}`}
-                              fallback={<Spin size="small" />}
-                            >
-                              <AssistantChart chart={chart} />
-                            </Suspense>
-                          ),
-                        )}
-                      </div>
-                    ) : null}
-                    {!isUser && item.citations?.length ? (
-                      <div
-                        style={{
-                          marginTop: 6,
-                          display: "flex",
-                          gap: 8,
-                          flexWrap: "wrap",
-                          fontSize: 12,
-                        }}
-                      >
-                        <Text type="secondary">
-                          {t("apps.assistantCitations")}:
-                        </Text>
-                        {item.citations.slice(0, 5).map((citation) => (
-                          <a
-                            key={`${citation.table}-${citation.row_id}`}
-                            onClick={() => {
-                              setDataTable(citation.table);
-                              setActiveView("data");
-                              setAssistantOpen(false);
-                            }}
-                          >
-                            {citation.row_id}
-                          </a>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-              {assistantTool && (
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  <Spin size="small" style={{ marginRight: 6 }} />
-                  {t("apps.assistantToolRunning", { name: assistantTool })}
-                </Text>
-              )}
-              {assistantError && (
-                <Text type="danger" style={{ fontSize: 12 }}>
-                  {assistantError}
-                </Text>
-              )}
-            </>
-          )}
-        </div>
-      </Drawer>
+      />
 
       <Modal
         title={gameSession?.name}

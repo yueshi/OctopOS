@@ -14,6 +14,23 @@ describe("APP_SDK", () => {
     expect(APP_SDK).toContain("RTCPeerConnection");
     expect(APP_SDK).toContain("iframe,frame,object,embed,portal");
   });
+
+  it("exposes data-change subscriptions", () => {
+    expect(APP_SDK).toContain("onDataChange");
+    expect(APP_SDK).toContain("octop:data-changed");
+    expect(APP_SDK).toContain('data.type === "data-changed"');
+  });
+
+  it("exposes declared external services", () => {
+    expect(APP_SDK).toContain("service: function");
+    expect(APP_SDK).toContain('call("service"');
+    expect(APP_SDK).toContain('call("serviceImage"');
+  });
+
+  it("exposes the event inbox", () => {
+    expect(APP_SDK).toContain('call("events"');
+    expect(APP_SDK).toContain('call("ackEvents"');
+  });
 });
 
 describe("WEBRTC_FREEZE", () => {

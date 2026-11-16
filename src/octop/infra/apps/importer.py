@@ -10,7 +10,7 @@ and an import always agree on what a sheet contains.
 
 from __future__ import annotations
 
-from octop.infra.apps.inspect import RawSheet, read_sheets
+from octop.infra.apps.inspect import RawSheet, is_totals_row, read_sheets
 from octop.infra.errors import ErrorCode, OctopError
 
 TEXT_ENCODINGS = ("utf-8-sig", "gb18030")
@@ -80,6 +80,10 @@ def parse_import_file(
     pairs = _header_pairs(rows[head])
     records: list[dict[str, str]] = []
     for values in rows[head + 1 :]:
+        # Keep direct imports consistent with the inspection report: totals
+        # rows are summaries, not records.
+        if is_totals_row(values):
+            continue
         record = {name: (values[index] if index < len(values) else "") for index, name in pairs}
         if any(value != "" for value in record.values()):
             records.append(record)

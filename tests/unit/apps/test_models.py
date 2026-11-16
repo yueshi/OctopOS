@@ -302,8 +302,9 @@ def test_validate_html_allows_in_page_navigation() -> None:
 def test_validate_permission() -> None:
     assert validate_permission("view") == "view"
     assert validate_permission("edit_data") == "edit_data"
+    assert validate_permission("edit_structure") == "edit_structure"
     with pytest.raises(OctopError) as exc:
-        validate_permission("edit_structure")
+        validate_permission("owner")
     _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
 
 
