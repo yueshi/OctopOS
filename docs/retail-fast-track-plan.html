@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Octop 快速交付场景与落地计划（零售经营方向）：四张标准表绕开 ERP 直连，五周交付七个场景。">
+<title>Octop 快速交付计划｜零售经营方向</title>
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --paper: #ffffff;
+    --ink: #1f2328;
+    --muted: #57606a;
+    --line: #d8dee4;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --ok: #1a7f37;
+    --ok-soft: #dafbe1;
+    --warn: #9a6700;
+    --warn-soft: #fff8c5;
+    --bad: #cf222e;
+    --bad-soft: #ffebe9;
+    --code-bg: #f6f8fa;
+    --code-ink: #cf222e;
+    --tile: #fbfcfd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --paper: #161b22;
+      --ink: #e6edf3;
+      --muted: #8b949e;
+      --line: #30363d;
+      --accent: #58a6ff;
+      --accent-soft: #121d2f;
+      --ok: #3fb950;
+      --ok-soft: #12261e;
+      --warn: #d29922;
+      --warn-soft: #282214;
+      --bad: #f85149;
+      --bad-soft: #2d1517;
+      --code-bg: #1c2129;
+      --code-ink: #ff7b72;
+      --tile: #1b222c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.75 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+          "Noto Sans CJK SC", -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .paper { max-width: 1080px; margin: 0 auto; padding: 48px 40px 88px; background: var(--paper); }
+  h1 { font-size: 30px; line-height: 1.3; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; margin: 60px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 17.5px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h4 { font-size: 14.5px; margin: 22px 0 6px; color: var(--muted); }
+  p { margin: 10px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 4px 0; }
+  code {
+    font-family: "SF Mono", ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    font-size: 0.85em; background: var(--code-bg); color: var(--code-ink);
+    padding: 2px 6px; border-radius: 5px; white-space: nowrap;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; white-space: nowrap; }
+  tr:nth-child(even) td { background: color-mix(in srgb, var(--code-bg) 45%, transparent); }
+  blockquote {
+    border-left: 4px solid var(--line); margin: 14px 0; padding: 6px 18px;
+    color: var(--muted); background: color-mix(in srgb, var(--code-bg) 50%, transparent);
+  }
+  .meta { color: var(--muted); font-size: 13.5px; margin-bottom: 28px; }
+  .meta .chip {
+    display: inline-block; border: 1px solid var(--line); border-radius: 999px;
+    padding: 1px 10px; margin-right: 6px; margin-bottom: 4px; font-size: 12.5px; color: var(--muted);
+  }
+  .lead {
+    border-left: 4px solid var(--accent); background: var(--accent-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; font-size: 15.5px; margin: 0 0 8px;
+  }
+  .lead b { color: var(--ink); }
+  .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  /* ---- 状态徽章：图标 + 文字双通道 ---- */
+  .st {
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    border-radius: 999px; padding: 1px 9px 1px 7px; font-size: 12.5px; font-weight: 600;
+  }
+  .st .ic { width: 13px; height: 13px; flex: none; }
+  .st-ok   { color: var(--ok);   background: var(--ok-soft); }
+  .st-warn { color: var(--warn); background: var(--warn-soft); }
+  .st-bad  { color: var(--bad);  background: var(--bad-soft); }
+  .st-info { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---- 指标条 ---- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 22px 0 8px; }
+  .tile { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--tile); }
+  .tile .lab { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .tile .lab .ic { width: 14px; height: 14px; }
+  .tile .val { font-size: 32px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+  .tile .val .unit { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+  .tile .sub { font-size: 12.5px; color: var(--muted); }
+
+  /* ---- 批次分组 ---- */
+  .batch { border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 16px 0; }
+  .batch > h3 { border-bottom: 1px dashed var(--line); padding-bottom: 10px; }
+  .batch .when { font-size: 13px; color: var(--muted); font-weight: 400; }
+
+  /* ---- 流程条 ---- */
+  .flow { border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin: 16px 0; overflow-x: auto; }
+  .flow .row { display: flex; align-items: stretch; gap: 10px; min-width: 720px; }
+  .fbox {
+    flex: 1; border: 1.5px solid var(--accent); border-radius: 8px; padding: 10px 12px;
+    background: var(--accent-soft); font-size: 13px; line-height: 1.5;
+  }
+  .fbox.neutral { border-color: var(--line); background: transparent; }
+  .fbox.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .fbox b { display: block; margin-bottom: 3px; font-size: 13.5px; }
+  .fbox code, .callout code, .rule code {
+    white-space: normal; color: var(--ink); font-weight: 600;
+    background: color-mix(in srgb, var(--paper) 72%, transparent);
+  }
+  .arrow { display: flex; align-items: center; color: var(--muted); font-size: 17px; flex: none; }
+
+  /* ---- 规则条 ---- */
+  .rule { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--line); border-left-width: 4px;
+          border-radius: 8px; padding: 12px 16px; margin: 12px 0; background: var(--tile); }
+  .rule.n1 { border-left-color: var(--ok); }
+  .rule.n2 { border-left-color: var(--warn); }
+  .rule.n3 { border-left-color: var(--bad); }
+  .rule .num { font-weight: 700; color: var(--muted); flex: none; }
+
+  .callout { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 10px 16px; margin: 14px 0; font-size: 14.5px; }
+  .callout.risk { border-left-color: var(--bad); background: var(--bad-soft); }
+  .callout.note { border-left-color: var(--warn); background: var(--warn-soft); }
+  .callout.ok   { border-left-color: var(--ok);  background: var(--ok-soft); }
+
+  .toc { columns: 2; gap: 32px; font-size: 14.5px; margin-top: 12px; }
+  .toc li { margin: 3px 0; break-inside: avoid; }
+  .toc a { color: var(--ink); }
+  .toc a:hover { color: var(--accent); }
+  .toc .lv0 { font-weight: 600; }
+
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+
+  @media (max-width: 860px) {
+    .paper { padding: 28px 18px 60px; }
+    .toc { columns: 1; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    table { display: block; overflow-x: auto; }
+    .flow .row { flex-direction: column; min-width: 0; }
+    .arrow { transform: rotate(90deg); }
+  }
+  @media print {
+    body { background: #fff; color: #111; }
+    .paper { max-width: none; padding: 0; }
+    h2 { break-after: avoid; }
+    .batch, .tile, .flow, .rule { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<svg class="defs" aria-hidden="true"><defs>
+  <symbol id="i-ok" viewBox="0 0 16 16"><path d="M3.2 8.4l3.3 3.3L12.9 4.9" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-part" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8 2.4a5.6 5.6 0 0 1 0 11.2z" fill="currentColor"/></symbol>
+  <symbol id="i-gap" viewBox="0 0 16 16"><path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 7v4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><circle cx="8" cy="4.7" r="1" fill="currentColor"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 16 16"><path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z" fill="currentColor"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 4.4V8l2.4 1.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+
+<div class="paper">
+
+<h1>Octop 快速交付计划｜零售经营方向</h1>
+<div class="meta">
+  <span class="chip">2026-11-16</span>
+  <span class="chip">依据：docs/retail-scenario-gap-analysis.md</span>
+  <span class="chip">原则：零 DB 迁移、零新平台子系统</span>
+  <span class="chip">同源：<code>docs/retail-fast-track-plan.md</code></span>
+</div>
+
+<div class="lead">
+  <b>一句话结论：</b>先用「客户导出 Excel」绕开 ERP 直连，把 1.1 从"不可交付"变成"半天可交付"。
+  四张标准表一落地，<b>3A 销售支持 / 2B' 会前准备 / 3B 经营简报 / 2A 经营诊断 / 1.3 分层</b>
+  五个下游场景全部解锁 —— 而它们<b>全部可以用现有的 miniapp + cron + 知识库 + IM 通道拼出来</b>。
+  <br><br>
+  真正该往后放的只有三个：<b>ERP 直连、屏幕与会议读取、事中实时提示</b>。
+</div>
+
+<div class="stats">
+  <div class="tile">
+    <div class="lab">快交付场景</div>
+    <div class="val">7<span class="unit">/ 11</span></div>
+    <div class="sub">0.3 · 2B' · 3A · 3B<br>1.3 · 2A · 3C</div>
+  </div>
+  <div class="tile">
+    <div class="lab"><svg class="ic" style="color:var(--ok)"><use href="#i-ok"/></svg>DB 迁移</div>
+    <div class="val">0</div>
+    <div class="sub">所有表都是 miniapp 表</div>
+  </div>
+  <div class="tile">
+    <div class="lab"><svg class="ic" style="color:var(--accent)"><use href="#i-bolt"/></svg>共同前置</div>
+    <div class="val">0.5<span class="unit">天</span></div>
+    <div class="sub">标准四表 + Excel 导入（零代码）</div>
+  </div>
+  <div class="tile">
+    <div class="lab"><svg class="ic" style="color:var(--warn)"><use href="#i-clock"/></svg>最短单项</div>
+    <div class="val">3<span class="unit">天</span></div>
+    <div class="sub">2B' 会前准备</div>
+  </div>
+</div>
+
+<div class="legend">
+  <span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>可交付</span>
+  <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>需少量新代码</span>
+  <span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>本轮后置</span>
+  <span>状态一律以「图标 + 文字」呈现，颜色只是辅助通道（浅色 / 深色两套独立取色，文本对比度均 ≥ 4.5:1）。</span>
+</div>
+
+<h2 id="s0">0 · 已定决策（2026-11-16 讨论定稿）</h2>
+<table>
+<thead><tr><th>议题</th><th>决策</th><th>影响</th></tr></thead>
+<tbody>
+<tr><td>3B 经营简报载体</td><td><b>两者都要</b>：IM 推纯文本（结论与数字）+ 链接跳 board（待办与按钮）</td><td>工期 5 天；PDF 的"不做独立 App"理解为"不装客户端"</td></tr>
+<tr><td>3C 剪辑工具落点</td><td><b>Octop 内置 connector adapter</b>（<code>infra/connectors/gateway/adapters/</code> 新增模块 + <code>catalog.json</code> 一行）</td><td>harness 是外部 PyPI 依赖改不了；adapter 形态同时是 Agent 工具、可被 <code>light_app_services</code> 绑定</td></tr>
+<tr><td>2B' 会前准备触发</td><td><b>自然语言触发</b>（IM 里说"准备一下张三的会前材料"）</td><td>零代码、零客户配合；不做会议时间表 + cron</td></tr>
+<tr><td>3A 话术库维护方</td><td><b>总部统一维护</b></td><td>沿用现有 <code>owner</code> / <code>shared</code> 机制，<b>不动 KB 权限</b>（省 1–2 天）</td></tr>
+</tbody>
+</table>
+
+<h4>讨论中修正的三处（原计划不准确）</h4>
+<div class="rule n3">
+  <div class="num">修正 1</div>
+  <div><b>3A 商品表不能直接查</b>：<code>app_read_data</code> 一次上限 500 行（<code>infra/apps/models.py:45</code>
+  <code>MAX_ROW_READ</code>），且<b>没有按列过滤</b>，只有 <code>limit</code> + <code>offset</code> 分页
+  → 必须有分流规则（≤500 行直接读；&gt;500 行 <code>GET /{app_id}/export</code> 导 CSV 后 grep）。</div>
+</div>
+<div class="rule n3">
+  <div class="num">修正 2</div>
+  <div><b>1.3 分层不能写回客户表</b>：客户表由 Excel <code>append</code> + <code>upsert_key</code> 导入，
+  <b>下次导入会用源文件覆盖分层结果</b> → 分层结果存独立表。</div>
+</div>
+<div class="rule n3">
+  <div class="num">修正 3</div>
+  <div><b>2B' 的"最近投诉"取不到</b>：没有工单系统，且 IM 身份塌缩到属主，取不到按客户归集的历史
+  → 唯一路径是 Excel 里加一列"备注 / 投诉"，导入时映射进客户表。</div>
+</div>
+
+<h2 id="toc">目录</h2>
+<ul class="toc">
+  <li class="lv0"><a href="#s1">1 · 场景筛选结果</a></li>
+  <li><a href="#s1b">1.1 逐场景措施要点</a></li>
+  <li><a href="#b1">第一批：配置即交付</a></li>
+  <li><a href="#b2">第二批：现有能力拼装</a></li>
+  <li><a href="#b3">第三批：需少量新代码</a></li>
+  <li><a href="#b4">本轮明确不做</a></li>
+  <li class="lv0"><a href="#s2">2 · 里程碑与验收</a></li>
+  <li class="lv0"><a href="#s3">3 · 三条反幻觉规则</a></li>
+  <li class="lv0"><a href="#s4">4 · 风险与对策</a></li>
+  <li class="lv0"><a href="#s5">5 · 若只能做一件事</a></li>
+  <li class="lv0"><a href="#s6">附 · 本计划依赖的现成能力</a></li>
+</ul>
+
+<h2 id="s1">1 · 场景筛选结果</h2>
+
+<div class="batch" id="b1">
+<h3>第一批 · 配置即交付 <span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>0.5 天</span></h3>
+
+<table>
+<thead><tr><th>场景</th><th>为什么能快</th><th>交付物</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>0.3 外部搜索</b></td>
+  <td>harness 内建 5 家 <code>web_search</code> + <code>web_fetch</code>（<code>tool_catalog.py:72-76</code>）已通；只差配 provider 与提示纪律</td>
+  <td>一个能查政策 / 同行 / 价格并附来源的 Agent</td>
+</tr>
+</tbody>
+</table>
+
+<p><b>配置：</b>2 个 provider（对应 PDF 的"博查 + 智谱"）；SKILL.md 写死两条规则 ——
+<b>搜不到就说"我没找到"</b>、<b>每条结论附来源站点</b>。</p>
+</div>
+
+<div class="batch" id="b2">
+<h3>第二批 · 现有能力拼装 <span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>无新表、无新平台子系统</span></h3>
+
+<h4>共用前置（半天，所有下游都靠它）</h4>
+<div class="flow">
+  <div class="row">
+    <div class="fbox neutral"><b>客户导出 Excel / CSV</b>订单 / 库存 / 客户 / 商品</div>
+    <div class="arrow">→</div>
+    <div class="fbox"><b>上传到工作区</b><code>POST /{app_id}/upload</code><br>存到 <code>inbound/imports/</code></div>
+    <div class="arrow">→</div>
+    <div class="fbox"><b>带映射导入</b><code>POST /{app_id}/tables/{key}/import</code><br><code>mapping</code> / <code>mode</code> / <code>upsert_key</code> / <code>dry_run</code> 全支持</div>
+    <div class="arrow">→</div>
+    <div class="fbox ok"><b>四张标准表</b>miniapp「门店经营」<br>夜间 <code>schedule_seconds</code> 自动同步</div>
+  </div>
+</div>
+
+<div class="callout ok">
+这条链<b>完全现成</b>（<code>api/routers/apps.py:2940-3040</code>），导入零代码。
+<code>mapping</code> 就是 PDF 说的"字段语义映射" —— 只是这里由人 / AI 一次性给出，而不是写成通用识别引擎。
+</div>
+
+<table>
+<thead><tr><th>场景</th><th>交付物</th><th>关键机制</th><th>工期</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>2B' 会前准备</b></td>
+  <td>开会前 30 分钟推一页纸：客户历史成交价 / 账期 / 最近投诉 / 预判异议</td>
+  <td><b>自然语言触发</b>（IM 里说"准备一下张三的会前材料"）→ 读订单表 → 生成 → 回在同一 IM 会话（零代码）；"最近投诉"取自客户表 Excel 的备注列</td>
+  <td><b>3 天</b></td>
+</tr>
+<tr>
+  <td><b>3A 销售支持（话术版）</b></td>
+  <td>店员在企微 / 微信同窗口问到店里的真实商品与标准话术</td>
+  <td>商品表走 miniapp；<b>≤500 行直接 <code>app_read_data</code>，&gt;500 行 <code>GET /{app_id}/export</code> 导 CSV 后 grep</b>；四类异议话术进知识库（总部统一维护）+ SKILL 规定"先查表 → 再查话术 → 都没有就说问店长"</td>
+  <td><b>3 天</b></td>
+</tr>
+<tr>
+  <td><b>3B 经营简报</b></td>
+  <td>老板手机端每天早上收到：结论—数字—异常—待办 + 数据来源脚注</td>
+  <td>cron 跑批 → 写"简报"表 → <b>IM 推纯文本 + <code>app_share_link</code> 跳 board</b>（两者都要）</td>
+  <td><b>5 天</b></td>
+</tr>
+<tr>
+  <td><b>1.3 分层（订单口径）</b></td>
+  <td>铁杆 / 潜力 / 沉睡 / 走 四档标签</td>
+  <td>夜间跑批读订单表现算 → 写<b>独立的「分层结果」表</b>（不写回客户表，会被下次导入覆盖）</td>
+  <td><b>2 天</b></td>
+</tr>
+</tbody>
+</table>
+
+<div class="callout ok">
+这批共同做到的事：3A、3B、2A、1.3 需要的"四张标准表"一次到位，之后都是往表里读、往表里写，<b>不需要再动数据层</b>。
+</div>
+</div>
+
+<div class="batch" id="b3">
+<h3>第三批 · 需要少量新代码 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>1–2 周</span></h3>
+
+<table>
+<thead><tr><th>场景</th><th>新增东西</th><th>工期</th><th>已知局限</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>2A 经营诊断与归因</b></td>
+  <td>指标口径写进 SKILL / 配置；归因叙述写"诊断"表</td>
+  <td>5–7 天</td>
+  <td>miniapp 表<b>无公式列</b> → 派生指标（毛利 / 周转）由模型算后写回，有算错风险。缓解：口径固化为"表 + 列 + 公式"，数字一律从表读，不让模型心算</td>
+</tr>
+<tr>
+  <td><b>3C 营销短视频（模板剪辑版）</b></td>
+  <td>① ffmpeg 依赖 ② <b>Octop 内置 connector adapter</b>（<code>infra/connectors/gateway/adapters/</code> 新增模块，按 <code>http_extract.py</code> 的 <code>TOOLS</code>/<code>list_tools()</code>/<code>call_tool()</code> 三段式暴露 <code>render_video</code>，注册进 <code>catalog.json</code>）③ 行业模板 SKILL</td>
+  <td>1–2 周</td>
+  <td>分发只接公众号草稿；到店归因（优惠码 → <code>external_events</code> → attribution 表）可独立并行，不依赖剪辑能力</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="batch" id="b4">
+<h3>本轮明确不做 <span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>后置</span></h3>
+
+<table>
+<thead><tr><th>不做</th><th>理由</th><th>何时再做</th></tr></thead>
+<tbody>
+<tr>
+  <td><b>1.1 ERP 直连</b></td>
+  <td>技术不是难点，<b>每家客户表结构映射的人工成本才是</b>。先用导出文件绕开</td>
+  <td>有 1–2 个真实客户、确认要每天自动同步后，再上 SQL Server 只读 adapter（+1 周）；注意 <code>infra/apps/sources.py:1-7</code> 限定数据源只吃进程内 gateway 连接器</td>
+</tr>
+<tr>
+  <td><b>1.2 屏幕与会议读取</b></td>
+  <td>需要"用户本机屏幕 / 麦克风上行 + 持续感知触发器"，本轮风险最高</td>
+  <td>阶段 3；零件已齐（<code>desktop_screenshot</code> 落 workspace + <code>steer</code> 可注入进行中的一轮），差装配</td>
+</tr>
+<tr>
+  <td><b>2B 事中实时提示</b></td>
+  <td>依赖 1.1 与触发器</td>
+  <td>先用 2B' 会前准备交付价值</td>
+</tr>
+<tr>
+  <td><b>0.2 平台监测</b></td>
+  <td>PDF 自己判为客户级定制且法律风险高</td>
+  <td>若有客户明确付费，按"客户级数据定制"单独立项，不进平台</td>
+</tr>
+<tr>
+  <td><b>contacts 跨平台身份归并</b></td>
+  <td>是"1.1 之后的第二块地基"，但 1.3 的<b>分层</b>不依赖它（只依赖订单表）</td>
+  <td>第二个客户接入 IM 时再做</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s1b">1.1 · 逐场景措施要点</h2>
+
+<div class="batch">
+<h3>0.3 外部搜索</h3>
+<ol>
+<li>Settings → Advanced → Search 配 2 个 provider（Tavily 偏英文通用，Kimi 偏中文、能覆盖企查号 / 知乎 / 站外转载内容）→ 跑 10 题后留 2 个。</li>
+<li>装 SKILL.md <code>search-policy</code>：政策类 / 同行类 / 价格类三种问法各写死流程 —— 先搜 → 引用来源站点 → 搜不到明说"我没找到"并建议问谁。</li>
+<li><b>默认不自动搜</b>，只在识别到"查一下 / 现在还能办吗 / 多少钱"这类外部事实意图时才搜（否则每轮都搜会拖慢并引入噪声）。</li>
+</ol>
+</div>
+
+<div class="batch">
+<h3>2B' 会前准备</h3>
+<ol>
+<li>数据：客户表 + 订单表。</li>
+<li>触发：自然语言，SKILL 里写死触发语句与动作（查客户 → 查订单 → 算历史成交价 / 账期 / 最近到店 → 生成一页纸 → <b>回在同一 IM 会话</b>）。零代码。</li>
+<li>载体：IM 文本为主；同时落一份 workspace HTML + <code>app_share_link</code> 链接（好看，但 IM 内是 web-view 不是原生卡片）。</li>
+<li><b>"最近投诉"只来自客户表 Excel 的备注列</b> —— 需在交付清单里向客户说明并要求导出时带上这一列。</li>
+<li>新客户（无订单记录）必须明说"这位是新客，没有历史成交价"，不许用同类客户的数据凑。</li>
+</ol>
+</div>
+
+<div class="batch">
+<h3>3A 销售支持</h3>
+<ol>
+<li>商品 / 价格 / 库存 → miniapp 商品表（Excel 导入），<b>绝不进知识库</b>。</li>
+<li><b>检索分流（写进 SKILL）</b>：≤500 行 → <code>app_read_data</code> 直接读；&gt;500 行 → <code>GET /{app_id}/export?table=商品</code>（<code>api/routers/apps.py:2170</code>）导 CSV 落工作区 → <code>execute</code> + grep；要求毫秒级且表极大 → 第二版再考虑 <code>light_app_services</code> 绑外部只读数据源。</li>
+<li>四类异议话术 → 知识库 4 篇，每篇写死"触发条件 + 标准应答 + 依据哪张表哪个字段"。总部统一维护。</li>
+<li>SKILL 顺序：先查商品表拿实时价与库存 → 再检索话术库 → 都没有 → "这个我不确定，问店长"。</li>
+<li><b>指代歧义（"这个多少钱"）一律反问</b>，不猜最近提及的商品 —— 猜错价格对店员是硬伤。</li>
+<li>IM 交付：企微 Markdown + 一张商品图；微信纯文本 + 图。</li>
+<li>"新人识别"本轮砍掉（依赖 contacts 层）。</li>
+</ol>
+</div>
+
+<div class="batch">
+<h3>3B 经营简报</h3>
+<ol>
+<li>"简报"表（miniapp 表，一行一条简报，按日期 upsert）。</li>
+<li>跑批：<code>cron:0 7 * * *</code> + <code>task_type=agent</code> + SKILL「经营简报」→ 读订单 / 库存表 → <code>app_append_row</code> 写简报表 → 同时输出纯文本 → cron 自动推 IM。</li>
+<li>四段式用 SKILL 硬约束（结论 / 数字 / 异常 / 待办），每段都要有来源行；底部脚注写"数据源 + 同步时间 + 只读声明"（<b>同步时间从源文件 mtime 取</b>，<code>app_services</code> 没有 last-synced 字段）。</li>
+<li>待办动作：简报行带 <code>action_type</code>（改价 / 生成话术 / 打电话）→ 映射到 <code>app_update_row</code> / <code>generate</code> / <code>tel:</code> 拨号链接；<b>"打电话"要求客户表有手机号列</b>。</li>
+<li><b>载体两者都要</b>：IM 纯文本给结论与数字（可直接读）+ <code>app_share_link</code> 跳 board 看待办与按钮。</li>
+<li><b>"一键改"第一版只生成待办并推给对应人，不直接改价</b>（合规与可回滚）。</li>
+<li>埋点：open / click / adopt 三事件写 miniapp 小表（带 user_id + ts），不新建表。</li>
+</ol>
+</div>
+
+<div class="batch">
+<h3>1.3 客户分层</h3>
+<ol>
+<li>夜间跑批（<b>与 3B 同一个 cron 回合</b>，不另起任务）读订单表现 → 算档位 → 写<b>独立的「分层结果」表</b>（<code>customer_id</code> + 档位 + 依据 + 计算时间）。</li>
+<li><b>不写回客户表</b>（会被下次导入覆盖）。</li>
+<li>口径用 PDF 的四档名（铁杆 / 潜力 / 沉睡 / 走），每档写死判据，不用 RFM 字样。</li>
+<li>本轮只用订单数据（快、可算）；"沟通记录"维度等 contacts 层。</li>
+</ol>
+</div>
+
+<div class="batch">
+<h3>2A 经营诊断与归因</h3>
+<ol>
+<li><b>指标口径写进 SKILL</b>，逐条写死"从哪张表的哪列、怎么算"（例：毛利 = 订单表 <code>成交额</code> 之和 − 订单表 <code>成本单价</code> × <code>数量</code> 之和）。</li>
+<li>跑批算指标 → 写「指标」表（期间、指标名、值、口径、计算过程）。</li>
+<li>归因叙述写「诊断」表（结论 + 证据行 + 置信 + 是否异常）。</li>
+<li>异常阈值入配置，先做"环比波动超阈值就标注"。</li>
+<li><b>最大质量风险不是工程，是模型算派生指标</b>（miniapp 表无公式列）→ 口径写成可执行步骤而非让模型自由发挥；诊断表存"计算过程"字段供抽查复算。</li>
+</ol>
+</div>
+
+<div class="batch">
+<h3>3C 营销短视频</h3>
+<ol>
+<li>加 ffmpeg 依赖（当前无）。</li>
+<li><b>剪辑工具做成 Octop 内置 connector adapter</b>：<code>infra/connectors/gateway/adapters/</code> 新增模块，按 <code>http_extract.py</code> 的 <code>TOOLS</code> + <code>list_tools()</code> + <code>call_tool()</code> 三段式暴露 <code>render_video(template, inputs, output)</code>，注册进 <code>catalog.json</code>。</li>
+<li>行业模板做成 SKILL.md（模板结构 + 变量约定 + 调用参数）；素材走 workspace（已有产物白名单机制 <code>desktopFiles.ts:20-27</code>）。</li>
+<li>分发只接公众号草稿（现有能力），其余人工导出。</li>
+<li>到店归因（优惠码 → <code>external_events</code> → attribution 表）<b>可独立并行</b>，不依赖剪辑能力。</li>
+</ol>
+</div>
+
+<h2 id="s2">2 · 里程碑与验收</h2>
+<table>
+<thead><tr><th>周</th><th>交付物</th><th>验收（照抄 PDF 的 KPI 口径）</th></tr></thead>
+<tbody>
+<tr><td><b>W0</b></td><td>标准四表 + Excel 导入跑通（1 个真实客户）</td><td>一份客户导出文件 → 4 张表 → 能回答"上周卖了多少、哪个 SKU 库存低"</td></tr>
+<tr><td><b>W1</b></td><td>3A 话术版 + 2B' 会前准备</td><td>销售在企微问 8 类问题中 ≥6 类答得出且带店里的数；会前一页纸准时送达</td></tr>
+<tr><td><b>W2</b></td><td>3B 简报版 + 埋点</td><td>老板 7 天内 ≥5 天打开；待办点击率可测；来源脚注正确</td></tr>
+<tr><td><b>W3</b></td><td>2A 诊断 + 1.3 分层</td><td>能回答"本月毛利掉了，是价涨还是量跌"，且结论能指出依据行</td></tr>
+<tr><td><b>W4</b></td><td>3C 剪辑模板</td><td>30 秒素材 → 3 分钟出片；素材来自门店自有</td></tr>
+</tbody>
+</table>
+
+<div class="callout note">
+<b>埋点落点：</b>3 个事件（<code>open</code> / <code>click</code> / <code>adopt</code>）记进 miniapp 的一张小表（带 user_id + ts）。
+不新建 <code>briefing_events</code> 表 —— miniapp 表够用，且省一次迁移。
+</div>
+
+<h2 id="s3">3 · 三条必须写进 SKILL 的"反幻觉"规则</h2>
+
+<div class="rule n1">
+  <div class="num">规则 1</div>
+  <div><b>答不出就说不知道。</b>3A 里"先查商品表 → 再查话术库 → 都没有就说'这个我不确定，问店长'"。
+  没有这条，知识库没覆盖的问题模型会编（PDF 2.3 对外部搜索也是同一结论）。</div>
+</div>
+
+<div class="rule n2">
+  <div class="num">规则 2</div>
+  <div><b>数字只从表里读。</b>毛利、库存、成交价一律来自 miniapp 表的读取结果，模型只做减法叙述，不允许凭记忆或估算。</div>
+</div>
+
+<div class="rule n3">
+  <div class="num">规则 3</div>
+  <div><b>数据源不新鲜要显式说明。</b>跑批前检查源文件 mtime；缺失或过期时在简报里明写"数据源未更新（最后同步 X）"，
+  不允许拿旧数据当今天的数据讲。</div>
+</div>
+
+<h2 id="s4">4 · 风险与对策</h2>
+<table>
+<thead><tr><th>风险</th><th>影响</th><th>对策</th></tr></thead>
+<tbody>
+<tr>
+  <td>客户不导出 / 忘导出</td>
+  <td>数据不新鲜，2A 结论失真</td>
+  <td>把"每天导出"写进交付约定；跑批前校验 mtime，缺失时简报显式声明（见规则 3）</td>
+</tr>
+<tr>
+  <td>派生指标由模型计算</td>
+  <td>毛利算错，老板照错数字决策</td>
+  <td>口径固化为"表 + 列 + 公式"写进 SKILL；关键指标在简报里附原始行数供抽查</td>
+</tr>
+<tr>
+  <td>3A 话术库覆盖不足</td>
+  <td>店员问什么答什么，等于没有</td>
+  <td>SKILL 强制兜底话术（"问店长"）；把未命中问题记进 miniapp 表，周会上补话术</td>
+</tr>
+<tr>
+  <td>落到 light_app 表的数据被当成"应用数据"</td>
+  <td>后续做 1.1 直连时要迁移</td>
+  <td>表结构按标准四表设计并写进文档，直连时用 <code>mapping_json</code> 复用同一套列名</td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="s5">5 · 若只能做一件事</h2>
+<div class="lead">
+  <b>做 W0 的"标准四表 + Excel 导入"（半天）。</b>
+  <br><br>
+  理由：它是 3A / 3B / 2A / 2B' / 1.3 的共同前置，且<b>一行代码都不用写</b> ——
+  <code>upload</code> + <code>import</code> 两个 HTTP 端点已经够用；
+  而跳过它去做任何下游场景，都会在第一次接入客户数据时卡住。
+</div>
+
+<h2 id="s6">附 · 本计划依赖的现成能力索引</h2>
+<table>
+<thead><tr><th>能力</th><th>位置</th></tr></thead>
+<tbody>
+<tr><td>文件上传 → 工作区</td><td><code>api/routers/apps.py:2940</code> <code>POST /{app_id}/upload</code></td></tr>
+<tr><td>带映射导入（append/replace、upsert_key、sheet、header_row、dry_run）</td><td><code>api/routers/apps.py:2969</code> <code>POST /{app_id}/tables/{table_key}/import</code></td></tr>
+<tr><td>同能力的 Agent 工具版</td><td><code>infra/apps/tools.py:1188</code> <code>app_import_rows</code></td></tr>
+<tr><td>解析 Excel/CSV/JSON（含表头行偏移、合计行剔除）</td><td><code>infra/apps/importer.py:61</code> <code>parse_import_file</code></td></tr>
+<tr><td>工作区文件定时同步</td><td><code>light_app_sources</code> 的 <code>workspace_file</code> kind + <code>schedule_seconds</code>（<code>infra/db/migrations/025_light_apps.sql:68-79</code>）</td></tr>
+<tr><td>只读数据绑定 + 缓存 + 限流</td><td><code>infra/db/repos/app_services.py:31-46</code>（<code>allowed_tools</code> / <code>allowed_url_prefixes</code> / <code>cache_ttl_seconds</code>）</td></tr>
+<tr><td>图表（6 种 + sum/avg/count/min/max 服务端聚合）</td><td><code>infra/apps/charts.py:20</code></td></tr>
+<tr><td>防模型编数的只读助手</td><td><code>infra/apps/assistant.py</code></td></tr>
+<tr><td>cron 触发（cron:/interval:/date:/agently:）</td><td><code>infra/cron/trigger.py:77</code></td></tr>
+<tr><td>cron 跑 Agent 回合 → 推 IM</td><td><code>infra/cron/delivery.py:71,130</code></td></tr>
+<tr><td>IM 内发链接与预览图</td><td><code>infra/apps/tools.py:600-630,636</code> <code>app_share_link</code></td></tr>
+<tr><td>知识库检索（向量）</td><td><code>infra/knowledge/tools.py:15</code> <code>search_knowledge</code></td></tr>
+<tr><td>技能（渐进触发的规则文件）</td><td><code>infra/skills/</code>、<code>infra/agents/experts/library/.../SKILL.md</code></td></tr>
+<tr><td>外部搜索</td><td><code>infra/agents/settings/tool_catalog.py:72-76</code>、<code>infra/utils/search_probe.py:20</code></td></tr>
+</tbody>
+</table>
+
+<div class="foot">
+  <p>口径说明：本计划所有"现成能力"均指 Octop 仓库内已有、无需新增平台子系统的能力；
+  新增表一律是 miniapp 表（<code>light_app_tables</code> / <code>light_app_rows</code>），不新增数据库迁移。</p>
+  <p>关联文档：差距分析 <code>docs/retail-scenario-gap-analysis.md</code> ·
+  差距分析 HTML 版 <code>docs/retail-scenario-gap-analysis.html</code></p>
+</div>
+
+</div>
+</body>
+</html>

@@ -3,6 +3,7 @@ import { Image } from "antd";
 import { useTranslation } from "react-i18next";
 import { requestBlob } from "../../../../api/request";
 import { isNotFoundApiError } from "../../../../utils/apiError";
+import { fullscreenContainer } from "../../../../utils/overlayContainer";
 import {
   asImageBlob,
   toMediaPreviewSource,
@@ -144,7 +145,12 @@ function WorkspaceImage({
 
   return (
     <div className={styles.mediaPreviewFrame}>
-      <Image src={src} alt={filename} className={styles.mediaPreviewImage} />
+      <Image
+        src={src}
+        alt={filename}
+        className={styles.mediaPreviewImage}
+        preview={{ getContainer: fullscreenContainer }}
+      />
     </div>
   );
 }

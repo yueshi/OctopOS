@@ -240,6 +240,7 @@ def build_app(server: OctopServer) -> FastAPI:
         users,
         voice,
         workspace,
+        workspace_preview,
     )
     from octop.api.routers.decision import router as decision_router
     from octop.api.routers.filesystem import router as filesystem_router
@@ -316,6 +317,7 @@ def build_app(server: OctopServer) -> FastAPI:
             _RouterMount(hooks.router, "/api/hooks", ["external-events"]),
             _RouterMount(external_events.router, "/api/external", ["external-events"]),
             _RouterMount(workspace.router, "/api", ["workspace"]),
+            _RouterMount(workspace_preview.router, "/api", ["workspace"]),
             _RouterMount(agent_files.router, "/api", ["agent_files"]),
             _RouterMount(memory.router, "/api", ["memory"]),
             _RouterMount(memory_portable.router, "/api", ["memory"]),

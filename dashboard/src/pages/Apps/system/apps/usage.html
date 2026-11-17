@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>用量与预算</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: var(--sys-bg);
+        --sys-bg: #ffffff;
+        --sys-fg: #0f172a;
+        --sys-muted: #64748b;
+        --sys-line: #e2e8f0;
+        --sys-card: #f8fafc;
+        --sys-accent: #4f6ef7;
+        --sys-accent-soft: #eef2ff;
+        --sys-warn: #d97706;
+        --sys-danger: #dc2626;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --sys-bg: #111827;
+          --sys-fg: #e5e7eb;
+          --sys-muted: #94a3b8;
+          --sys-line: #334155;
+          --sys-card: #1e293b;
+          --sys-accent: #818cf8;
+          --sys-accent-soft: #1e1b4b;
+          --sys-warn: #fbbf24;
+          --sys-danger: #f87171;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        font:
+          13px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "Microsoft YaHei",
+          sans-serif;
+        overflow: auto;
+      }
+      .page {
+        padding: 18px 20px 24px;
+        max-width: 980px;
+        margin: 0 auto;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .header h1 {
+        font-size: 17px;
+        margin: 0;
+        font-weight: 650;
+        flex: 1 1 auto;
+      }
+      .ranges {
+        display: inline-flex;
+        background: var(--sys-card);
+        border: 1px solid var(--sys-line);
+        border-radius: 9px;
+        padding: 2px;
+      }
+      .ranges button {
+        border: 0;
+        background: transparent;
+        color: var(--sys-muted);
+        padding: 5px 10px;
+        border-radius: 7px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .ranges button[aria-pressed="true"] {
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        box-shadow: 0 1px 3px rgb(15 23 42 / 12%);
+      }
+      .refresh {
+        border: 1px solid var(--sys-line);
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        border-radius: 8px;
+        padding: 6px 11px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .refresh:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .updated {
+        color: var(--sys-muted);
+        font-size: 11px;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .stat {
+        background: var(--sys-card);
+        border: 1px solid var(--sys-line);
+        border-radius: 11px;
+        padding: 12px 13px;
+        min-width: 0;
+      }
+      .stat .label {
+        color: var(--sys-muted);
+        font-size: 11px;
+      }
+      .stat .value {
+        font-size: 22px;
+        font-weight: 650;
+        margin-top: 5px;
+        letter-spacing: -0.02em;
+      }
+      .stat .hint {
+        color: var(--sys-muted);
+        font-size: 11px;
+        margin-top: 3px;
+      }
+      .card {
+        background: var(--sys-bg);
+        border: 1px solid var(--sys-line);
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-top: 14px;
+      }
+      .card h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--sys-muted);
+        margin: 0 0 12px;
+        font-weight: 600;
+      }
+      .chart {
+        width: 100%;
+        height: 170px;
+        display: block;
+      }
+      .chart .bar {
+        fill: var(--sys-accent);
+        opacity: 0.85;
+      }
+      .chart .bar:hover {
+        opacity: 1;
+      }
+      .chart .axis {
+        stroke: var(--sys-line);
+        stroke-width: 1;
+      }
+      .chart text {
+        fill: var(--sys-muted);
+        font-size: 9px;
+      }
+      .models {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .model {
+        display: grid;
+        grid-template-columns: minmax(90px, 1.4fr) minmax(90px, 2fr) auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .model .name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .model .track {
+        height: 7px;
+        background: var(--sys-card);
+        border-radius: 999px;
+        overflow: hidden;
+        border: 1px solid var(--sys-line);
+      }
+      .model .fill {
+        height: 100%;
+        background: var(--sys-accent);
+        border-radius: 999px;
+      }
+      .model .meta {
+        color: var(--sys-muted);
+        font-size: 11px;
+        text-align: right;
+        white-space: nowrap;
+      }
+      .budget-track {
+        height: 10px;
+        background: var(--sys-card);
+        border-radius: 999px;
+        overflow: hidden;
+        border: 1px solid var(--sys-line);
+      }
+      .budget-fill {
+        height: 100%;
+        background: var(--sys-accent);
+      }
+      .budget-fill.warn {
+        background: var(--sys-warn);
+      }
+      .budget-fill.danger {
+        background: var(--sys-danger);
+      }
+      .budget-meta {
+        display: flex;
+        justify-content: space-between;
+        color: var(--sys-muted);
+        font-size: 11px;
+        margin-top: 7px;
+        gap: 12px;
+      }
+      .state {
+        padding: 36px 12px;
+        text-align: center;
+        color: var(--sys-muted);
+      }
+      .error {
+        color: var(--sys-danger);
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid var(--sys-line);
+        border-top-color: var(--sys-accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin: 0 auto 10px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (max-width: 560px) {
+        .page {
+          padding: 14px;
+        }
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .model {
+          grid-template-columns: 1fr auto;
+        }
+        .model .track {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <h1 id="title">用量与预算</h1>
+        <div class="ranges" id="ranges" role="group" aria-label="时间范围">
+          <button type="button" data-window="today">今日</button>
+          <button type="button" data-window="last_7d">7 天</button>
+          <button type="button" data-window="last_30d" aria-pressed="true">
+            30 天
+          </button>
+        </div>
+        <button type="button" class="refresh" id="refresh">刷新</button>
+      </div>
+      <div class="updated" id="updated"></div>
+      <div id="content"></div>
+    </div>
+    <script>
+      (function () {
+        var locale =
+          (window.octopSystem && window.octopSystem.locale) === "en"
+            ? "en"
+            : "zh";
+        var STRINGS = {
+          zh: {
+            title: "用量与预算",
+            total: "总 Token",
+            calls: "模型调用",
+            cache: "缓存命中率",
+            turns: "对话轮次",
+            trend: "每日趋势",
+            models: "按模型",
+            budget: "预算",
+            budgetUsed: "已用 {used} / {limit}",
+            budgetUnlimited: "未设置预算上限",
+            empty: "这个专家最近还没有产生模型调用。",
+            error: "加载失败",
+            retry: "重试",
+            updated: "刚刚更新",
+            noModels: "暂无模型数据",
+            input: "输入",
+            output: "输出",
+            perTurn: "平均 {value} / 轮",
+            today: "今日",
+            seven: "7 天",
+            thirty: "30 天",
+          },
+          en: {
+            title: "Usage & budget",
+            total: "Total tokens",
+            calls: "Model calls",
+            cache: "Cache hit rate",
+            turns: "Turns",
+            trend: "Daily trend",
+            models: "By model",
+            budget: "Budget",
+            budgetUsed: "{used} / {limit} used",
+            budgetUnlimited: "No budget limit",
+            empty: "No model calls yet for this expert.",
+            error: "Could not load usage",
+            retry: "Retry",
+            updated: "Updated just now",
+            noModels: "No model data",
+            input: "Input",
+            output: "Output",
+            perTurn: "{value} avg / turn",
+            today: "Today",
+            seven: "7 days",
+            thirty: "30 days",
+          },
+        };
+        var text = STRINGS[locale] || STRINGS.zh;
+        var state = {
+          window: "last_30d",
+          loading: false,
+          error: "",
+          day: null,
+          model: null,
+          budget: null,
+        };
+
+        function $(id) {
+          return document.getElementById(id);
+        }
+        function fmt(template, values) {
+          return template.replace(/\{(\w+)\}/g, function (_m, key) {
+            return values && key in values ? String(values[key]) : "";
+          });
+        }
+        function fmtNumber(value) {
+          try {
+            return new Intl.NumberFormat(
+              locale === "en" ? "en" : "zh-CN",
+            ).format(value || 0);
+          } catch (e) {
+            return String(value || 0);
+          }
+        }
+        function fmtCompact(value) {
+          var n = Number(value) || 0;
+          if (n >= 1000000)
+            return (n / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+          if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+          return String(Math.round(n));
+        }
+        function fmtPercent(value) {
+          var n = Number(value) || 0;
+          return n.toFixed(1).replace(/\.0$/, "") + "%";
+        }
+        function setRanges() {
+          var labels = {
+            today: text.today,
+            last_7d: text.seven,
+            last_30d: text.thirty,
+          };
+          Array.prototype.forEach.call(
+            document.querySelectorAll("#ranges button"),
+            function (button) {
+              var key = button.getAttribute("data-window");
+              button.textContent = labels[key] || key;
+              button.setAttribute(
+                "aria-pressed",
+                key === state.window ? "true" : "false",
+              );
+            },
+          );
+        }
+        function renderState() {
+          var host = $("content");
+          if (state.loading) {
+            host.innerHTML =
+              '<div class="state"><div class="spinner"></div><div>Loading…</div></div>';
+            return;
+          }
+          if (state.error) {
+            host.innerHTML =
+              '<div class="state error"><div>' +
+              escapeHtml(text.error) +
+              '</div><div style="margin-top:8px">' +
+              escapeHtml(state.error) +
+              '</div><div style="margin-top:12px"><button class="refresh" id="retry">' +
+              escapeHtml(text.retry) +
+              "</button></div></div>";
+            var retry = $("retry");
+            if (retry) retry.addEventListener("click", load);
+            return;
+          }
+          if (
+            !state.day ||
+            !(state.day.total_tokens || state.day.model_calls)
+          ) {
+            host.innerHTML =
+              '<div class="state">' + escapeHtml(text.empty) + "</div>";
+            return;
+          }
+          renderUsage();
+        }
+        function escapeHtml(value) {
+          return String(value == null ? "" : value).replace(
+            /[&<>"']/g,
+            function (ch) {
+              return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              }[ch];
+            },
+          );
+        }
+        function renderUsage() {
+          var day = state.day || {};
+          var model = state.model || { buckets: [] };
+          var budget = state.budget || {};
+          var host = $("content");
+          host.innerHTML = "";
+
+          var stats = document.createElement("div");
+          stats.className = "stats";
+          [
+            {
+              label: text.total,
+              value: fmtCompact(day.total_tokens),
+              hint: fmt(text.perTurn, { value: fmtCompact(day.avg_per_turn) }),
+            },
+            {
+              label: text.calls,
+              value: fmtNumber(day.model_calls),
+              hint: "turns " + fmtNumber(day.turns),
+            },
+            {
+              label: text.cache,
+              value: fmtPercent(day.cache_hit_percent),
+              hint: fmtCompact(day.cache_read_tokens) + " cached",
+            },
+            {
+              label: text.turns,
+              value: fmtNumber(day.turns),
+              hint:
+                "in " +
+                fmtCompact(day.input_tokens) +
+                " / out " +
+                fmtCompact(day.output_tokens),
+            },
+          ].forEach(function (item) {
+            var card = document.createElement("div");
+            card.className = "stat";
+            var label = document.createElement("div");
+            label.className = "label";
+            label.textContent = item.label;
+            var value = document.createElement("div");
+            value.className = "value";
+            value.textContent = item.value;
+            var hint = document.createElement("div");
+            hint.className = "hint";
+            hint.textContent = item.hint;
+            card.appendChild(label);
+            card.appendChild(value);
+            card.appendChild(hint);
+            stats.appendChild(card);
+          });
+          host.appendChild(stats);
+
+          host.appendChild(renderChart(day.buckets || []));
+
+          var modelCard = document.createElement("div");
+          modelCard.className = "card";
+          var modelTitle = document.createElement("h2");
+          modelTitle.textContent = text.models;
+          modelCard.appendChild(modelTitle);
+          var models = (model.buckets || []).filter(function (bucket) {
+            return bucket.total_tokens > 0;
+          });
+          if (!models.length) {
+            var empty = document.createElement("div");
+            empty.className = "state";
+            empty.textContent = text.noModels;
+            modelCard.appendChild(empty);
+          } else {
+            var list = document.createElement("div");
+            list.className = "models";
+            var max =
+              Math.max.apply(
+                null,
+                models.map(function (bucket) {
+                  return bucket.total_tokens || 0;
+                }),
+              ) || 1;
+            models.slice(0, 8).forEach(function (bucket) {
+              var row = document.createElement("div");
+              row.className = "model";
+              var name = document.createElement("div");
+              name.className = "name";
+              name.textContent = bucket.label || bucket.key || "—";
+              var track = document.createElement("div");
+              track.className = "track";
+              var fill = document.createElement("div");
+              fill.className = "fill";
+              fill.style.width =
+                Math.max(
+                  2,
+                  Math.round(((bucket.total_tokens || 0) / max) * 100),
+                ) + "%";
+              track.appendChild(fill);
+              var meta = document.createElement("div");
+              meta.className = "meta";
+              meta.textContent =
+                fmtCompact(bucket.total_tokens) +
+                " · " +
+                fmtNumber(bucket.model_calls) +
+                " calls";
+              row.appendChild(name);
+              row.appendChild(track);
+              row.appendChild(meta);
+              list.appendChild(row);
+            });
+            modelCard.appendChild(list);
+          }
+          host.appendChild(modelCard);
+
+          var budgetCard = document.createElement("div");
+          budgetCard.className = "card";
+          var budgetTitle = document.createElement("h2");
+          budgetTitle.textContent = text.budget;
+          budgetCard.appendChild(budgetTitle);
+          if (!budget.limit) {
+            var noLimit = document.createElement("div");
+            noLimit.className = "updated";
+            noLimit.textContent = text.budgetUnlimited;
+            budgetCard.appendChild(noLimit);
+          } else {
+            var ratio = Math.max(
+              0,
+              Math.min(1, (budget.used || 0) / budget.limit),
+            );
+            var track = document.createElement("div");
+            track.className = "budget-track";
+            var fill = document.createElement("div");
+            fill.className =
+              "budget-fill" +
+              (ratio >= 0.9 ? " danger" : ratio >= 0.7 ? " warn" : "");
+            fill.style.width = Math.round(ratio * 100) + "%";
+            track.appendChild(fill);
+            budgetCard.appendChild(track);
+            var meta = document.createElement("div");
+            meta.className = "budget-meta";
+            var left = document.createElement("span");
+            left.textContent = fmt(text.budgetUsed, {
+              used: fmtCompact(budget.used),
+              limit: fmtCompact(budget.limit),
+            });
+            var right = document.createElement("span");
+            right.textContent = fmtCompact(budget.remaining) + " left";
+            meta.appendChild(left);
+            meta.appendChild(right);
+            budgetCard.appendChild(meta);
+          }
+          host.appendChild(budgetCard);
+        }
+        function renderChart(buckets) {
+          var card = document.createElement("div");
+          card.className = "card";
+          var title = document.createElement("h2");
+          title.textContent = text.trend;
+          card.appendChild(title);
+          var rows = (buckets || []).slice(-30);
+          if (!rows.length) {
+            var empty = document.createElement("div");
+            empty.className = "state";
+            empty.textContent = text.empty;
+            card.appendChild(empty);
+            return card;
+          }
+          var width = 640,
+            height = 150,
+            pad = 18;
+          var max =
+            Math.max.apply(
+              null,
+              rows.map(function (row) {
+                return row.total_tokens || 0;
+              }),
+            ) || 1;
+          var svg = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "svg",
+          );
+          svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+          svg.setAttribute("class", "chart");
+          svg.setAttribute("role", "img");
+          svg.setAttribute("aria-label", text.trend);
+          var axis = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "line",
+          );
+          axis.setAttribute("x1", pad);
+          axis.setAttribute("x2", width - pad);
+          axis.setAttribute("y1", height - pad);
+          axis.setAttribute("y2", height - pad);
+          axis.setAttribute("class", "axis");
+          svg.appendChild(axis);
+          var step = (width - pad * 2) / Math.max(1, rows.length);
+          var barWidth = Math.max(3, Math.min(28, step * 0.62));
+          rows.forEach(function (row, index) {
+            var value = row.total_tokens || 0;
+            var barHeight = Math.max(
+              value > 0 ? 2 : 0,
+              (value / max) * (height - pad * 2 - 8),
+            );
+            var rect = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "rect",
+            );
+            rect.setAttribute("class", "bar");
+            rect.setAttribute(
+              "x",
+              String(pad + index * step + (step - barWidth) / 2),
+            );
+            rect.setAttribute("y", String(height - pad - barHeight));
+            rect.setAttribute("width", String(barWidth));
+            rect.setAttribute("height", String(barHeight));
+            rect.setAttribute("rx", "2");
+            var tip = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "title",
+            );
+            tip.textContent =
+              (row.label || row.key || "") +
+              ": " +
+              fmtNumber(value) +
+              " tokens";
+            rect.appendChild(tip);
+            svg.appendChild(rect);
+          });
+          if (rows.length) {
+            var first = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "text",
+            );
+            first.setAttribute("x", String(pad));
+            first.setAttribute("y", String(height - 4));
+            first.textContent = rows[0].label || rows[0].key || "";
+            svg.appendChild(first);
+            var last = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "text",
+            );
+            last.setAttribute("x", String(width - pad));
+            last.setAttribute("y", String(height - 4));
+            last.setAttribute("text-anchor", "end");
+            last.textContent =
+              rows[rows.length - 1].label || rows[rows.length - 1].key || "";
+            svg.appendChild(last);
+          }
+          card.appendChild(svg);
+          return card;
+        }
+        function load() {
+          if (!window.octopSystem) return;
+          state.loading = true;
+          state.error = "";
+          renderState();
+          var windowKey = state.window;
+          Promise.all([
+            window.octopSystem.query("usage.summary", {
+              window: windowKey,
+              granularity: "by_day",
+            }),
+            window.octopSystem.query("usage.summary", {
+              window: windowKey,
+              granularity: "by_model",
+            }),
+            window.octopSystem.query("agent.metrics", { window: windowKey }),
+          ])
+            .then(function (results) {
+              state.day = results[0] || {};
+              state.model = results[1] || {};
+              state.budget = (results[2] && results[2].budget) || {};
+              state.loading = false;
+              $("updated").textContent = text.updated;
+              renderState();
+            })
+            .catch(function (error) {
+              state.loading = false;
+              state.error =
+                error && error.message ? error.message : String(error);
+              renderState();
+            });
+        }
+        document.querySelectorAll("#ranges button").forEach(function (button) {
+          button.addEventListener("click", function () {
+            state.window = button.getAttribute("data-window") || "last_30d";
+            setRanges();
+            load();
+          });
+        });
+        $("refresh").addEventListener("click", load);
+        $("title").textContent = text.title;
+        setRanges();
+        load();
+      })();
+    </script>
+  </body>
+</html>

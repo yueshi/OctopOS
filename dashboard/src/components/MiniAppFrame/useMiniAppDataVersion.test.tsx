@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { appsApi } from "../../api/modules/apps";
 import {
+  MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS,
   MINIAPP_DATA_VERSION_POLL_MS,
   useMiniAppDataVersion,
 } from "./useMiniAppDataVersion";
@@ -83,6 +84,70 @@ describe("useMiniAppDataVersion", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(appsApi.dataVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls at the caller's interval, including the background cadence", async () => {
+    const postMessage = vi.fn();
+    vi.mocked(appsApi.dataVersion).mockResolvedValue({
+      tables: [{ table_key: "main", data_version: 1, row_count: 1 }],
+    });
+
+    renderHook(() =>
+      useMiniAppDataVersion(
+        "app_1",
+        fakeFrameRef(postMessage),
+        true,
+        MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS,
+      ),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(appsApi.dataVersion).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINIAPP_DATA_VERSION_POLL_MS);
+    });
+    expect(appsApi.dataVersion).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(
+        MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS - MINIAPP_DATA_VERSION_POLL_MS,
+      );
+    });
+    expect(appsApi.dataVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a change that happened while the frame was disabled", async () => {
+    const postMessage = vi.fn();
+    vi.mocked(appsApi.dataVersion)
+      .mockResolvedValueOnce({
+        tables: [{ table_key: "main", data_version: 1, row_count: 1 }],
+      })
+      .mockResolvedValueOnce({
+        tables: [{ table_key: "main", data_version: 2, row_count: 2 }],
+      });
+
+    const { rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useMiniAppDataVersion("app_1", fakeFrameRef(postMessage), enabled),
+      { initialProps: { enabled: true } },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(postMessage).not.toHaveBeenCalled();
+
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "data-changed" }),
+      "*",
+    );
   });
 
   it("stays quiet while the versions are unchanged", async () => {

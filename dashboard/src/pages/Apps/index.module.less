@@ -1738,6 +1738,27 @@
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 30%));
 }
 
+.desktopIconArtSystem {
+  --icon-angle: 145deg;
+  --icon-from: #0f766e;
+  --icon-to: #0e7490;
+}
+
+.desktopIconSystemTag {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  z-index: 2;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgb(15 23 42 / 42%);
+  color: rgb(255 255 255 / 88%);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+
 .desktopIconBadge {
   position: absolute;
   right: 2px;
@@ -1750,7 +1771,9 @@
   padding: 0 4px;
   border: 1.5px solid rgb(255 255 255 / 82%);
   border-radius: 999px;
-  background: linear-gradient(180deg, #ff6b6b, #ff2d55);
+  /* Row count is metadata, not an alert: a dark glass chip keeps the red
+     notification color reserved for unread/error badges. */
+  background: rgb(15 23 42 / 62%);
   color: #fff;
   font-size: 9px;
   font-weight: 600;
@@ -1809,10 +1832,39 @@
   padding-top: 18px;
   overflow-x: auto;
   transform: translateX(-50%);
+  transition:
+    transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.18s ease;
   scrollbar-width: none;
 
   &::-webkit-scrollbar {
     display: none;
+  }
+}
+
+.desktopDockHidden {
+  transform: translate(-50%, calc(100% + 28px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* A thin bottom-edge trigger; windows can use the full height while hidden. */
+.desktopDockHotspot {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  z-index: 7;
+  width: min(440px, 70%);
+  height: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+  transform: translateX(-50%);
+
+  &:focus-visible {
+    outline: 2px solid rgb(255 255 255 / 70%);
+    outline-offset: -2px;
   }
 }
 
@@ -2099,6 +2151,17 @@
 }
 
 /* Delayed-unload placeholder: the iframe is gone, the window chrome stays. */
+/* Iframes swallow pointerdown, so a background app/web/HTML window needs a
+   transparent catcher to be raised from its content area. The title bar is
+   outside this layer and keeps one-click focus/drag. */
+.desktopWindowFocusShield {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: transparent;
+  cursor: default;
+}
+
 .desktopWindowSuspended {
   display: flex;
   align-items: center;
@@ -3893,6 +3956,115 @@
   text-align: center;
 }
 
+.desktopChatSplit {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.desktopChatMain {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* In-window plugin tool panel (AppCard "open in sidebar"). It stays inside
+   the desktop window — no body-level Drawer or portal. */
+.desktopChatToolPanel {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: min(52%, 420px);
+  min-width: 200px;
+  min-height: 0;
+  border-left: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.desktopChatToolPanelHeader {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid #e8edf4;
+  background: #fff;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.desktopChatToolPanelTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopChatToolPanelClose {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+
+  &:hover {
+    background: #f1f5f9;
+    color: #475569;
+  }
+
+  &:focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: 1px;
+  }
+}
+
+.desktopChatToolPanelContent {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.desktopChatToolPanelFrame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.desktopChatToolPanelBody {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.desktopChatToolPanelMissing {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #94a3b8;
+  font-size: 11px;
+  text-align: center;
+}
+
 .desktopChatBody {
   display: flex;
   flex: 1;
@@ -5084,4 +5256,510 @@
   65% {
     transform: translateY(-1px) rotate(2deg);
   }
+}
+
+/* ── Desktop Files window ─────────────────────────────────────────────── */
+
+.desktopFiles {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.desktopFilesToolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.desktopFilesSpacer {
+  flex: 1;
+}
+
+.desktopFilesIconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: #f1f5f9;
+    color: #0f172a;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+.desktopFilesBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.desktopFilesList {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  min-width: 220px;
+  max-width: 45%;
+  overflow: auto;
+  border-right: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.desktopFilesGroup {
+  padding-bottom: 4px;
+}
+
+.desktopFilesGroupHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 5px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.desktopFilesGroupTime {
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.desktopFilesItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: #f1f5f9;
+  }
+}
+
+.desktopFilesItemActive {
+  background: #eef2ff;
+
+  &:hover {
+    background: #e0e7ff;
+  }
+}
+
+.desktopFilesItemIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.desktopFilesItemBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.desktopFilesItemName {
+  overflow: hidden;
+  color: #0f172a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopFilesItemMeta {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopFilesTree {
+  padding: 6px 4px;
+  background: transparent;
+}
+
+.desktopFilesTreeNode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.desktopFilesTreeIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.desktopFilesTreeName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopFilesViewer {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: #fff;
+}
+
+.desktopFilesViewerPane {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.desktopFilesViewerBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.desktopFilesViewerPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopFilesViewerBody {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.desktopFilesHtmlFrame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.desktopFilesSource {
+  margin: 0;
+  padding: 12px;
+  height: 100%;
+  overflow: auto;
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.desktopFilesCenter {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.desktopFilesStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  border-top: 1px solid #e2e8f0;
+  background: #fff;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.desktopFilesLinkButton {
+  display: block;
+  margin: 6px auto 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4f46e5;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.desktopHtmlWindow {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #fff;
+}
+
+/* ── Desktop Browser window ───────────────────────────────────────────── */
+
+.desktopBrowser {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.desktopBrowserBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.desktopBrowserGlobe {
+  flex: 0 0 auto;
+  color: #94a3b8;
+}
+
+.desktopBrowserAddress {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 12px;
+  outline: none;
+
+  &:focus {
+    border-color: #6366f1;
+    background: #fff;
+    box-shadow: 0 0 0 2px rgb(99 102 241 / 15%);
+  }
+
+  &::placeholder {
+    color: #94a3b8;
+  }
+}
+
+.desktopBrowserButton {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid #4f46e5;
+  border-radius: 8px;
+  background: #4f46e5;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+.desktopBrowserIconButton {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+
+  &:hover {
+    background: #f1f5f9;
+    color: #0f172a;
+  }
+}
+
+.desktopBrowserError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.desktopBrowserBody {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+
+.desktopBrowserFrame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.desktopBrowserLoading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(255 255 255 / 78%);
+  color: #64748b;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.desktopBrowserBlank {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.desktopBrowserBlankTitle {
+  margin: 4px 0 0;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.desktopBrowserBlankHint {
+  max-width: 360px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.desktopBrowserContext {
+  margin-top: 8px;
+  color: #cbd5e1;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+/* Guard for embedding the dashboard itself inside one of its web windows. */
+.desktopConsoleNotice {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 26px;
+  background: #f8fafc;
+  color: #334155;
+  text-align: center;
+
+  strong {
+    font-size: 13px;
+  }
+
+  p {
+    max-width: 400px;
+    margin: 0;
+    color: #64748b;
+    font-size: 11.5px;
+    line-height: 1.6;
+  }
+}
+
+.desktopConsoleNoticeIcon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 15px;
+  background: color-mix(in srgb, #6366f1 12%, #fff);
+  color: #4f46e5;
+}
+
+.desktopConsoleNoticeActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.desktopConsoleNoticePrimary,
+.desktopConsoleNoticeSecondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.desktopConsoleNoticePrimary {
+  border: 1px solid #4f46e5;
+  background: #4f46e5;
+  color: #fff;
+
+  &:hover {
+    background: #4338ca;
+  }
+}
+
+.desktopConsoleNoticeSecondary {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+
+  &:hover {
+    border-color: #cbd5e1;
+    background: #f1f5f9;
+  }
+}
+
+.desktopFilesErrorHint {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 11px;
 }

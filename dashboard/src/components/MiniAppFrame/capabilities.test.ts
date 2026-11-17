@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { CAP, effectiveCapabilities, isMethodAllowed } from "./capabilities";
+import {
+  ALL_CAPABILITIES,
+  CAP,
+  SYSTEM_CAP,
+  effectiveCapabilities,
+  isMethodAllowed,
+} from "./capabilities";
 
 describe("MiniApp capabilities", () => {
   it("treats an older payload without a manifest as legacy all-on", () => {
@@ -36,6 +42,13 @@ describe("MiniApp capabilities", () => {
 
   it("always allows the page to ask about itself", () => {
     expect(isMethodAllowed("me", [])).toBe(true);
+  });
+
+  it("never grants system capabilities to regular or legacy apps", () => {
+    expect(ALL_CAPABILITIES).not.toContain(SYSTEM_CAP.READ);
+    expect(ALL_CAPABILITIES).not.toContain(SYSTEM_CAP.OPEN_CONSOLE);
+    expect(effectiveCapabilities(undefined)).not.toContain(SYSTEM_CAP.READ);
+    expect(isMethodAllowed("systemQuery", undefined)).toBe(false);
   });
 
   it("denies methods it does not know", () => {

@@ -31,6 +31,7 @@ import {
   workspacePathFromAccessUrl,
 } from "../../../utils/toolMediaBlocks";
 import { isImeComposing } from "../../../utils/ime";
+import { fullscreenContainer } from "../../../utils/overlayContainer";
 import { formatMessageTime } from "../../../utils/formatMessageTime";
 import { copyText } from "../../../utils/copyText";
 import { useServerTimezone } from "../../../hooks/useServerTimezone";
@@ -72,6 +73,7 @@ import {
 } from "../../../plugins/toolRenderers";
 import { BuiltinOctopUiFallback } from "../../../plugins/toolRenderers/builtin/BuiltinOctopUiFallback";
 import { ToolUiErrorBoundary } from "../../../plugins/toolRenderers/ToolUiErrorBoundary";
+import { useToolHostOverrides } from "../../../plugins/toolRenderers/ToolHostScope";
 import { remotePluginUiUnavailable } from "../../../plugins/toolRenderers/remotePluginUi";
 import {
   lookupPluginIdForTool,
@@ -284,7 +286,7 @@ function ImageGallery({
 
   return (
     <div className={styles.messageImages}>
-      <Image.PreviewGroup>
+      <Image.PreviewGroup preview={{ getContainer: fullscreenContainer }}>
         {images.map((img, idx) => (
           <RefreshableImage
             key={`${img.url}-${idx}`}
@@ -416,6 +418,22 @@ export function ToolDetailsInline({
     [toolData.name, pluginId, parsed, rendererVersion],
   );
 
+  const hostOverrides = useToolHostOverrides();
+  const registrationHost = useMemo(
+    () =>
+      registration && registration.pluginId !== "builtin"
+        ? createPluginUiHost(registration.pluginId)
+        : builtinPluginHost,
+    [registration],
+  );
+  const host = useMemo(
+    () =>
+      hostOverrides
+        ? { ...registrationHost, ...hostOverrides }
+        : registrationHost,
+    [hostOverrides, registrationHost],
+  );
+
   const status: ToolRenderStatus = toolData.errorCode
     ? "error"
     : toolData.output !== undefined
@@ -440,10 +458,7 @@ export function ToolDetailsInline({
     args,
     data: resolvedData,
     textFallback: parsed.text,
-    host:
-      registration && registration.pluginId !== "builtin"
-        ? createPluginUiHost(registration.pluginId)
-        : builtinPluginHost,
+    host,
     output: toolData.output,
     docked: forceInline,
     isStreaming,

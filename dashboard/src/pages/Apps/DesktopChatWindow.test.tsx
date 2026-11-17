@@ -39,11 +39,56 @@ vi.mock("../Chat/hooks/useChat", () => ({
   useChat: mockUseChat,
 }));
 
-vi.mock("../Chat/components/MessageList", () => ({
-  default: ({ messages }: { messages: unknown[] }) => (
-    <div data-testid="message-list" data-count={messages.length} />
-  ),
-}));
+vi.mock("../Chat/components/MessageList", async () => {
+  const { useChatFilePreview } = await import("../Chat/ChatFilePreviewContext");
+  const { useToolHostOverrides } = await import(
+    "../../plugins/toolRenderers/ToolHostScope"
+  );
+  return {
+    default: function MockMessageList({
+      messages,
+      onEditFile,
+      compactProcess,
+    }: {
+      messages: unknown[];
+      onEditFile?: () => void;
+      compactProcess?: boolean;
+    }) {
+      const preview = useChatFilePreview();
+      const hostOverrides = useToolHostOverrides();
+      return (
+        <div
+          data-testid="message-list"
+          data-count={messages.length}
+          data-compact-process={compactProcess ? "true" : "false"}
+        >
+          <button
+            type="button"
+            data-testid="mock-file-preview"
+            onClick={() =>
+              preview?.openFilePreview("outbound/report.html", "agent_1")
+            }
+          />
+          <button
+            type="button"
+            data-testid="mock-edit-file"
+            onClick={() => onEditFile?.()}
+          />
+          <button
+            type="button"
+            data-testid="mock-open-side-panel"
+            onClick={() =>
+              hostOverrides?.openSidePanel({
+                callId: "call_panel",
+                title: "客户台账",
+              })
+            }
+          />
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("../Chat/components/ChatInput", async () => {
   const React = await import("react");
@@ -210,6 +255,11 @@ describe("DesktopChatWindow", () => {
       "data-count",
       "2",
     );
+    // The desktop chat must not suppress thinking/tool process content.
+    expect(screen.getByTestId("message-list")).toHaveAttribute(
+      "data-compact-process",
+      "false",
+    );
   });
 
   it("prefills an app action into the composer", async () => {
@@ -373,6 +423,94 @@ describe("DesktopChatWindow", () => {
         getDesktopNotifications().some((item) => item.kind === "security"),
       ).toBe(true),
     );
+  });
+
+  it("opens the files window from the header", async () => {
+    const onOpenFiles = vi.fn();
+    render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+        onOpenFiles={onOpenFiles}
+      />,
+    );
+
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("desktop-chat-files"));
+
+    expect(onOpenFiles).toHaveBeenCalledWith("agent_1", "thr_dash");
+  });
+
+  it("opens a chat file card in the desktop files window", async () => {
+    mockChat({ messages: [{ id: "m1" }] });
+    const onOpenFile = vi.fn();
+    render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+        onOpenFile={onOpenFile}
+      />,
+    );
+
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("mock-file-preview"));
+
+    expect(onOpenFile).toHaveBeenCalledWith(
+      "outbound/report.html",
+      "agent_1",
+      "thr_dash",
+    );
+  });
+
+  it("opens plugin tool UIs in an in-window side panel", async () => {
+    mockChat({ messages: [{ id: "m1" }] });
+    render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+      />,
+    );
+
+    await screen.findByText("客户跟进");
+    expect(
+      screen.queryByTestId("desktop-chat-tool-panel"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("mock-open-side-panel"));
+
+    const panel = screen.getByTestId("desktop-chat-tool-panel");
+    expect(panel).toHaveTextContent("客户台账");
+    expect(panel).toHaveTextContent("no longer available");
+
+    fireEvent.click(screen.getByTestId("desktop-chat-tool-panel-close"));
+    expect(
+      screen.queryByTestId("desktop-chat-tool-panel"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens generated files in the desktop files window", async () => {
+    mockChat({ messages: [{ id: "m1" }] });
+    const onOpenFiles = vi.fn();
+    render(
+      <DesktopChatWindow
+        agentId="agent_1"
+        agentName="销售助理"
+        agent={agent}
+        apps={[app]}
+        onOpenFiles={onOpenFiles}
+      />,
+    );
+
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("mock-edit-file"));
+
+    expect(onOpenFiles).toHaveBeenCalledWith("agent_1", "thr_dash");
   });
 
   it("hides the admin proxy banner for owners and non-admins", async () => {

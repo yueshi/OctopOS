@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>任务</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: var(--sys-bg);
+        --sys-bg: #ffffff;
+        --sys-fg: #0f172a;
+        --sys-muted: #64748b;
+        --sys-line: #e2e8f0;
+        --sys-card: #f8fafc;
+        --sys-accent: #4f6ef7;
+        --sys-ok: #16a34a;
+        --sys-warn: #d97706;
+        --sys-danger: #dc2626;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --sys-bg: #111827;
+          --sys-fg: #e5e7eb;
+          --sys-muted: #94a3b8;
+          --sys-line: #334155;
+          --sys-card: #1e293b;
+          --sys-accent: #818cf8;
+          --sys-ok: #4ade80;
+          --sys-warn: #fbbf24;
+          --sys-danger: #f87171;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        font:
+          13px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "Microsoft YaHei",
+          sans-serif;
+        overflow: auto;
+      }
+      .page {
+        padding: 18px 20px 24px;
+        max-width: 980px;
+        margin: 0 auto;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .header h1 {
+        font-size: 17px;
+        margin: 0;
+        font-weight: 650;
+        flex: 1;
+      }
+      .refresh {
+        border: 1px solid var(--sys-line);
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        border-radius: 8px;
+        padding: 6px 11px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .stat {
+        background: var(--sys-card);
+        border: 1px solid var(--sys-line);
+        border-radius: 11px;
+        padding: 12px 13px;
+      }
+      .stat .label {
+        color: var(--sys-muted);
+        font-size: 11px;
+      }
+      .stat .value {
+        font-size: 21px;
+        font-weight: 650;
+        margin-top: 4px;
+      }
+      .stat .value.danger {
+        color: var(--sys-danger);
+      }
+      .card {
+        border: 1px solid var(--sys-line);
+        border-radius: 12px;
+        margin-top: 14px;
+        overflow: hidden;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--sys-line);
+      }
+      .card-head h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--sys-muted);
+        margin: 0;
+        font-weight: 600;
+        flex: 1;
+      }
+      .manage {
+        border: 1px solid var(--sys-line);
+        background: var(--sys-bg);
+        color: var(--sys-accent);
+        border-radius: 7px;
+        padding: 4px 9px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 11px;
+      }
+      .row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--sys-line);
+      }
+      .row:last-child {
+        border-bottom: 0;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--sys-muted);
+        margin-top: 5px;
+        flex: 0 0 auto;
+      }
+      .dot.ok {
+        background: var(--sys-ok);
+      }
+      .dot.off {
+        background: var(--sys-muted);
+      }
+      .dot.bad {
+        background: var(--sys-danger);
+      }
+      .row-main {
+        flex: 1;
+        min-width: 0;
+      }
+      .row-name {
+        font-weight: 550;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row-meta {
+        color: var(--sys-muted);
+        font-size: 11px;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row-error {
+        color: var(--sys-danger);
+        font-size: 11px;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .run {
+        border: 1px solid var(--sys-line);
+        background: var(--sys-bg);
+        color: var(--sys-accent);
+        border-radius: 7px;
+        padding: 4px 9px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .run:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .empty {
+        padding: 22px 14px;
+        color: var(--sys-muted);
+        text-align: center;
+      }
+      .state {
+        padding: 36px 12px;
+        text-align: center;
+        color: var(--sys-muted);
+      }
+      .error {
+        color: var(--sys-danger);
+      }
+      .notice {
+        margin-top: 10px;
+        color: var(--sys-warn);
+        font-size: 12px;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid var(--sys-line);
+        border-top-color: var(--sys-accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin: 0 auto 10px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (max-width: 560px) {
+        .page {
+          padding: 14px;
+        }
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <h1 id="title">任务</h1>
+        <button type="button" class="refresh" id="refresh">刷新</button>
+      </div>
+      <div id="notice" class="notice" hidden></div>
+      <div id="content"></div>
+    </div>
+    <script>
+      (function () {
+        var locale =
+          (window.octopSystem && window.octopSystem.locale) === "en"
+            ? "en"
+            : "zh";
+        var STRINGS = {
+          zh: {
+            title: "任务",
+            total: "定时任务",
+            enabled: "已启用",
+            failing: "最近失败",
+            manage: "管理任务",
+            empty: "这个专家还没有定时任务。",
+            run: "立即运行",
+            enabledTag: "启用",
+            disabledTag: "停用",
+            scheduled: "已排期",
+            unscheduled: "未排期",
+            lastStatus: "最近状态",
+            error: "加载失败",
+            retry: "重试",
+            loading: "加载中…",
+            actionFailed: "运行失败",
+          },
+          en: {
+            title: "Tasks",
+            total: "Scheduled jobs",
+            enabled: "Enabled",
+            failing: "Recently failed",
+            manage: "Manage tasks",
+            empty: "No scheduled jobs for this expert yet.",
+            run: "Run now",
+            enabledTag: "Enabled",
+            disabledTag: "Disabled",
+            scheduled: "Scheduled",
+            unscheduled: "Not scheduled",
+            lastStatus: "Last status",
+            error: "Could not load tasks",
+            retry: "Retry",
+            loading: "Loading…",
+            actionFailed: "Could not run the task",
+          },
+        };
+        var text = STRINGS[locale] || STRINGS.zh;
+        var state = { loading: false, error: "", jobs: [], running: "" };
+
+        function $(id) {
+          return document.getElementById(id);
+        }
+        function escapeHtml(value) {
+          return String(value == null ? "" : value).replace(
+            /[&<>"']/g,
+            function (ch) {
+              return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              }[ch];
+            },
+          );
+        }
+        function showNotice(message) {
+          var notice = $("notice");
+          if (!notice) return;
+          notice.textContent = message;
+          notice.hidden = !message;
+        }
+        function renderState() {
+          var host = $("content");
+          if (state.loading) {
+            host.innerHTML =
+              '<div class="state"><div class="spinner"></div><div>' +
+              escapeHtml(text.loading) +
+              "</div></div>";
+            return;
+          }
+          if (state.error) {
+            host.innerHTML =
+              '<div class="state error"><div>' +
+              escapeHtml(text.error) +
+              '</div><div style="margin-top:8px">' +
+              escapeHtml(state.error) +
+              '</div><div style="margin-top:12px"><button class="refresh" id="retry">' +
+              escapeHtml(text.retry) +
+              "</button></div></div>";
+            var retry = $("retry");
+            if (retry) retry.addEventListener("click", load);
+            return;
+          }
+          render();
+        }
+        function render() {
+          var host = $("content");
+          host.innerHTML = "";
+          var enabled = state.jobs.filter(function (job) {
+            return job.enabled;
+          }).length;
+          var failing = state.jobs.filter(function (job) {
+            return (
+              job.last_status &&
+              job.last_status !== "ok" &&
+              job.last_status !== "success"
+            );
+          }).length;
+
+          var stats = document.createElement("div");
+          stats.className = "stats";
+          [
+            { label: text.total, value: state.jobs.length },
+            { label: text.enabled, value: enabled },
+            { label: text.failing, value: failing, danger: failing > 0 },
+          ].forEach(function (item) {
+            var card = document.createElement("div");
+            card.className = "stat";
+            var label = document.createElement("div");
+            label.className = "label";
+            label.textContent = item.label;
+            var value = document.createElement("div");
+            value.className = "value" + (item.danger ? " danger" : "");
+            value.textContent = String(item.value);
+            card.appendChild(label);
+            card.appendChild(value);
+            stats.appendChild(card);
+          });
+          host.appendChild(stats);
+
+          var card = document.createElement("div");
+          card.className = "card";
+          var head = document.createElement("div");
+          head.className = "card-head";
+          var title = document.createElement("h2");
+          title.textContent = text.total + " (" + state.jobs.length + ")";
+          head.appendChild(title);
+          var manage = document.createElement("button");
+          manage.type = "button";
+          manage.className = "manage";
+          manage.textContent = text.manage;
+          manage.addEventListener("click", function () {
+            if (window.octopSystem) window.octopSystem.openConsole("/tasks");
+          });
+          head.appendChild(manage);
+          card.appendChild(head);
+
+          if (!state.jobs.length) {
+            var empty = document.createElement("div");
+            empty.className = "empty";
+            empty.textContent = text.empty;
+            card.appendChild(empty);
+          } else {
+            state.jobs.forEach(function (job) {
+              card.appendChild(renderJob(job));
+            });
+          }
+          host.appendChild(card);
+        }
+        function renderJob(job) {
+          var row = document.createElement("div");
+          row.className = "row";
+          var dot = document.createElement("span");
+          var failing =
+            job.last_status &&
+            job.last_status !== "ok" &&
+            job.last_status !== "success";
+          dot.className =
+            "dot " + (!job.enabled ? "off" : failing ? "bad" : "ok");
+          row.appendChild(dot);
+          var main = document.createElement("div");
+          main.className = "row-main";
+          var name = document.createElement("div");
+          name.className = "row-name";
+          name.textContent = job.name || job.prompt || job.cron_id || "—";
+          main.appendChild(name);
+          var meta = document.createElement("div");
+          meta.className = "row-meta";
+          meta.textContent = [
+            job.trigger,
+            job.enabled ? text.enabledTag : text.disabledTag,
+            job.enabled ? text.scheduled : text.unscheduled,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          main.appendChild(meta);
+          if (failing) {
+            var error = document.createElement("div");
+            error.className = "row-error";
+            error.textContent = text.lastStatus + ": " + job.last_status;
+            main.appendChild(error);
+          }
+          row.appendChild(main);
+          var run = document.createElement("button");
+          run.type = "button";
+          run.className = "run";
+          run.textContent = text.run;
+          run.disabled = state.running === job.cron_id;
+          run.addEventListener("click", function () {
+            runJob(job);
+          });
+          row.appendChild(run);
+          return row;
+        }
+        function runJob(job) {
+          if (!window.octopSystem || !window.octopSystem.action) return;
+          state.running = job.cron_id;
+          showNotice("");
+          window.octopSystem
+            .action("cron.run", { cron_id: job.cron_id })
+            .then(function (result) {
+              state.running = "";
+              if (!result || !result.cancelled) load();
+              else renderState();
+            })
+            .catch(function (error) {
+              state.running = "";
+              showNotice(
+                text.actionFailed +
+                  ": " +
+                  (error && error.message ? error.message : String(error)),
+              );
+              renderState();
+            });
+        }
+        function load() {
+          if (!window.octopSystem) return;
+          state.loading = true;
+          state.error = "";
+          showNotice("");
+          renderState();
+          window.octopSystem
+            .query("cron.list", {})
+            .then(function (result) {
+              state.jobs = (result && result.jobs) || [];
+              state.loading = false;
+              renderState();
+            })
+            .catch(function (error) {
+              state.loading = false;
+              state.error =
+                error && error.message ? error.message : String(error);
+              renderState();
+            });
+        }
+        $("refresh").addEventListener("click", load);
+        $("title").textContent = text.title;
+        load();
+      })();
+    </script>
+  </body>
+</html>

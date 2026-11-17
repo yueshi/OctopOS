@@ -133,3 +133,30 @@ def file_info_to_dict(info: Any) -> dict[str, Any]:
     if modified_at is not None:
         out["modified_at"] = modified_at
     return out
+
+
+_PREVIEW_PROTECTED_PREFIX = "_builtin_skills"
+
+
+def normalize_preview_rel(raw: str) -> str:
+    """Normalize a workspace-relative path for the HTML preview mount.
+
+    Leading ``/`` is treated as workspace-relative (dashboard tree paths).
+    Dot segments, dot-prefixed components (``.octop``, ``.env``, ``.git``),
+    ``_builtin_skills`` and Windows drive/ADS colons are denied.
+    """
+    text = (raw or "").strip().replace("\\", "/")
+    if not text:
+        raise OctopError(ErrorCode.SLASH_BAD_ARGS, "preview path is required")
+    if "\x00" in text:
+        raise OctopError(ErrorCode.FORBIDDEN, "preview path contains NUL")
+    parts: list[str] = []
+    for part in text.split("/"):
+        if part in ("", "."):
+            continue
+        if part == ".." or part.startswith(".") or part == _PREVIEW_PROTECTED_PREFIX or ":" in part:
+            raise OctopError(ErrorCode.FORBIDDEN, f"path not allowed for preview: {raw!r}")
+        parts.append(part)
+    if not parts:
+        raise OctopError(ErrorCode.SLASH_BAD_ARGS, "preview path must name a file or directory")
+    return "/".join(parts)

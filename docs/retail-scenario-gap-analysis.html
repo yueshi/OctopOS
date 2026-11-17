@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="零售经营场景对 Agent 平台的需求 × Octop 现状差距分析：四层十一模块逐项评估、如何补齐。">
+<title>零售经营场景 × Octop 差距分析</title>
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --paper: #ffffff;
+    --ink: #1f2328;
+    --muted: #57606a;
+    --line: #d8dee4;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --ok: #1a7f37;
+    --ok-soft: #dafbe1;
+    --warn: #9a6700;
+    --warn-soft: #fff8c5;
+    --bad: #cf222e;
+    --bad-soft: #ffebe9;
+    --code-bg: #f6f8fa;
+    --code-ink: #cf222e;
+    --tile: #fbfcfd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --paper: #161b22;
+      --ink: #e6edf3;
+      --muted: #8b949e;
+      --line: #30363d;
+      --accent: #58a6ff;
+      --accent-soft: #121d2f;
+      --ok: #3fb950;
+      --ok-soft: #12261e;
+      --warn: #d29922;
+      --warn-soft: #282214;
+      --bad: #f85149;
+      --bad-soft: #2d1517;
+      --code-bg: #1c2129;
+      --code-ink: #ff7b72;
+      --tile: #1b222c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.75 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+          "Noto Sans CJK SC", -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .paper { max-width: 1080px; margin: 0 auto; padding: 48px 40px 88px; background: var(--paper); }
+  h1 { font-size: 30px; line-height: 1.3; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; margin: 60px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 17.5px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h4 { font-size: 14.5px; margin: 22px 0 6px; color: var(--muted); text-transform: none; letter-spacing: .02em; }
+  p { margin: 10px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: 4px 0; }
+  code {
+    font-family: "SF Mono", ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    font-size: 0.85em; background: var(--code-bg); color: var(--code-ink);
+    padding: 2px 6px; border-radius: 5px; white-space: nowrap;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; white-space: nowrap; }
+  tr:nth-child(even) td { background: color-mix(in srgb, var(--code-bg) 45%, transparent); }
+  blockquote {
+    border-left: 4px solid var(--line); margin: 14px 0; padding: 6px 18px;
+    color: var(--muted); background: color-mix(in srgb, var(--code-bg) 50%, transparent);
+  }
+  .meta { color: var(--muted); font-size: 13.5px; margin-bottom: 28px; }
+  .meta .chip {
+    display: inline-block; border: 1px solid var(--line); border-radius: 999px;
+    padding: 1px 10px; margin-right: 6px; margin-bottom: 4px; font-size: 12.5px; color: var(--muted);
+  }
+  .lead {
+    border-left: 4px solid var(--accent); background: var(--accent-soft);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; font-size: 15.5px; margin: 0 0 8px;
+  }
+  .lead b { color: var(--ink); }
+  .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  /* ---- 状态徽章：图标 + 文字双通道，颜色仅为辅助 ---- */
+  .st {
+    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    border-radius: 999px; padding: 1px 9px 1px 7px; font-size: 12.5px; font-weight: 600;
+  }
+  .st .ic { width: 13px; height: 13px; flex: none; }
+  .st-ok   { color: var(--ok);   background: var(--ok-soft); }
+  .st-warn { color: var(--warn); background: var(--warn-soft); }
+  .st-bad  { color: var(--bad);  background: var(--bad-soft); }
+  .st-info { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---- 指标条（stat tiles）---- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 22px 0 8px; }
+  .tile {
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--tile);
+  }
+  .tile .lab { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .tile .lab .ic { width: 14px; height: 14px; }
+  .tile .val { font-size: 32px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+  .tile .sub { font-size: 12.5px; color: var(--muted); }
+
+  /* ---- 层能力矩阵 ---- */
+  .matrix { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 16px 0; }
+  .mrow {
+    display: grid; grid-template-columns: 150px 1fr; gap: 0;
+    border-top: 1px solid var(--line);
+  }
+  .mrow:first-child { border-top: 0; }
+  .mrow .lay {
+    padding: 12px 14px; font-weight: 600; font-size: 14.5px; background: var(--code-bg);
+    border-right: 1px solid var(--line);
+  }
+  .mrow .lay small { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
+  .mrow .cells { padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .mod {
+    display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+    border-radius: 8px; padding: 4px 10px; font-size: 13.5px; background: var(--paper);
+  }
+  .mod .code { font-weight: 600; }
+  .mod .nm { color: var(--muted); }
+
+  /* ---- 模块卡片 ---- */
+  .modcard {
+    border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin: 18px 0;
+  }
+  .modcard > h3 { border-bottom: 1px dashed var(--line); padding-bottom: 10px; }
+  .modcard h4 { color: var(--ink); font-weight: 600; font-size: 14.5px; margin: 20px 0 6px; }
+  .modcard h4 .tag { margin-right: 6px; }
+  .k { font-weight: 600; }
+  .has { color: var(--ok); font-weight: 600; }
+  .no  { color: var(--bad); font-weight: 600; }
+  .warnk { color: var(--warn); font-weight: 600; }
+
+  .callout { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 10px 16px; margin: 14px 0; font-size: 14.5px; }
+  .callout.risk { border-left-color: var(--bad); background: var(--bad-soft); }
+  .callout.note { border-left-color: var(--warn); background: var(--warn-soft); }
+  .callout.ok   { border-left-color: var(--ok);  background: var(--ok-soft); }
+
+  .toc { columns: 2; gap: 32px; font-size: 14.5px; margin-top: 12px; }
+  .toc li { margin: 3px 0; break-inside: avoid; }
+  .toc a { color: var(--ink); }
+  .toc a:hover { color: var(--accent); }
+  .toc .lv0 { font-weight: 600; }
+
+  .phase {
+    border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin: 14px 0;
+    background: var(--tile);
+  }
+  .phase h4 { color: var(--ink); margin-top: 0; font-size: 15.5px; }
+  .phase ol { margin: 6px 0 0; }
+
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+
+  @media (max-width: 860px) {
+    .paper { padding: 28px 18px 60px; }
+    .toc { columns: 1; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .mrow { grid-template-columns: 1fr; }
+    .mrow .lay { border-right: 0; border-bottom: 1px solid var(--line); }
+    table { display: block; overflow-x: auto; }
+  }
+  @media print {
+    body { background: #fff; color: #111; }
+    .paper { max-width: none; padding: 0; }
+    h2 { break-after: avoid; }
+    .modcard, .phase, .matrix, .tile { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<svg class="defs" aria-hidden="true"><defs>
+  <symbol id="i-ok" viewBox="0 0 16 16"><path d="M3.2 8.4l3.3 3.3L12.9 4.9" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-part" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M8 2.4a5.6 5.6 0 0 1 0 11.2z" fill="currentColor"/></symbol>
+  <symbol id="i-gap" viewBox="0 0 16 16"><path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.1" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 7v4.2" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><circle cx="8" cy="4.7" r="1" fill="currentColor"/></symbol>
+</defs></svg>
+
+<div class="paper">
+
+<h1>零售经营场景 × Octop 差距分析</h1>
+<div class="meta">
+  <span class="chip">2026-11-16</span>
+  <span class="chip">来源：智总管产品功能分层调研汇报 v3（四层十一模块，54 页）</span>
+  <span class="chip">口径：Octop 现状以代码为准</span>
+  <span class="chip">方法：6 路并行代码调研 + 关键论断逐条抽验</span>
+  <span class="chip">同源：<code>docs/retail-scenario-gap-analysis.md</code></span>
+</div>
+
+<div class="lead">
+  <b>结论：</b>Octop 是<b>通用 Agent 平台底座，不是零售经营系统</b>。它天然吃下 PDF 十模块里的
+  <b>连接层（0.1 部分 / 0.3 完全）</b>与<b>输出形态（3A、3B 的"形"）</b>；
+  <b>感知层（1.2）零件齐、缺最后一段装配</b>；<b>洞察层（2A、2B）与数据层（1.1、1.3）基本是空的</b>
+  —— 这四块要建的是一层「门店 / 零售业务契约」（标准业务表 + 指标层 + 客户档案 + 归因口径），
+  不是平台能力。
+  <br><br>
+  文档里"没做过一次"的那几件（客户画像、经营归因、实时参谋、平台数据监测），在 Octop 里同样一次都没做过。
+</div>
+
+<div class="stats">
+  <div class="tile">
+    <div class="lab">评估模块</div>
+    <div class="val">11</div>
+    <div class="sub">四层（PDF 标题作"十模块"，分层表实列 11 项）</div>
+  </div>
+  <div class="tile">
+    <div class="lab"><svg class="ic" style="color:var(--ok)"><use href="#i-ok"/></svg>已满足</div>
+    <div class="val">1</div>
+    <div class="sub">0.3 外部搜索</div>
+  </div>
+  <div class="tile">
+    <div class="lab"><svg class="ic" style="color:var(--warn)"><use href="#i-part"/></svg>部分满足</div>
+    <div class="val">7</div>
+    <div class="sub">0.1 / 1.2 / 2A / 2B / 3A / 3B / 3C</div>
+  </div>
+  <div class="tile">
+    <div class="lab"><svg class="ic" style="color:var(--bad)"><use href="#i-gap"/></svg>未覆盖</div>
+    <div class="val">3</div>
+    <div class="sub">0.2 / 1.1 / 1.3</div>
+  </div>
+</div>
+
+<div class="legend">
+  <span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>已满足</span>
+  <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span>
+  <span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span>
+  <span>状态一律以「图标 + 文字」呈现，颜色只是辅助通道（浅色/深色两套独立取色，文本对比度均 ≥ 4.5:1）。</span>
+</div>
+
+<h2 id="toc">目录</h2>
+<ul class="toc">
+  <li class="lv0"><a href="#s1">1 · 场景清单与平台需求提炼</a></li>
+  <li class="lv0"><a href="#s2">2 · 评估总表</a></li>
+  <li class="lv0"><a href="#s3">3 · 逐模块详评</a></li>
+  <li><a href="#m01">0.1 IM 全通</a> · <a href="#m02">0.2 平台监测</a> · <a href="#m03">0.3 外部搜索</a></li>
+  <li><a href="#m11">1.1 ERP 只读适配器</a> · <a href="#m12">1.2 屏幕与会议读取</a> · <a href="#m13">1.3 客户分层与档案</a></li>
+  <li><a href="#m2a">2A 经营诊断与归因</a> · <a href="#m2b">2B 实时参谋</a></li>
+  <li><a href="#m3a">3A 销售支持</a> · <a href="#m3b">3B 经营驾驶舱</a> · <a href="#m3c">3C 营销短视频</a></li>
+  <li class="lv0"><a href="#s4">4 · 横向结论</a></li>
+  <li class="lv0"><a href="#s5">5 · 建议路线（按依赖顺序）</a></li>
+  <li class="lv0"><a href="#s6">6 · 与 PDF 的分歧点</a></li>
+  <li class="lv0"><a href="#s7">附 · 主要证据索引</a></li>
+</ul>
+
+<h2 id="s1">1 · 场景清单与平台需求提炼</h2>
+<table>
+<thead><tr><th>层</th><th>模块</th><th>PDF 定义（要点）</th><th>PDF 的选型结论</th></tr></thead>
+<tbody>
+<tr><td rowspan="3">0 连接</td><td><b>0.1 IM 全通</b></td><td>多平台对话统一接入，AI 能读到、能回复、断点提醒人接手</td><td>必做 = 企微 + 公众号 + 飞书 + 钉钉；灰度 = 抖音 / 小红书私信；不做 = 微信个人号</td></tr>
+<tr><td><b>0.2 平台监测</b></td><td>盯客户自己的小红书 / 抖音 / 视频号 / 公众号号：粉丝、曝光、评论、私信</td><td>自建 = 公众号 + 抖音自有号授权；不做小红书；不做代运营</td></tr>
+<tr><td><b>0.3 外部搜索</b></td><td>查公开信息（政策、同行、价格），能给出处</td><td>必做 = 博查 + 智谱两家；不接阿里云；搜不到要说"没找到"</td></tr>
+<tr><td rowspan="3">1 感知</td><td><b>1.1 ERP 只读适配器</b></td><td>只读连客户 ERP，抽出订单 / 库存 / 客户 / 商品四表</td><td>直连（只读账号）或导出文件；CDC 增量；<b>不改数据</b></td></tr>
+<tr><td><b>1.2 屏幕与会议实时读取</b></td><td>开会 / 谈价时读屏幕、听对话，实时给建议</td><td>形态 = 桌面悬浮窗 + 麦克风（双通道）；核心 = 实时截屏 + 无障碍树 / OCR</td></tr>
+<tr><td><b>1.3 客户分层与档案</b></td><td>给客户打标签：多次没来、花了多少、潜力 / 顶 / 走</td><td>数据 = 订单 + 沟通记录；自己算，不要老模板</td></tr>
+<tr><td rowspan="2">2 洞察</td><td><b>2A 经营诊断与归因</b></td><td>"这个月毛利只有 1.2 万，是进货价涨了还是卖不动了"</td><td>输出一个动作，不是张报表</td></tr>
+<tr><td><b>2B 实时参谋</b></td><td>谈判 / 会议进行中给建议（报价对标 / 追问点 / 预判异议 / 方案优点）</td><td>延迟 ≤ 2–3 秒（不是电话客服的 500ms）；国内"事后"居多，"事中"是空白</td></tr>
+<tr><td rowspan="3">3 输出</td><td><b>3A 销售支持</b></td><td>店员当场能查能说出口；答案必须出现在同一个 IM 窗口</td><td>知识来自门店自己的产品库，不做独立 App</td></tr>
+<tr><td><b>3B 经营驾驶舱</b></td><td>老板每天早上打开的一个页面：结论—数字—异常—待办</td><td>不做报表；每条建议带"一键改 / 生成 / 打电话"按钮；底部写数据来源</td></tr>
+<tr><td><b>3C 营销短视频</b></td><td>自有素材 + 行业模板 → 出片、批量分发、回答"带来几个到店客人"</td><td>只做"素材 + 模板 + 到店归因"；不做一键成片、不做换脸</td></tr>
+</tbody>
+</table>
+
+<h2 id="s2">2 · 评估总表</h2>
+<table>
+<thead><tr><th>模块</th><th>满足度</th><th>Octop 已有</th><th>核心缺口</th></tr></thead>
+<tbody>
+<tr><td><b>0.1</b> IM 全通</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td>企微 / 飞书 / 钉钉 / 微信收发、群聊 @我、HITL 审批、四条主动推送链路</td>
+    <td><b>公众号通道缺失</b>、<b>无外部联系人 / 身份归并</b>、<b>无转人工接管</b>、无平台历史回溯</td></tr>
+<tr><td><b>0.2</b> 平台监测</td>
+    <td><span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></td>
+    <td>无（仅浏览器 CDP 可 RPA 抓取，等 PDF 判定的"高风险"路径）</td>
+    <td>无抖音 / 公众号自有号数据连接器；<b>建议降级为客户级交付</b></td></tr>
+<tr><td><b>0.3</b> 外部搜索</td>
+    <td><span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>满足</span></td>
+    <td>harness 内建 <code>web_search</code> 五家 + <code>web_fetch</code>（SSRF 防护）+ 设置页探活</td>
+    <td>仅需"答不出就说没找到 + 给来源"的提示纪律</td></tr>
+<tr><td><b>1.1</b> ERP 只读适配器</td>
+    <td><span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></td>
+    <td>Fernet 凭据加密、自定义 MCP、cron、<b>Light App 落表中间层</b></td>
+    <td><b>无 SQL Server 连接器</b>、无四表、无增量水位；venv 无 pyodbc / pymssql</td></tr>
+<tr><td><b>1.2</b> 屏幕与会议读取</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td>截图进多模态（<code>browser_use</code>）、<code>desktop_screenshot</code>、腾讯实时 ASR、远桌面 / 浏览器 WS 流、rapidocr</td>
+    <td><b>无用户本机屏幕 / 麦克风上行</b>、<b>无持续感知触发器</b>、无无障碍树、无飞书会议</td></tr>
+<tr><td><b>1.3</b> 客户分层与档案</td>
+    <td><span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></td>
+    <td>可用 light_app 表承载</td>
+    <td><b>无客户表 / 标签 / 分层模型</b>；知识库是文档 RAG 不能当档案；<b>IM 身份塌缩到属主</b></td></tr>
+<tr><td><b>2A</b> 经营诊断与归因</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td>cron 夜间跑批、结果推 IM、服务端聚合防编数、trajectory 决策链</td>
+    <td><b>无指标层</b>、<b>无归因算法</b>、<b>无诊断产物表</b>、无 pandas</td></tr>
+<tr><td><b>2B</b> 实时参谋</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td>chat WS、<b>turn 内 steer 注入</b>、HITL、实时 ASR</td>
+    <td><b>无秒级触发回路</b>（事件平面 300s 轮询）、单进程 WS hub 无跨机扇出、无历史成交价数据源</td></tr>
+<tr><td><b>3A</b> 销售支持</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td>知识库 + SKILL 话术 + 维护界面 + MiniApp 结构化数据</td>
+    <td>商品表进 RAG 会丢列语义；<b>IM 内无卡片</b>；无场景化话术检索器；<b>KB 无角色 / 门店 ACL</b>；无新人识别</td></tr>
+<tr><td><b>3B</b> 经营驾驶舱</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td>MiniApp 卡片看板 + 6 种图表 + 行级动作 + SDK 11 能力位</td>
+    <td><b>无简报页面</b>、<b>无 cron 产物表</b>、无四段式模板、无来源脚注字段、<b>4 个 KPI 零埋点</b>、查询未下推</td></tr>
+<tr><td><b>3C</b> 营销短视频</td>
+    <td><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></td>
+    <td><code>generate_video</code> / <code>generate_image</code>（三家 provider）、TTS、PPT / 文档生成、事件平面</td>
+    <td><b>无 ffmpeg → 无剪辑 / 模板 / 字幕</b>、无素材库、无批量分发、<b>无优惠码 / 到店归因模型</b></td></tr>
+</tbody>
+</table>
+
+<h2 id="s3">3 · 逐模块详评</h2>
+
+<!-- 0.1 -->
+<div class="modcard" id="m01">
+<h3>0.1 IM 全通 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="has">✓</span> 10 个内置通道，<b>全部能读能写</b>：企微 aibot WebSocket（<code>octop_gateway/channels/wecom.py:67</code>）、飞书 WS 收 + REST 发（支持 post / interactive）、钉钉 Stream 收 + OpenAPI 发、微信 iLink Bot 长轮询、QQ / Telegram / Discord / 元宝 / 小艺 / MQTT。</li>
+<li><span class="has">✓</span> 群聊语义完整：<code>GroupVisibility</code> / <code>GroupActivation</code> / <code>GroupHistoryMode</code>（<code>octop_gateway/group_context.py:21-56</code>）。</li>
+<li><span class="has">✓</span> 会话持久化：<code>sessions</code>（含 <code>channel_type</code> / <code>channel_subject_id</code>）+ <code>threads</code> + <code>thread_messages</code>（<code>infra/db/repos/sessions.py:59-72</code>）；thread key 含 <code>channel_type</code>（<code>infra/gateway/threads.py:36-45</code>）。</li>
+<li><span class="has">✓</span> <b>主动推送四条链路</b>：cron（<code>infra/cron/delivery.py:130</code>）、external events outbox（<code>infra/events/expert_target.py:102</code>）、主动关怀（<code>infra/proactive/service.py:252</code>）、团队通知（<code>infra/agents/teams/team_manager.py:1474</code>）→ 统一出口 <code>infra/gateway/gateway.py:824</code>。</li>
+<li><span class="has">✓</span> <b>HITL 成熟</b>：<code>hitl_pending</code> 表，状态 <code>pending/approved/rejected/expired</code>（<code>infra/gateway/hitl/store.py:16-24</code>），kind = <code>approval</code> / <code>ask</code>，TTL 30 分钟，IM 内用 <code>/approve</code> <code>/reject</code> <code>/pending</code> 斜杠命令（<code>infra/gateway/slash/catalog.py:18</code>）；cron 遇 HITL 会挂起而非失败（<code>infra/cron/delivery.py:243-270</code>）。</li>
+<li><span class="has">✓</span> 富文本能力矩阵（<code>docs/miniapp-im-optimization.md:113-121</code>）：飞书 interactive card / 企微 Markdown / 微信纯文本+图 / QQ 纯文本。</li>
+</ul>
+
+<h4>不足</h4>
+<ol>
+<li><b>微信公众号没有通道。</b>catalog 30 个连接器与 gateway 通道里都没有公众号回调端点，<code>api/routers/</code> 下无 IM callback 入口。PDF 把公众号列为四个合规平台之一 —— 这是 0.1 的唯一硬缺口。</li>
+<li><b>没有外部联系人 / 身份归并。</b>IM 消息一律映射到 agent 属主，源码注释写明 <i>"IM members of one agent share the owner's profile, they are not isolated from each other"</i>（<code>infra/gateway/process/message_keys.py:86-108</code>）。企微里的张三和抖音里的张三是两个 session、两个 thread、<b>同一个 users.id</b>。PDF 0.1 的核心命题「十年后还在用同一个入口」在 Octop 里没有对应物。</li>
+<li><b>没有"转人工接管"。</b><code>handoff</code> 只存在于浏览器控制权（<code>api/routers/browser/harness.py:298</code>），与 IM 无关；没有「AI 挂起 → 通知人工 → 人工接管回复」的状态机。</li>
+<li><b>无平台历史消息回溯</b>：<code>octop_gateway/channels/</code> 全目录无 fetch_history。</li>
+<li><b>主动推送有前置条件</b>：必须先有 session（对方发过消息），否则推不到。</li>
+<li>企微缺「客户联系」与「企微客服」两个子通道（<code>docs/architecture-overview.md:401-402</code>）。</li>
+</ol>
+
+<h4>如何补</h4>
+<table>
+<thead><tr><th>补什么</th><th>怎么做</th><th>落点</th></tr></thead>
+<tbody>
+<tr><td>公众号通道</td><td>新建 Official Account 通道（token 校验 + 签名校验回调 + 客服消息接口）</td><td><code>octop_gateway/channels/wechat_mp.py</code> + <code>api/routers/</code> 回调入口</td></tr>
+<tr><td>外部联系人层</td><td>新增 <code>contacts</code> 表（平台 + 平台内 subject_id + 归并键 + 客户档案指针），thread / session 挂 contact_id</td><td><code>infra/db/repos/contacts.py</code> + 新迁移</td></tr>
+<tr><td>身份归并规则</td><td>以手机号 / unionid / 自定义归并键做人工确认式合并（不要自动猜）</td><td>contacts 合并接口 + dashboard 确认页</td></tr>
+<tr><td>转人工接管</td><td>HITL 扩一个 <code>handoff</code> kind：AI 声明交还 → 通知指定人 → 该会话后续消息走人工</td><td><code>infra/gateway/hitl/</code> 扩状态机</td></tr>
+<tr><td>IM 富卡片</td><td>飞书已有；企微 / 微信先做「Markdown + 商品图 + 链接」降级，够用</td><td>通道层已有 <code>app_share_link</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- 0.2 -->
+<div class="modcard" id="m02">
+<h3>0.2 平台监测 <span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></h3>
+
+<h4>Octop 现状</h4>
+<p>30 个内置连接器（<code>infra/connectors/catalog.json</code>）里<b>没有</b>抖音、公众号、视频号、小红书的数据连接器；<code>infra/events/connector_poll.py</code> 只能轮询已有连接器。理论上可用 <code>octop-browser</code>（CDP 驱动 Chrome）打开自有号后台做 RPA 抓取 —— 但这正是 PDF 2.2 判定的"高风险、要做爬虫法律风险"路径。</p>
+
+<div class="callout note">
+<b>建议不做成平台模块。</b>PDF 自己也把它定成"客户级数据定制（公众号号自研 + 抖音采购 + 小红书不硬碰），自研投入控制在 2 个月内"。落到 Octop 上，正确形态是：<br>
+① 为单个客户写死一个采集 MCP（账号授权 + 轮询），进 <code>connectors</code> 目录当客户实例；<br>
+② 数据落到该客户专属的 light_app 表（<code>light_app_sources</code> + <code>light_app_rows</code>）；<br>
+③ 在 dashboard 里用 MiniApp 看板呈现"评论里问价格的人 → 销售线索"。<br>
+<b>即：0.2 降级为 3B 的一个数据源，而不是一个平台子系统。</b>
+</div>
+</div>
+
+<!-- 0.3 -->
+<div class="modcard" id="m03">
+<h3>0.3 外部搜索 <span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>已满足</span></h3>
+
+<h4>Octop 现状（代码为准，文档里查不到）</h4>
+<ul>
+<li><span class="has">✓</span> harness 内建 <code>web_search</code> 工具族：<code>tavily.py</code> / <code>kimi.py</code> / <code>_registry.py</code>（<code>octop_harness/builtin/tools/web_search/</code>），注册为 5 个工具（<code>infra/agents/settings/tool_catalog.py:72-76</code>：tavily / brave / google / kimi / searchfree）。</li>
+<li><span class="has">✓</span> <code>web_fetch</code> 工具：抓 URL 转 markdown，带 SSRF 防护与 5MiB 上限（<code>octop_harness/builtin/tools/web_fetch.py:1-30</code>）。</li>
+<li><span class="has">✓</span> 设置页可探活：<code>POST /api/search/{provider_id}/test</code>（<code>api/routers/search.py:26</code>），provider 集合 <code>tavily/brave/google/kimi</code>（<code>infra/utils/search_probe.py:20</code>）。</li>
+</ul>
+
+<h4>不足与补法</h4>
+<p>几乎无。只需两件小事：</p>
+<ol>
+<li>提示纪律「搜不到就说没找到，严禁自行补全」+ 每条结论附来源站点 —— 写进 Agent 系统提示 / SKILL.md；</li>
+<li>少量「时效性 / 长尾事实」确实答不上时，属模型能力边界，不是平台缺口。</li>
+</ol>
+<p><b>结论：</b>配两个 provider（对应 PDF 的"博查 + 智谱"）即可开工。</p>
+</div>
+
+<!-- 1.1 -->
+<div class="modcard" id="m11">
+<h3>1.1 ERP 只读适配器 <span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="no">✕</span> <b>零业务表。</b>53 个 repo（<code>infra/db/repos/</code>）全是平台表：agents / channels / threads / cron / connectors / knowledge / light_app_* / teams / goals / external_* / trajectory …<b>没有订单、库存、客户、商品任何一张表</b>（已用 <code>CREATE TABLE</code> 全量扫描确认）。</li>
+<li><span class="no">✕</span> <b>无数据库类连接器</b>：30 个 catalog 条目里无 MySQL / PostgreSQL / SQL Server，也无 Airtable / Sheets / CRM。venv 里只有 <code>psycopg</code>，<b>没有 pyodbc / pymssql / mysql</b>。</li>
+<li><span class="has">✓</span> 凭据加密有：<code>infra/connectors/crypto.py:14</code>（Fernet，密钥进 <code>secrets</code> 表）。</li>
+<li><span class="has">✓</span> 自定义 MCP 有：<code>infra/connectors/custom_mcp.py:17</code>，支持 <code>streamable_http</code> 与 <code>stdio</code>。</li>
+<li><span class="has">✓</span> <b>中间层载体已现成</b>：<code>light_app_sources</code> 表带 <code>mode(append|snapshot)</code>、<code>schedule_seconds</code>、<code>mapping_json</code>、<code>upsert_key</code>（<code>infra/db/migrations/025_light_apps.sql:68-79</code>），行落 <code>light_app_rows</code> —— 这正是"定时拉取 + 字段映射 + 幂等去重 + 落表"四件套。</li>
+<li><span class="warnk">△</span> <b>但数据源只吃进程内 gateway 连接器</b>：<code>infra/apps/sources.py:1-7</code> 明写 <i>"Only in-process gateway connectors (mcp_mode=gateway) are supported … HTTP MCP servers would need a client stack in Octop — out of scope for now."</i> → 自定义远程 MCP <b>不能</b>当 light_app 数据源。</li>
+<li><span class="warnk">△</span> <code>http-extract</code> 只支持公共只读、无鉴权的 GET（<code>infra/connectors/gateway/adapters/http_extract.py:21-47</code>）。</li>
+<li><span class="has">✓</span> 只读强制有一处：<code>infra/apps/sources.py:91</code> <code>_require_read_only</code> 按 MCP <code>readOnlyHint</code> 拒绝写工具。</li>
+<li><span class="no">✕</span> 无增量水位（CDC）、无表结构识别、无字段语义映射、无清洗规则。</li>
+</ul>
+
+<h4>如何补（最小可行路径）</h4>
+<ol>
+<li><b>新增 SQL Server gateway adapter</b>（进程内 Python adapter，走 <code>pymssql</code>），进 <code>catalog.json</code> 并标 <code>readOnlyHint=true</code> → 立刻能被 <code>light_app_sources</code> 当数据源（这一步解开 <code>sources.py:1-7</code> 的限制）。</li>
+<li><b>每家客户做一份 mapping</b>（表名 → 列名 → 语义），AI 生成初稿 + 人工确认，存进 <code>light_app_sources.mapping_json</code>。</li>
+<li><b>四张标准表建成 4 个 light_app 表</b>（订单 / 库存 / 客户 / 商品），<code>mode=append</code> + <code>upsert_key</code> 幂等，<code>schedule_seconds</code> 设为夜间频率。</li>
+<li><b>只读双保险</b>：数据库侧只读账号 + <code>DENY INSERT/UPDATE/DELETE</code>（PDF 2.4.2 的 SOP）；应用侧 <code>_require_read_only</code> 兜底。</li>
+<li><b>兜底路径</b>（客户只有 Excel）：走 workspace 落盘 + miniapp 导入 / <code>light_app_sources</code> 的 <code>workspace_file</code> 源（<code>infra/apps/service.py:405-407</code>）。</li>
+<li>CDC / 增量同步先不做：<code>upsert_key</code> + 定时全量 append 已能覆盖 PDF 说的"每晚更新一次"。</li>
+</ol>
+
+<div class="callout note">
+PDF 判定这个模块"前两段是人工（表结构识别 ~40%、字段语义映射 ~30%），不是技术密集型，是耐心密集型"。
+Octop 的技术缺口其实只有一个小点（SQL Server 适配器），<b>真正的活是每家客户的映射</b>。
+</div>
+</div>
+
+<!-- 1.2 -->
+<div class="modcard" id="m12">
+<h3>1.2 屏幕与会议实时读取 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="has">✓</span> <b>截图能真正进模型</b>：<code>browser_use</code> 截图返回 <code>[image_block, text_block]</code> 多模态块（<code>octop_harness/builtin/tools/browser_use.py:126-174</code>，<code>media_type: image/png</code>），注册于 <code>agent.py:1367</code> / <code>tool_catalog.py:66</code>。</li>
+<li><span class="has">✓</span> <b>桌面截图工具</b>：<code>desktop_screenshot</code> 抓 X11（mss / ImageMagick），PNG 落在 agent workspace <code>outbound/screenshots/</code>（<code>octop_harness/builtin/tools/desktop_screenshot.py:288-345</code>）。</li>
+<li><span class="has">✓</span> <b>实时 ASR</b>：腾讯云实时 STT（<code>infra/voice/realtime.py</code>），<code>WS /api/voice/stt-stream</code>（<code>api/routers/voice.py:256</code>）；浏览器麦克风采集（<code>dashboard/src/hooks/useVoiceInput.ts:323</code> getUserMedia / <code>:479</code> MediaRecorder）。</li>
+<li><span class="has">✓</span> <b>推流</b>：浏览器 4fps JPEG WS（<code>api/routers/browser/stream.py:335</code>）、远桌面 WS（JPEG + 键鼠注入，<code>api/routers/desktop/stream.py:235</code>）。</li>
+<li><span class="has">✓</span> <b>OCR 引擎可用</b>：<code>rapidocr</code> 额外依赖（<code>pyproject.toml:75-78</code>）；<code>ocr-and-documents</code> 技能提供 PDF / 扫描件抽取（pymupdf / marker-pdf）。</li>
+<li><span class="has">✓</span> <b>腾讯会议官方 MCP</b>（<code>infra/connectors/catalog.json:60-79</code>，<code>mcp.meeting.tencent.com/mcp/wemeet-open/v1</code>，<code>infra/connectors/builder.py:179</code>）。</li>
+<li><span class="has">✓</span> <b>可注入进行中的一轮</b>：<code>steer</code> 支持 image / file 块（<code>infra/gateway/steer/coordinator.py:666-687</code>），且块格式是 <code>workspace_path</code> 引用 —— 与 <code>desktop_screenshot</code> 的落盘路径正好对上。</li>
+<li><span class="no">✕</span> <b>截的是服务器虚拟桌面 / 受控浏览器，不是用户本机屏幕</b>；无本机上行通道。</li>
+<li><span class="no">✕</span> <b>无"持续感知 → 自动触发推理"的回路。</b>事件平面是摄入侧（webhook / 300s 轮询，<code>infra/events/worker.py:677-681</code>），截屏流只到 dashboard，不回流 Agent。</li>
+<li><span class="no">✕</span> <b>无无障碍树</b>（只有 CDP <code>DOM.getDocument</code> 的 DOM 文本 → canvas 应用读不到字），需 OCR 补。</li>
+<li><span class="no">✕</span> 飞书会议 / Zoom 无接入；腾讯会议以会后录制 / 纪要为主，非逐句实时。</li>
+<li><span class="no">✕</span> 无桌面悬浮窗 UI；桌面壳无麦克风采集。</li>
+</ul>
+
+<h4>如何补</h4>
+<ol>
+<li><b>原型（最短路径，零件全在）</b>：桌面壳加「截屏 + 麦克风上行」→ 帧写入 agent workspace <code>outbound/screenshots/</code> → <code>steer</code> 以 image 块注入进行中的一轮 → 模型结合 ERP 历史（1.1）与转写文本给建议。缺的只有"帧怎么上来"和"什么时候注入"。</li>
+<li><b>产品化</b>：加一个采样循环（屏幕帧 + 转写片段），做节流与去重；注入策略改为<b>新轮次</b>（而不是 steer 打断），并保留 steer 作为"老板插话"通道；canvas 场景补 rapidocr 识别；单进程 <code>ws_hub</code> 补跨机扇出（目前无 Redis pub/sub）。</li>
+</ol>
+
+<div class="callout note">
+PDF 的关键判断是"先读录音转文字，再实时截屏；<b>当'做'优先 —— 先看画面</b>，树里没有目标文本不裁剪"。
+Octop 的默认做法是反的：截图是工具调用触发的（人点一下），不是持续采样。
+</div>
+</div>
+
+<!-- 1.3 -->
+<div class="modcard" id="m13">
+<h3>1.3 客户分层与档案 <span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="no">✕</span> 无客户表、无标签表、无分层模型（全仓无 customer / contact / lead / segment / RFM 业务表）。</li>
+<li><span class="no">✕</span> <code>knowledge_bases</code> / <code>knowledge_documents</code> 是<b>文档型 RAG</b>：每 KB 一个 SQLite sidecar 存向量，查询全表余弦扫描，无全文 / BM25、无字段过滤（<code>infra/knowledge/index.py:25-35</code>）；k=8、上下文预算 6000 字（<code>infra/knowledge/retrieve.py:17-24</code>）。<b>不能当客户档案用。</b></li>
+<li><span class="warnk">△</span> CSV / XLSX 进知识库会被<b>拍平成 tab 分隔文本再切块</b>（<code>infra/knowledge/parse.py:45,74,262</code>）→ 列语义丢失、不能按价格 / 库存过滤、无实时性。商品表绝不能这么进。</li>
+<li><span class="warnk">△</span> <b>IM 身份塌缩到属主</b>（<code>infra/gateway/process/message_keys.py:86-108</code>）→ "沟通记录"无法按客户归集，这是 1.3 的硬阻碍。</li>
+<li><span class="has">✓</span> 载体可用：light_app 自定义表 + 行 + PII 机制（<code>infra/apps/pii.py</code>）。</li>
+</ul>
+
+<h4>如何补</h4>
+<ol>
+<li><b>依赖 0.1 的 contacts 层</b>（外部联系人 + 身份归并）—— 否则沟通记录无法归集客户。<b>依赖关系明确，先做 0.1。</b></li>
+<li>客户档案落 light_app 表：<code>customers</code>（客户 id、累计成交价、到店次数、最近到店时间、首单时间）+ <code>orders</code> 明细表。</li>
+<li><b>累计成交价不要预计算成字段</b>：每次现算（订单表按客户聚合），避免"同一客户多套价格"的历史漂移 —— 这正是 PDF 点名的坑。</li>
+<li><b>分层不要做规则引擎</b>：PDF 说"不用老模板，系统自己算"。让 Agent 在夜间跑批里读表 + 算铁杆 / 潜力 / 沉睡 / 走 + 写回 tag 列（<code>app_update_row</code> 已有）。符合"最小实现"原则。</li>
+<li>沟通记录侧：contacts ↔ sessions 关联，让 Agent 能读"这个客户上次说什么"。</li>
+</ol>
+</div>
+
+<!-- 2A -->
+<div class="modcard" id="m2a">
+<h3>2A 经营诊断与归因 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="has">✓</span> <b>夜间跑批机制齐全</b>：cron 触发四类 —— <code>cron:</code> / <code>interval:</code> / <code>date:</code> / <code>agently:</code>（<code>infra/cron/trigger.py:77</code>）；<code>task_type</code> = <code>text</code>（直推）/ <code>agent</code>（跑完整 ReAct 回合，<code>infra/cron/task_type.py</code>）；cron job 可挂 MCP servers（<code>infra/db/repos/cron.py:92</code>）。</li>
+<li><span class="has">✓</span> <b>结果推 IM</b>：<code>infra/cron/delivery.py:71</code> → <code>gateway.push_session_text</code> → 通道发送。</li>
+<li><span class="has">✓</span> <b>数字可信机制</b>：Light App 服务端聚合 + 声明式图表 spec（<code>infra/apps/charts.py:20</code>，6 种图表 + sum/avg/count/min/max），只读助手防模型编数（<code>infra/apps/assistant.py</code>）。</li>
+<li><span class="has">✓</span> <b>决策链可回溯</b>：<code>trajectory_events</code> append-only 事件流（<code>infra/history/trajectory/</code>，REST <code>api/routers/chat/trajectory.py:239-380</code>）。</li>
+<li><span class="no">✕</span> <b>无指标层</b>：毛利、进货价、周转天数这些口径没有定义处。</li>
+<li><span class="no">✕</span> <b>无归因算法</b>：价 vs 量 的分解只能靠 LLM 即席生成，无确定性算法层。</li>
+<li><span class="no">✕</span> <b>无诊断产物表</b>：cron 只留 <code>last_run_at/last_status/last_error</code>（<code>infra/db/repos/cron.py:94-96</code>），产物落在 <code>thread_messages</code> 里 → "昨晚 03:12 产出的那份诊断"<b>无处可查</b>。</li>
+<li><span class="no">✕</span> 无异常阈值与告警规则；无 pandas / matplotlib（venv 只有 numpy）→ 计算需在 <code>execute</code> 沙箱自行装依赖。</li>
+<li><span class="no">✕</span> 跨天跨源归因无关联边（trajectory 是单会话流）。</li>
+</ul>
+
+<h4>如何补</h4>
+<ol>
+<li><b>指标层</b>：把毛利 / 进货价 / 周转定义成显式配置（指标名 + 计算式/映射 + 口径说明 + 适用门店），存 light_app 表或 <code>settings</code>，<b>不要硬编码进 prompt</b>。这是 2A 与 3B 的共同前置。</li>
+<li><b>诊断产物表</b>：新建 <code>diagnostics</code>（run_at, agent_id, job_id, scope, metric, conclusion, evidence_json, confidence, source_note）。同时解决 2A"无处可查"与 3B"底注要写昨晚 03:12 同步"。</li>
+<li><b>归因</b>：不必写算法库 —— 让 Agent 在跑批里做价/量分解并把证据链写进 <code>evidence_json</code>；若要确定性，用 light_app 的服务端聚合做对照，LLM 只负责叙述。</li>
+<li><b>异常检测</b>：先做「环比波动超阈值 → 标注」，阈值入配置。</li>
+<li><b>依赖</b>：指标层依赖 1.1 的四表落地，否则毛利算不出来。</li>
+</ol>
+</div>
+
+<!-- 2B -->
+<div class="modcard" id="m2b">
+<h3>2B 实时参谋 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="has">✓</span> chat WS 逐 token 推送 + <b>turn 内 steer</b>（<code>api/routers/chat/ws.py:280-292</code>）；steer 支持 image / file 块（<code>infra/gateway/steer/coordinator.py:666-687</code>）。</li>
+<li><span class="has">✓</span> HITL 审批、WS hub 扇出（<code>infra/gateway/ws/ws_hub.py:129</code>）。</li>
+<li><span class="has">✓</span> 实时 ASR（腾讯）+ 截图可进模型（见 1.2）。</li>
+<li><span class="no">✕</span> <b>无秒级自主建议回路</b>：没有任何组件持续监听屏幕 / 音频并自动触发一轮推理；事件平面是摄入侧 + 300s 轮询（<code>infra/events/worker.py:677-681</code>）。</li>
+<li><span class="no">✕</span> steer 的块是 <code>workspace_path</code> 引用而非原始图片 → 帧必须先落 workspace（可行，见 1.2）。</li>
+<li><span class="no">✕</span> 单进程 <code>ws_hub</code>，无跨机 pub/sub。</li>
+<li><span class="no">✕</span> <b>无客户历史成交价 / 账期数据源</b>（依赖 1.1、1.3）—— PDF 明确说这是 2B 的前提。</li>
+<li><span class="no">✕</span> 无本地指标缓存 → 每次对标都要查 ERP，达不到 ≤2–3 秒。</li>
+</ul>
+
+<h4>如何补（按 PDF 建议的优先级）</h4>
+<ol>
+<li><b>先做「会前准备」</b>（低延迟、价值立刻可见）：cron <code>date:</code> 一次性触发 → 生成一页纸（历史成交价 / 账期 / 最近投诉 / 预判异议）→ 推 IM 或落 workspace。这条链路 Octop 现有能力<b>全部具备</b>，缺的只是客户档案数据（1.1 / 1.3）与模板。</li>
+<li><b>再做「会中提示」</b>（高难度，需三件同时到位）：① 屏幕帧 + 转写片段的持续采集（1.2）；② 指标 / 历史数据的<b>本地毫秒级缓存</b>（不能每轮查 ERP）；③ 一个低延迟触发器，把新观测作为新轮次输入，同时保留 steer 插话通道。</li>
+<li><b>延迟预算</b>：PDF 说 1–2 秒对结论完全够用，不需要客服级的 500ms —— 这意味着<b>不必追求流式</b>，一个 1–2 秒一帧的采样 + 小模型判据就够，别过度设计。</li>
+</ol>
+
+<div class="callout ok">
+PDF 的判词很准：<b>"国内把'实时'做成了'实时看板 / 实时预警'，那是给老板看的监控，不是给销售用的提示"。</b>
+Octop 目前连看板那种都没有，更没有提示 —— 但它有 PDF 没提到的优势：steer 机制天然支持"在对话进行中把新观测喂进去"。
+</div>
+</div>
+
+<!-- 3A -->
+<div class="modcard" id="m3a">
+<h3>3A 销售支持 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="has">✓</span> 话术 / 规则可承载：<code>SKILL.md</code>（frontmatter name / description，按描述渐进触发，<code>infra/agents/experts/library/business-operations/skills/bo-runbook/SKILL.md:1-3</code>）、技能包与 SkillHub（<code>infra/skills/</code>、<code>infra/db/repos/skill_packages.py:46</code>）。</li>
+<li><span class="has">✓</span> 维护界面现成：知识库页（<code>dashboard/src/pages/KnowledgeBases/</code>）、技能包页（<code>dashboard/src/pages/SkillPackages/</code>）。</li>
+<li><span class="warnk">△</span> <b>结构化商品表进 RAG 会坏</b>：CSV / XLSX 被拍平切块（<code>infra/knowledge/parse.py:45,74,262</code>）→ 无列语义、无法按价格 / 库存过滤、无实时性。</li>
+<li><span class="has">✓</span> 活数据有正路：light_app 数据源（只读 gateway 连接器 + 定时拉取 + 落 <code>light_app_rows</code>）+ 只读助手 + <code>app_read_data</code> 等 23 个 app 工具（<code>infra/apps/tools.py:28</code>）。</li>
+<li><span class="warnk">△</span> <b>IM 内交付形态受限</b>：微信仅文本/图/文件/视频、无卡片；企微文本 + Markdown；只有飞书支持 interactive card（<code>docs/miniapp-im-optimization.md:113-121</code>）；IM 内 <code>app_open</code> 只给公开链接 + 预览图（<code>infra/apps/tools.py:600-630</code>）。</li>
+<li><span class="no">✕</span> 无"按场景检索话术"的规则检索器（只有向量检索 + 技能描述匹配）。</li>
+<li><span class="no">✕</span> <b>KB 可见性只有 owner 或全局 <code>shared=1</code>，无按角色 / 门店 ACL</b>（<code>infra/db/repos/knowledge.py:178</code>）→ 做不到"店长维护本店话术、店员只见本店"。</li>
+<li><span class="no">✕</span> <b>无 per-IM-user 身份与画像</b> → "首次对话就知道这是新人"做不到（同 0.1）。</li>
+<li><span class="has">✓</span> <code>users</code> 表有 role / role_name / display_name / locale / preferences_json（<code>infra/db/migrations/001_initial.sql:16-28</code>），可承载"店员 / 店长"角色，但 IM 侧映射不到具体人。</li>
+</ul>
+
+<h4>如何补</h4>
+<ol>
+<li><b>商品 / 价格 / 库存 → 进 light_app 表，不进知识库</b>；异议话术、常见案例 → 进知识库（文档形态正确）。检索时 Agent 先查结构化表（<code>app_read_data</code>）再查话术库。</li>
+<li><b>IM 交付</b>：企微 / 微信用「Markdown + 一张商品图 + 链接」——现有能力够用；要真卡片与按钮，需飞书或另做企微侧。</li>
+<li><b>新人识别</b>：依赖 0.1 的 contacts 层（按 sender 计数 / 首触标记），不要指望 <code>users</code> 表。</li>
+<li><b>店长维护</b>：需要补 <b>KB 按角色 / 门店的 ACL</b>（当前只有 owner / shared 二选一），否则"店长维护话术"没有权限落点。</li>
+<li>四类异议话术（太贵 / 想再看看 / 别家更便宜 / 效果不好）做成 4 个 SKILL.md 或一个带分类的文档集，人工维护 —— 与 PDF 的"话术库由谁维护"结论一致。</li>
+</ol>
+</div>
+
+<!-- 3B -->
+<div class="modcard" id="m3b">
+<h3>3B 经营驾驶舱 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="no">✕</span> <b>没有简报 / 驾驶舱页面。</b><code>dashboard/src/pages/</code> 只有 Admin / Agent / Apps / Chat / Control / Experts / Invite / KnowledgeBases / Login / PwaDebug / Settings / Setup / SkillPackages / Teams；路由里最接近的是 <code>/apps/boards/:boardId</code>（MiniApp 看板）。</li>
+<li><span class="has">✓</span> MiniApp 能做卡片式看板：绑定数据源 <code>light_app_services</code>（<code>allowed_tools</code> + <code>allowed_url_prefixes</code> + <code>cache_ttl_seconds</code>，<code>infra/db/repos/app_services.py:31-46</code>）、行级动作 <code>app_update_row</code> / <code>app_append_row</code>、图表 6 种、SDK 11 能力位（<code>dashboard/src/components/MiniAppFrame/sdk.ts:139</code>、<code>capabilities.ts:10-22</code>：<code>listRows/appendRow/updateRow/onDataChange/generate/launchGame/composeMessage/service().call</code>）。</li>
+<li><span class="warnk">△</span> 页面只能 <code>appendRow</code>，不能改行；过滤排序<b>完全未下推</b>（16ms/千行、2 万行 323ms）。</li>
+<li><span class="no">✕</span> 无「结论—数字—异常—待办」四段式模板。</li>
+<li><span class="no">✕</span> 无"数据来源 · 同步时间"字段（<code>light_app_services</code> 无 last-synced / fetched_at）。</li>
+<li><span class="no">✕</span> 无 cron 产物表 → 昨晚那份诊断无处可查（同 2A）。</li>
+<li><span class="no">✕</span> <b>4 个 KPI 零埋点</b>：<code>infra/metrics.py</code> 是进程内存计数器（无 user_id、无持久化、无时间序列）；<code>light_app_events</code> 是外部事件收件箱不是行为埋点；<code>notifications</code> 的 read/unread 只能近似。</li>
+<li><span class="no">✕</span> 无结构化动作协议（只有通用 app 工具）；"一键打电话"无对应能力。</li>
+<li><span class="warnk">△</span> app 级 SSE 推送待做（<code>docs/miniapp-product-plan.md:383</code>）→ 简报推不出去。</li>
+</ul>
+
+<h4>如何补（顺序不能颠倒）</h4>
+<ol>
+<li><b>cron 产物表</b>（与 2A 共用）：<code>diagnostics</code> 表 → 存 run_at / summary / payload / source_note。这是"昨晚 03:12 同步"的实现前提。</li>
+<li><b>简报页</b>：<code>/briefing</code>（或做成一个 MiniApp + board）：每天读最近一次产物，渲染「结论—数字—异常—待办」四段，底部写来源脚注（数据源 + 同步时间 + 只读声明）。</li>
+<li><b>结构化动作</b>：待办行带 <code>action_type</code>（改价 / 生成话术 / 打电话），点击 → 调 <code>app_update_row</code> / <code>generate</code> / 拨号链接。这是 3B 区别于报表的关键。</li>
+<li><b>埋点</b>：新建 <code>briefing_events</code>（user_id, event_type: <code>open</code>/<code>click</code>/<code>adopt</code>, ts）。三个事件覆盖 PDF 的日活打开率、待办点击率、建议采纳率；次月留存用 <code>usage_log</code> 近似。</li>
+<li><b>推送</b>：先用 IM 纯文本简报（cron 已能推，<code>infra/cron/delivery.py:130</code>），app 级 SSE 后置。</li>
+<li><b>不做 PC 大屏</b>（PDF 明确不做），也不做自定义报表 / 多维分析 —— 与 MiniApp 定位一致。</li>
+</ol>
+</div>
+
+<!-- 3C -->
+<div class="modcard" id="m3c">
+<h3>3C 营销短视频 <span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分满足</span></h3>
+
+<h4>Octop 现状</h4>
+<ul>
+<li><span class="has">✓</span> <b>文生视频 / 图生视频 / 图</b>：<code>generate_video</code> / <code>generate_image</code>（<code>infra/agents/settings/tool_catalog.py:77-78</code>），多 provider（volcengine / dashscope / minimax，默认 doubao-seedance-2-0-mini、seedream-5-0-lite，<code>infra/agents/settings/media_generation.py:22-28,64</code>）。</li>
+<li><span class="has">✓</span> TTS / STT：edge-tts / 腾讯 / OpenAI / mimo（<code>infra/voice/adapters.py:252-265</code>）。</li>
+<li><span class="has">✓</span> 文档 / PPT / XLSX 生成：python-docx / python-pptx / openpyxl（<code>pyproject.toml:43-46</code>）+ office-automation 专家技能 → 能出"文档小样"。</li>
+<li><span class="no">✕</span> <b>无 ffmpeg 依赖</b> → 无剪辑、无模板拼装、无字幕、无数字人、无换脸。</li>
+<li><span class="no">✕</span> 无素材库 / 行业模板机制（素材只能落在 workspace 靠 agent 手工组织）。</li>
+<li><span class="no">✕</span> 无批量分发框架；只有微信公众号草稿 / 小红书脚本（<code>infra/agents/experts/library/wechat-ops/skills/publisher-multi-platform/scripts/wechat_publish.py</code>）。</li>
+<li><span class="warnk">△</span> <b>归因底座可用但无领域模型</b>：<code>external_events</code>（webhook inbox，去重/重试/outbox，<code>infra/db/repos/external_events.py:61</code>）+ <code>light_app_events</code> 收件箱（<code>infra/db/repos/app_events.py:51</code>）。</li>
+<li><span class="has">✓</span> 仓库自身结论与 PDF 一致：视频→订单精确归因不可得，只能用优惠码 / 专属 SKU / 时间窗代理（<code>docs/ai-video-commerce-system.md</code> §1.3）。</li>
+</ul>
+
+<h4>如何补</h4>
+<ol>
+<li><b>模板层</b>：把"行业模板"做成 SKILL.md（模板结构 + 变量约定 + ffmpeg 命令规范）；素材走 workspace（已有产物白名单机制 <code>dashboard/src/pages/Apps/desktopFiles.ts:20-27</code>）。</li>
+<li><b>加 ffmpeg 依赖 + 一个剪辑工具</b>（模板变量替换 + 字幕 + 竖屏裁切 + 拼接 BGM）。这是一处确定要做的工程活。</li>
+<li><b>分发</b>：只接已有能力（公众号草稿），其余平台人工导出。<b>不要追平台官方发布接口</b>（PDF 判定抖音 / 小红书批量分发合规受限）。</li>
+<li><b>归因（值得做，PDF 说"没人做的那第三件"）</b>：建 <code>attribution</code> 表（code, video_id, customer_id, touched_at, converted_at）；优惠码在 IM / miniapp 入口领用 → <code>external_events</code> webhook 回写 → 与订单表 join。这条链路 Octop 的事件平面天然能承载，是<b>平台能直接吃下的差异化点</b>。</li>
+<li><b>合规</b>：AIGC 标识、肖像权 —— 不做换脸是对的（PDF 也判"不按正路"）。</li>
+</ol>
+</div>
+
+<h2 id="s4">4 · 横向结论</h2>
+
+<h4>层能力分布</h4>
+<div class="matrix">
+  <div class="mrow">
+    <div class="lay">0 连接<small>看到</small></div>
+    <div class="cells">
+      <span class="mod"><span class="code">0.1</span><span class="nm">IM 全通</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+      <span class="mod"><span class="code">0.2</span><span class="nm">平台监测</span><span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></span>
+      <span class="mod"><span class="code">0.3</span><span class="nm">外部搜索</span><span class="st st-ok"><svg class="ic"><use href="#i-ok"/></svg>满足</span></span>
+    </div>
+  </div>
+  <div class="mrow">
+    <div class="lay">1 感知<small>看懂</small></div>
+    <div class="cells">
+      <span class="mod"><span class="code">1.1</span><span class="nm">ERP 只读</span><span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></span>
+      <span class="mod"><span class="code">1.2</span><span class="nm">屏幕与会议</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+      <span class="mod"><span class="code">1.3</span><span class="nm">客户分层</span><span class="st st-bad"><svg class="ic"><use href="#i-gap"/></svg>未覆盖</span></span>
+    </div>
+  </div>
+  <div class="mrow">
+    <div class="lay">2 洞察<small>判断白与不白</small></div>
+    <div class="cells">
+      <span class="mod"><span class="code">2A</span><span class="nm">经营诊断与归因</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+      <span class="mod"><span class="code">2B</span><span class="nm">实时参谋</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+    </div>
+  </div>
+  <div class="mrow">
+    <div class="lay">3 输出<small>用起来</small></div>
+    <div class="cells">
+      <span class="mod"><span class="code">3A</span><span class="nm">销售支持</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+      <span class="mod"><span class="code">3B</span><span class="nm">经营驾驶舱</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+      <span class="mod"><span class="code">3C</span><span class="nm">营销短视频</span><span class="st st-warn"><svg class="ic"><use href="#i-part"/></svg>部分</span></span>
+    </div>
+  </div>
+</div>
+
+<table>
+<thead><tr><th>层</th><th>状态</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>0 连接</td><td><b>强（但缺一层）</b></td><td>10 通道收发、群聊语义、HITL、四条主动推送链路都在；缺公众号、缺跨平台客户档案、缺转人工</td></tr>
+<tr><td>1 感知</td><td><b>一半是形态，一半是数据结构</b></td><td>截屏 / ASR / 推流 / OCR / 腾讯会议 全部现成，缺"用户本机上行 + 持续触发"；ERP 四表与客户档案为零</td></tr>
+<tr><td>2 洞察</td><td><b>空</b></td><td>能取数、能跑批、能推结果，但没有指标层、没有归因算法、没有实时回路</td></tr>
+<tr><td>3 输出</td><td><b>有形无神</b></td><td>MiniApp 卡片 + 数据绑定 + 动作回调、IM 文本/图/链接、文生视频都齐；但"待办是什么、点按钮做什么、数据源是谁"全是空的</td></tr>
+</tbody>
+</table>
+
+<div class="callout ok">
+<b>定位判断：</b>Octop 当前定位是「单节点多 Agent 平台」（<code>docs/architecture-overview.md:27</code>），
+路线图目标是「单节点、自托管、面向具体业务的 AgentOS」（<code>docs/agent-os-roadmap.md:6</code>）。
+这十模块暴露的正是那"一层业务"：<b>Octop 缺的不是 Agent 能力，是零售 / 门店的业务契约</b>
+（标准业务表 + 指标层 + 客户档案 + 归因口径 + 归因埋点）。
+</div>
+
+<h4>能直接吃下的 vs 必须自建的</h4>
+<table>
+<thead><tr><th>可直接吃下（配置即可）</th><th>需要补一段</th><th>必须自建</th></tr></thead>
+<tbody>
+<tr>
+  <td>
+    0.3 外部搜索（provider 已通）<br>
+    0.1 企微 / 飞书 / 钉钉 / HITL / 主动推送<br>
+    3A 话术（SKILL + KB）<br>
+    3B MiniApp 看板形态（图表 6 种、动作回调）<br>
+    3C 文生视频 / 图 / 文档
+  </td>
+  <td>
+    0.1 公众号通道<br>
+    1.2 本机上行 + 持续触发<br>
+    2A 指标层 + 诊断产物表<br>
+    3B 简报页 + 四段式 + 埋点<br>
+    3C ffmpeg 剪辑 + 模板
+  </td>
+  <td>
+    1.1 ERP 四表 + 映射（人工为主）<br>
+    1.3 客户档案 + 分层<br>
+    2A 归因口径与算法层<br>
+    3B 结构化动作协议<br>
+    3C 到店归因领域模型
+  </td>
+</tr>
+</tbody>
+</table>
+
+<h2 id="s5">5 · 建议路线（按依赖顺序，不按热闹程度）</h2>
+
+<div class="phase">
+  <h4>阶段 0 · 地基（无依赖，先做，1–2 周）</h4>
+  <ol>
+    <li><code>contacts</code> 外部联系人表 + 跨平台身份归并（解 0.1 / 1.3 / 3A）</li>
+    <li><code>diagnostics</code> 诊断产物表（解 2A / 3B 的共同前置）</li>
+    <li>SQL Server <b>只读 gateway adapter</b>（1.1 唯一的技术缺口；注意 <code>infra/apps/sources.py:1-7</code> 限定数据源只吃进程内 gateway 连接器，远程 MCP 会被拒）</li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h4>阶段 1 · 数据层（依赖阶段 0，2–4 周）</h4>
+  <ol>
+    <li>四张标准表落 light_app（订单 / 库存 / 客户 / 商品）；<b>一家客户跑通 = 一套模板</b></li>
+    <li>指标层定义（毛利 / 进货价 / 周转）+ 归因提示规范</li>
+    <li>客户档案 + Agent 现算分层（不写规则引擎）</li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h4>阶段 2 · 输出层（依赖阶段 1，2 周）</h4>
+  <ol>
+    <li>简报页 + 四段式模板 + 来源脚注 + 3 个埋点事件（open / click / adopt）</li>
+    <li>待办结构化动作（改价 / 生成话术 / 打电话）</li>
+    <li>KB 按角色 / 门店 ACL（店长维护话术的权限落点）</li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h4>阶段 3 · 实时层（依赖阶段 1，风险最高，3–4 周）</h4>
+  <ol>
+    <li>桌面壳屏幕 + 麦克风上行 → steer / 新轮次注入 → 会中建议</li>
+    <li>指标本地毫秒级缓存（对标不能每轮查 ERP）</li>
+  </ol>
+</div>
+
+<h4>建议明确放弃 / 降级的</h4>
+<ul>
+<li><b>0.2 平台监测</b> → 降级为客户级数据定制（不进平台）</li>
+<li><b>3C 的一键成片、换脸、批量分发</b> → PDF 已判定不做，Octop 同</li>
+<li><b>2B 的"会中提示"若排期紧</b> → 退回"会前准备"（cron <code>date:</code> 一行就能起）</li>
+<li><b>多租户化</b> → 沿用现行"每客户 / 每门店一个实例"（<code>docs/agent-os-roadmap.md:32</code>），不要为这十个模块引入 tenant 维度</li>
+</ul>
+
+<h2 id="s6">6 · 与 PDF 的分歧点（Octop 不必跟随 PDF 的取舍）</h2>
+<table>
+<thead><tr><th>PDF 结论</th><th>Octop 的情况</th><th>建议</th></tr></thead>
+<tbody>
+<tr><td>0.1 只做四平台，放弃抖音 / 小红书</td><td>Octop 也无这些通道</td><td><b>一致</b>，不必追</td></tr>
+<tr><td>0.3 接博查 + 智谱两家</td><td>Octop 已通 tavily / brave / google / kimi / searchfree</td><td><b>比 PDF 宽</b>，两家即可起步</td></tr>
+<tr><td>1.1 不自建 ERP</td><td>一致</td><td>但要自建<b>标准表中间层</b>（PDF 没提这层）</td></tr>
+<tr><td>1.2 用桌面悬浮窗 + 麦克风</td><td>Octop 截的是服务器桌面</td><td><b>形态要做</b>，但注意服务器侧与本机侧的区别</td></tr>
+<tr><td>2B 国内"事中实时"是空白</td><td>Octop 有 steer 可注入</td><td><b>steer 是 Octop 的独有优势</b>，但缺触发器与数据缓存</td></tr>
+<tr><td>3B 只考核四个 KPI</td><td>Octop 四个 KPI 全无埋点</td><td>埋点是必做，且很轻（一张事件表）</td></tr>
+<tr><td>3C 归因"没人做过"</td><td>事件平面已具备</td><td><b>这是 Octop 最有机会做出差异化的单点</b></td></tr>
+</tbody>
+</table>
+
+<h2 id="s7">附 · 主要证据索引</h2>
+<table>
+<thead><tr><th>主题</th><th>位置</th></tr></thead>
+<tbody>
+<tr><td>通道实现（外部包）</td><td><code>.venv/lib/python3.12/site-packages/octop_gateway/channels/</code>、<code>constraints.py:29-97</code>、<code>group_context.py:21-56</code></td></tr>
+<tr><td>IM 身份归并缺失</td><td><code>src/octop/infra/gateway/process/message_keys.py:86-108</code></td></tr>
+<tr><td>HITL</td><td><code>src/octop/infra/gateway/hitl/coordinator.py</code>、<code>store.py:16-24</code>、<code>slash/catalog.py:18</code></td></tr>
+<tr><td>主动推送四链路</td><td><code>src/octop/infra/gateway/gateway.py:824</code>、<code>cron/delivery.py:130</code>、<code>events/expert_target.py:102</code>、<code>proactive/service.py:252</code></td></tr>
+<tr><td>搜索工具</td><td><code>src/octop/infra/agents/settings/tool_catalog.py:72-76</code>、<code>infra/utils/search_probe.py:20</code></td></tr>
+<tr><td>截图进模型</td><td><code>octop_harness/builtin/tools/browser_use.py:126-174</code>、<code>desktop_screenshot.py:288-345</code></td></tr>
+<tr><td>steer 注入</td><td><code>src/octop/infra/gateway/steer/coordinator.py:666-687</code></td></tr>
+<tr><td>实时 ASR</td><td><code>src/octop/infra/voice/realtime.py</code>、<code>api/routers/voice.py:256</code></td></tr>
+<tr><td>cron 能力</td><td><code>src/octop/infra/cron/trigger.py:77</code>、<code>task_type.py</code>、<code>infra/db/repos/cron.py:79-98</code></td></tr>
+<tr><td>连接器目录（30）</td><td><code>src/octop/infra/connectors/catalog.json</code>、<code>gateway/adapters/http_extract.py:21-47</code></td></tr>
+<tr><td>light_app 中间层</td><td><code>src/octop/infra/db/migrations/025_light_apps.sql:68-79</code>、<code>infra/apps/sources.py:1-7</code>、<code>service.py:405-407</code></td></tr>
+<tr><td>图表与只读助手</td><td><code>src/octop/infra/apps/charts.py:20</code>、<code>assistant.py</code></td></tr>
+<tr><td>知识库为文档 RAG</td><td><code>src/octop/infra/knowledge/index.py:25-35</code>、<code>parse.py:45,74,262</code>、<code>retrieve.py:17-24</code></td></tr>
+<tr><td>媒体生成</td><td><code>src/octop/infra/agents/settings/media_generation.py:22-28,64</code></td></tr>
+<tr><td>平台定位</td><td><code>docs/architecture-overview.md:27</code>、<code>docs/agent-os-roadmap.md:6,32</code></td></tr>
+</tbody>
+</table>
+
+<div class="foot">
+  <p>口径说明：通道实现位于外部包 <code>octop-gateway</code>，<code>src/octop/infra/gateway/</code> 是宿主侧粘合层 —— 引用时两者都算 Octop 能力。
+  平台内没有第二套 IM 实现。</p>
+  <p>方法：6 路并行代码调研（IM 通道 / 浏览器与屏幕 / 数据接入 / 调度与输出 / MiniApp 与销售支持 / 规划文档）+ 关键论断逐条抽验。
+  仓库原有 GitHub 风格状态色未通过色盲分离检查（浅色模式 warn↔bad 的 deutan ΔE 仅 1.5），故本文档状态一律采用
+  <b>图标 + 文字</b>双通道呈现，颜色仅为辅助；浅色 / 深色两套取色独立选定。</p>
+</div>
+
+</div>
+</body>
+</html>

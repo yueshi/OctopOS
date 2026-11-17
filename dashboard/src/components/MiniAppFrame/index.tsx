@@ -11,7 +11,11 @@ import { buildSrcDoc, hasEmbeddedFrame } from "./sdk";
 import { buildWrapperDoc } from "./wrapper";
 import { attachBridge, type AppViolation, type BridgeParams } from "./bridge";
 import { effectiveCapabilities } from "./capabilities";
-import { useMiniAppDataVersion } from "./useMiniAppDataVersion";
+import {
+  MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS,
+  MINIAPP_DATA_VERSION_POLL_MS,
+  useMiniAppDataVersion,
+} from "./useMiniAppDataVersion";
 import { fullscreenContainer } from "../../utils/overlayContainer";
 
 const { Text } = Typography;
@@ -28,6 +32,8 @@ interface Props {
   capabilities?: readonly string[];
   /** False while the hosting desktop window is hidden or minimized. */
   active?: boolean;
+  /** True when the hosting window is the focused one (fast data polling). */
+  foreground?: boolean;
   /** Fill the chat composer (never sends automatically). */
   onComposeMessage?: (text: string) => void | Promise<void>;
   /**
@@ -54,6 +60,7 @@ export default function MiniAppFrame({
   onLaunchGame,
   capabilities,
   active = true,
+  foreground = true,
   onComposeMessage,
   onOpenExternal,
 }: Props) {
@@ -68,6 +75,9 @@ export default function MiniAppFrame({
     appId,
     frameRef,
     Boolean(html) && !error && !escaped && active,
+    foreground
+      ? MINIAPP_DATA_VERSION_POLL_MS
+      : MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS,
   );
 
   useEffect(() => {

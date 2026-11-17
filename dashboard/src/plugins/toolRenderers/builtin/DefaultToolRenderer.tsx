@@ -8,6 +8,7 @@ import {
   parseStructuredToolOutput,
 } from "../../../utils/toolMediaBlocks";
 import { formatToolArguments } from "../../../utils/formatToolArguments";
+import { fullscreenContainer } from "../../../utils/overlayContainer";
 import {
   useToolDisplayNames,
   resolveToolLabel,
@@ -27,7 +28,7 @@ function ImageGallery({
   images: Array<{ url: string; filename?: string }>;
 }) {
   return (
-    <Image.PreviewGroup>
+    <Image.PreviewGroup preview={{ getContainer: fullscreenContainer }}>
       {images.map((img, idx) => (
         <Image
           key={`${img.url}-${idx}`}

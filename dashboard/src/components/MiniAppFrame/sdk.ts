@@ -349,13 +349,30 @@ const APP_HOST_STYLE = `<style>
   ::-webkit-scrollbar-thumb:hover { background: rgb(148 163 184 / 70%); }
 </style>`;
 
-export function buildSrcDoc(html: string): string {
+export interface BuildSrcDocOptions {
+  /** Bridge SDK injected before app scripts. Defaults to ``window.octopApp``. */
+  sdk?: string;
+  /** Locale exposed to system apps as ``window.__OCTOP_LOCALE__``. */
+  locale?: string;
+}
+
+export function buildSrcDoc(
+  html: string,
+  options: BuildSrcDocOptions = {},
+): string {
   // Old apps may predate the write-time rule; never run one whose static HTML
   // would create a fresh realm before the freeze can protect it.
   if (hasEmbeddedFrame(html)) {
     return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${APP_CSP}">${APP_HOST_STYLE}</head><body><p>This MiniApp embeds a frame and cannot be displayed.</p></body></html>`;
   }
-  const head = `<meta http-equiv="Content-Security-Policy" content="${APP_CSP}"><script>${APP_SDK}</script>${APP_HOST_STYLE}`;
+  const localeScript = options.locale
+    ? `<script>window.__OCTOP_LOCALE__=${JSON.stringify(
+        options.locale,
+      )};</script>`
+    : "";
+  const head = `<meta http-equiv="Content-Security-Policy" content="${APP_CSP}">${localeScript}<script>${
+    options.sdk ?? APP_SDK
+  }</script>${APP_HOST_STYLE}`;
   // Pull the first <html ...> tag out so the freeze script can precede every
   // app script while keeping lang/class/style on the root element.
   const htmlMatch = /<html\b([^>]*)>/i.exec(html);

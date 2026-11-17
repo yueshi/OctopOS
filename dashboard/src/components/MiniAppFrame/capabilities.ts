@@ -22,6 +22,23 @@ export const CAP = {
 
 export const ALL_CAPABILITIES: readonly string[] = Object.values(CAP);
 
+/**
+ * System-app capabilities. Deliberately kept out of ``CAP`` /
+ * ``ALL_CAPABILITIES``: ``effectiveCapabilities(undefined)`` falls back to the
+ * legacy all-on set, so adding them there would silently grant every old or
+ * unversioned MiniApp access to platform configuration data.
+ */
+export const SYSTEM_CAP = {
+  READ: "system.read",
+  ACT: "system.act",
+  OPEN_CONSOLE: "system.openConsole",
+} as const;
+
+export const SYSTEM_APP_CAPABILITIES: readonly string[] = [
+  SYSTEM_CAP.READ,
+  SYSTEM_CAP.OPEN_CONSOLE,
+];
+
 const METHOD_CAPABILITY: Record<string, string> = {
   schema: CAP.DATA_READ,
   tables: CAP.DATA_READ,
@@ -39,6 +56,9 @@ const METHOD_CAPABILITY: Record<string, string> = {
   serviceImage: CAP.EXTERNAL_FETCH,
   events: CAP.EVENTS_READ,
   ackEvents: CAP.EVENTS_READ,
+  systemQuery: SYSTEM_CAP.READ,
+  systemAction: SYSTEM_CAP.ACT,
+  openConsole: SYSTEM_CAP.OPEN_CONSOLE,
 };
 
 export function effectiveCapabilities(

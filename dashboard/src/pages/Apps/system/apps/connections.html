@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>连接</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: var(--sys-bg);
+        --sys-bg: #ffffff;
+        --sys-fg: #0f172a;
+        --sys-muted: #64748b;
+        --sys-line: #e2e8f0;
+        --sys-card: #f8fafc;
+        --sys-accent: #4f6ef7;
+        --sys-ok: #16a34a;
+        --sys-warn: #d97706;
+        --sys-danger: #dc2626;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --sys-bg: #111827;
+          --sys-fg: #e5e7eb;
+          --sys-muted: #94a3b8;
+          --sys-line: #334155;
+          --sys-card: #1e293b;
+          --sys-accent: #818cf8;
+          --sys-ok: #4ade80;
+          --sys-warn: #fbbf24;
+          --sys-danger: #f87171;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        font:
+          13px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          "Hiragino Sans GB",
+          "Microsoft YaHei",
+          sans-serif;
+        overflow: auto;
+      }
+      .page {
+        padding: 18px 20px 24px;
+        max-width: 980px;
+        margin: 0 auto;
+      }
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .header h1 {
+        font-size: 17px;
+        margin: 0;
+        font-weight: 650;
+        flex: 1;
+      }
+      .refresh {
+        border: 1px solid var(--sys-line);
+        background: var(--sys-bg);
+        color: var(--sys-fg);
+        border-radius: 8px;
+        padding: 6px 11px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .refresh:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .stat {
+        background: var(--sys-card);
+        border: 1px solid var(--sys-line);
+        border-radius: 11px;
+        padding: 12px 13px;
+      }
+      .stat .label {
+        color: var(--sys-muted);
+        font-size: 11px;
+      }
+      .stat .value {
+        font-size: 21px;
+        font-weight: 650;
+        margin-top: 4px;
+      }
+      .card {
+        border: 1px solid var(--sys-line);
+        border-radius: 12px;
+        margin-top: 14px;
+        overflow: hidden;
+      }
+      .card-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--sys-line);
+      }
+      .card-head h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--sys-muted);
+        margin: 0;
+        font-weight: 600;
+        flex: 1;
+      }
+      .manage {
+        border: 1px solid var(--sys-line);
+        background: var(--sys-bg);
+        color: var(--sys-accent);
+        border-radius: 7px;
+        padding: 4px 9px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 11px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--sys-line);
+      }
+      .row:last-child {
+        border-bottom: 0;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--sys-muted);
+        flex: 0 0 auto;
+      }
+      .dot.ok {
+        background: var(--sys-ok);
+      }
+      .dot.warn {
+        background: var(--sys-warn);
+      }
+      .dot.bad {
+        background: var(--sys-danger);
+      }
+      .row-main {
+        flex: 1;
+        min-width: 0;
+      }
+      .row-name {
+        font-weight: 550;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row-meta {
+        color: var(--sys-muted);
+        font-size: 11px;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row-error {
+        color: var(--sys-danger);
+        font-size: 11px;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tag {
+        color: var(--sys-muted);
+        border: 1px solid var(--sys-line);
+        border-radius: 999px;
+        padding: 1px 7px;
+        font-size: 10px;
+        white-space: nowrap;
+      }
+      .empty {
+        padding: 22px 14px;
+        color: var(--sys-muted);
+        text-align: center;
+      }
+      .state {
+        padding: 36px 12px;
+        text-align: center;
+        color: var(--sys-muted);
+      }
+      .error {
+        color: var(--sys-danger);
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid var(--sys-line);
+        border-top-color: var(--sys-accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin: 0 auto 10px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (max-width: 560px) {
+        .page {
+          padding: 14px;
+        }
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <h1 id="title">连接</h1>
+        <button type="button" class="refresh" id="refresh">刷新</button>
+      </div>
+      <div id="content"></div>
+    </div>
+    <script>
+      (function () {
+        var locale =
+          (window.octopSystem && window.octopSystem.locale) === "en"
+            ? "en"
+            : "zh";
+        var STRINGS = {
+          zh: {
+            title: "连接",
+            channels: "通道",
+            connectors: "连接器",
+            connected: "已连接",
+            disconnected: "未连接",
+            needsAuth: "待授权",
+            active: "可用",
+            manageChannels: "管理通道",
+            manageConnectors: "管理连接器",
+            emptyChannels: "这个专家还没有绑定 IM 通道。",
+            emptyConnectors: "还没有连接器。",
+            error: "加载失败",
+            retry: "重试",
+            loading: "加载中…",
+            shared: "共享",
+          },
+          en: {
+            title: "Connections",
+            channels: "Channels",
+            connectors: "Connectors",
+            connected: "Connected",
+            disconnected: "Disconnected",
+            needsAuth: "Needs authorization",
+            active: "Active",
+            manageChannels: "Manage channels",
+            manageConnectors: "Manage connectors",
+            emptyChannels: "No IM channel is bound to this expert yet.",
+            emptyConnectors: "No connectors yet.",
+            error: "Could not load connections",
+            retry: "Retry",
+            loading: "Loading…",
+            shared: "Shared",
+          },
+        };
+        var text = STRINGS[locale] || STRINGS.zh;
+        var state = { loading: false, error: "", channels: [], connectors: [] };
+
+        function $(id) {
+          return document.getElementById(id);
+        }
+        function escapeHtml(value) {
+          return String(value == null ? "" : value).replace(
+            /[&<>"']/g,
+            function (ch) {
+              return {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              }[ch];
+            },
+          );
+        }
+        function renderState() {
+          var host = $("content");
+          if (state.loading) {
+            host.innerHTML =
+              '<div class="state"><div class="spinner"></div><div>' +
+              escapeHtml(text.loading) +
+              "</div></div>";
+            return;
+          }
+          if (state.error) {
+            host.innerHTML =
+              '<div class="state error"><div>' +
+              escapeHtml(text.error) +
+              '</div><div style="margin-top:8px">' +
+              escapeHtml(state.error) +
+              '</div><div style="margin-top:12px"><button class="refresh" id="retry">' +
+              escapeHtml(text.retry) +
+              "</button></div></div>";
+            var retry = $("retry");
+            if (retry) retry.addEventListener("click", load);
+            return;
+          }
+          render();
+        }
+        function statusFor(channel) {
+          if (channel.connected) return { cls: "ok", label: text.connected };
+          if (channel.enabled) return { cls: "warn", label: text.disconnected };
+          return { cls: "", label: text.disconnected };
+        }
+        function connectorStatus(connector) {
+          if (connector.status === "active")
+            return { cls: "ok", label: text.active };
+          if (
+            connector.status === "needs_auth" ||
+            connector.status === "authorizing"
+          )
+            return { cls: "warn", label: text.needsAuth };
+          return { cls: "", label: connector.status || text.disconnected };
+        }
+        function render() {
+          var host = $("content");
+          host.innerHTML = "";
+          var connectedChannels = state.channels.filter(function (channel) {
+            return channel.connected;
+          }).length;
+          var pendingConnectors = state.connectors.filter(function (connector) {
+            return connector.status !== "active";
+          }).length;
+
+          var stats = document.createElement("div");
+          stats.className = "stats";
+          [
+            { label: text.channels, value: state.channels.length },
+            { label: text.connected, value: connectedChannels },
+            { label: text.connectors, value: state.connectors.length },
+            { label: text.needsAuth, value: pendingConnectors },
+          ].forEach(function (item) {
+            var card = document.createElement("div");
+            card.className = "stat";
+            var label = document.createElement("div");
+            label.className = "label";
+            label.textContent = item.label;
+            var value = document.createElement("div");
+            value.className = "value";
+            value.textContent = String(item.value);
+            card.appendChild(label);
+            card.appendChild(value);
+            stats.appendChild(card);
+          });
+          host.appendChild(stats);
+
+          host.appendChild(
+            renderSection({
+              title: text.channels,
+              manage: text.manageChannels,
+              path: "/personalization/channels",
+              rows: state.channels,
+              empty: text.emptyChannels,
+              row: function (channel) {
+                var status = statusFor(channel);
+                return rowView({
+                  dot: status.cls,
+                  name: channel.name || channel.kind,
+                  meta: (channel.kind || "") + " · " + status.label,
+                  error: channel.error,
+                });
+              },
+            }),
+          );
+
+          host.appendChild(
+            renderSection({
+              title: text.connectors,
+              manage: text.manageConnectors,
+              path: "/connectors",
+              rows: state.connectors,
+              empty: text.emptyConnectors,
+              row: function (connector) {
+                var status = connectorStatus(connector);
+                return rowView({
+                  dot: status.cls,
+                  name: connector.display_name || connector.kind,
+                  meta: (connector.kind || "") + " · " + status.label,
+                  tag: connector.shared ? text.shared : "",
+                });
+              },
+            }),
+          );
+        }
+        function rowView(options) {
+          var row = document.createElement("div");
+          row.className = "row";
+          var dot = document.createElement("span");
+          dot.className = "dot " + (options.dot || "");
+          row.appendChild(dot);
+          var main = document.createElement("div");
+          main.className = "row-main";
+          var name = document.createElement("div");
+          name.className = "row-name";
+          name.textContent = options.name || "—";
+          main.appendChild(name);
+          var meta = document.createElement("div");
+          meta.className = "row-meta";
+          meta.textContent = options.meta || "";
+          main.appendChild(meta);
+          if (options.error) {
+            var error = document.createElement("div");
+            error.className = "row-error";
+            error.textContent = options.error;
+            main.appendChild(error);
+          }
+          row.appendChild(main);
+          if (options.tag) {
+            var tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = options.tag;
+            row.appendChild(tag);
+          }
+          return row;
+        }
+        function renderSection(options) {
+          var card = document.createElement("div");
+          card.className = "card";
+          var head = document.createElement("div");
+          head.className = "card-head";
+          var title = document.createElement("h2");
+          title.textContent = options.title + " (" + options.rows.length + ")";
+          head.appendChild(title);
+          var manage = document.createElement("button");
+          manage.type = "button";
+          manage.className = "manage";
+          manage.textContent = options.manage;
+          manage.addEventListener("click", function () {
+            if (window.octopSystem)
+              window.octopSystem.openConsole(options.path);
+          });
+          head.appendChild(manage);
+          card.appendChild(head);
+          if (!options.rows.length) {
+            var empty = document.createElement("div");
+            empty.className = "empty";
+            empty.textContent = options.empty;
+            card.appendChild(empty);
+          } else {
+            options.rows.forEach(function (item) {
+              card.appendChild(options.row(item));
+            });
+          }
+          return card;
+        }
+        function load() {
+          if (!window.octopSystem) return;
+          state.loading = true;
+          state.error = "";
+          renderState();
+          Promise.allSettled([
+            window.octopSystem.query("channels.list", {}),
+            window.octopSystem.query("connectors.list", {}),
+          ])
+            .then(function (results) {
+              var failed = results.filter(function (result) {
+                return result.status === "rejected";
+              });
+              if (failed.length === results.length) {
+                throw failed[0].reason;
+              }
+              state.channels =
+                results[0].status === "fulfilled"
+                  ? results[0].value.channels || []
+                  : [];
+              state.connectors =
+                results[1].status === "fulfilled"
+                  ? results[1].value.connectors || []
+                  : [];
+              state.loading = false;
+              renderState();
+            })
+            .catch(function (error) {
+              state.loading = false;
+              state.error =
+                error && error.message ? error.message : String(error);
+              renderState();
+            });
+        }
+        $("refresh").addEventListener("click", load);
+        $("title").textContent = text.title;
+        load();
+      })();
+    </script>
+  </body>
+</html>

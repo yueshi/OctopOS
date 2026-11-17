@@ -65,6 +65,12 @@ export interface BridgeContext {
   capabilities?: readonly string[] | (() => readonly string[] | undefined);
   /** Handles the request and returns its result. */
   handle: BridgeHandler;
+  /**
+   * Methods only this host implements (e.g. the system-app bridge). They are
+   * checked against {@link KNOWN_METHODS} in addition to the global set, so a
+   * regular MiniApp host never accepts them.
+   */
+  extraMethods?: readonly string[];
   /** Called when the page asks for something the capability list forbids. */
   onDenied?: (method: string) => void;
   /** Called for CSP violations the page reports (throttled per frame). */
@@ -127,9 +133,12 @@ export function isAppRequest(data: unknown): data is AppRequest {
 export function checkMethodAllowed(
   method: string | undefined,
   capabilities?: readonly string[],
+  extraMethods?: readonly string[],
 ): boolean {
   if (!method) return false;
-  if (!KNOWN_METHODS.has(method)) return false;
+  if (!KNOWN_METHODS.has(method) && !extraMethods?.includes(method)) {
+    return false;
+  }
   return isMethodAllowed(method, effectiveCapabilities(capabilities));
 }
 
@@ -187,7 +196,11 @@ export function attachBridge(
     };
 
     if (
-      !checkMethodAllowed(data.method, resolveCapabilities(ctx.capabilities))
+      !checkMethodAllowed(
+        data.method,
+        resolveCapabilities(ctx.capabilities),
+        ctx.extraMethods,
+      )
     ) {
       ctx.onDenied?.(data.method ?? "");
       reply({ ok: false, error: "capability not declared" });

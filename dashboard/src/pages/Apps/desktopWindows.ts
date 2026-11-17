@@ -1,4 +1,12 @@
-import { AppWindow, Globe, MessageSquare, type LucideIcon } from "lucide-react";
+import {
+  AppWindow,
+  FileText,
+  FolderOpen,
+  Globe,
+  MessageSquare,
+  Settings2,
+  type LucideIcon,
+} from "lucide-react";
 
 export interface DesktopChatSeed {
   id: number;
@@ -14,10 +22,27 @@ export interface DesktopWindowBounds {
   h: number;
 }
 
-export type DesktopWindowKind = "app" | "chat" | "external";
+export type DesktopWindowKind =
+  | "app"
+  | "chat"
+  | "external"
+  | "files"
+  | "html"
+  | "browser"
+  | "system";
+
+export type DesktopFilesTab = "generated" | "all";
+
+/** Emitted by a desktop chat window after a file-producing tool / turn. */
+export const DESKTOP_ARTIFACTS_EVENT = "octop:desktop-artifacts";
+
+export interface DesktopArtifactsEventDetail {
+  agentId: string;
+  threadId?: string | null;
+}
 
 export interface DesktopWindowState extends DesktopWindowBounds {
-  /** Stable window key: `app:<id>`, `chat:<id>` or `external:<space>:<url>`. */
+  /** Stable window key: `app:<id>`, `chat:<id>`, `files:<agent>` or `external:<space>:<url>`. */
   id: string;
   kind: DesktopWindowKind;
   appId?: string;
@@ -27,8 +52,20 @@ export interface DesktopWindowState extends DesktopWindowBounds {
   /** External web window. */
   url?: string;
   title?: string;
+  /** Files window: workspace path selected on open. */
+  path?: string;
+  /** Files window: conversation whose artifacts should be shown first. */
+  threadId?: string;
+  /** Files window: whether `path` is workspace-relative (vs host-absolute). */
+  pathFromWorkspace?: boolean;
+  /** Files window: active tab. */
+  filesTab?: DesktopFilesTab;
+  /** Files window: bumps when a new path is pushed into the window. */
+  pathSeq?: number;
   /** MiniApp context selected inside a chat window. */
   contextAppId?: string | null;
+  /** System app key (`usage`, `connections`, ...) for `kind: "system"`. */
+  systemKey?: string;
   /** One-shot composer prefill handed to the chat window. */
   seed?: DesktopChatSeed;
   z: number;
@@ -42,9 +79,55 @@ export interface DesktopWindowIdentity {
   agentId?: string;
   spaceId?: string;
   url?: string;
+  path?: string;
+  systemKey?: string;
 }
 
 export const EXTERNAL_PROTOCOL = /^https?:\/\//i;
+
+/** Console pages that boot the full dashboard SPA (not `/p/*` public apps). */
+const CONSOLE_ROUTE_PREFIXES = [
+  "/apps",
+  "/chat",
+  "/agents",
+  "/experts",
+  "/settings",
+  "/admin",
+  "/login",
+  "/setup",
+  "/skills",
+  "/knowledge",
+  "/cron",
+  "/connectors",
+  "/models",
+  "/plugins",
+  "/users",
+  "/teams",
+] as const;
+
+/**
+ * True when *url* points at this dashboard's own console SPA.
+ *
+ * Loading it inside a desktop web window starts a second full console —
+ * its own React tree, polls and (on `/apps/desktop`) its own restored
+ * windows — which is the most expensive thing a window can host. Public
+ * MiniApp links (`/p/*`) and API pages are intentionally not flagged.
+ */
+export function isDashboardConsoleUrl(raw: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const url = new URL(raw);
+    if (url.origin !== window.location.origin) return false;
+    const path = url.pathname;
+    if (path === "/") return true;
+    if (path.startsWith("/api/") || path.startsWith("/p/")) return false;
+    return CONSOLE_ROUTE_PREFIXES.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * One descriptor per desktop window kind. Renderers, ids, minimum sizes and
@@ -97,6 +180,48 @@ export const WINDOW_REGISTRY: Record<DesktopWindowKind, DesktopWindowKindSpec> =
           : null,
       isValid: (win) => Boolean(win.url && EXTERNAL_PROTOCOL.test(win.url)),
     },
+    files: {
+      kind: "files",
+      labelKey: "apps.desktop.files.label",
+      labelFallback: "Files",
+      icon: FolderOpen,
+      minWidth: 720,
+      minHeight: 480,
+      identity: ({ agentId }) => (agentId ? `files:${agentId}` : null),
+      isValid: (win) => Boolean(win.agentId),
+    },
+    html: {
+      kind: "html",
+      labelKey: "apps.desktop.files.htmlWindow",
+      labelFallback: "HTML page",
+      icon: FileText,
+      minWidth: 560,
+      minHeight: 420,
+      identity: ({ agentId, path }) =>
+        agentId && path ? `html:${agentId}:${encodeURIComponent(path)}` : null,
+      isValid: (win) => Boolean(win.agentId && win.path),
+    },
+    browser: {
+      kind: "browser",
+      labelKey: "apps.desktop.browser.label",
+      labelFallback: "Browser",
+      icon: Globe,
+      minWidth: 520,
+      minHeight: 420,
+      identity: ({ agentId }) => (agentId ? `browser:${agentId}` : null),
+      isValid: (win) => Boolean(win.agentId),
+    },
+    system: {
+      kind: "system",
+      labelKey: "apps.desktop.systemWindow",
+      labelFallback: "System app",
+      icon: Settings2,
+      minWidth: 540,
+      minHeight: 440,
+      identity: ({ agentId, systemKey }) =>
+        agentId && systemKey ? `system:${agentId}:${systemKey}` : null,
+      isValid: (win) => Boolean(win.agentId && win.systemKey),
+    },
   };
 
 export const MENU_BAR_HEIGHT = 38;
@@ -112,6 +237,22 @@ export function appWindowId(appId: string): string {
 
 export function chatWindowId(agentId: string): string {
   return WINDOW_REGISTRY.chat.identity({ agentId })!;
+}
+
+export function filesWindowId(agentId: string): string {
+  return WINDOW_REGISTRY.files.identity({ agentId })!;
+}
+
+export function htmlWindowId(agentId: string, path: string): string {
+  return WINDOW_REGISTRY.html.identity({ agentId, path })!;
+}
+
+export function browserWindowId(agentId: string): string {
+  return WINDOW_REGISTRY.browser.identity({ agentId })!;
+}
+
+export function systemWindowId(agentId: string, systemKey: string): string {
+  return WINDOW_REGISTRY.system.identity({ agentId, systemKey })!;
 }
 
 export function externalWindowId(spaceId: string, url: string): string | null {
@@ -131,7 +272,15 @@ export function windowSpaceId(
   appSpace: ReadonlyMap<string, string>,
 ): string | undefined {
   if (win.spaceId) return win.spaceId;
-  if (win.kind === "chat") return win.agentId;
+  if (
+    win.kind === "chat" ||
+    win.kind === "files" ||
+    win.kind === "html" ||
+    win.kind === "browser" ||
+    win.kind === "system"
+  ) {
+    return win.agentId;
+  }
   return win.appId ? appSpace.get(win.appId) : undefined;
 }
 
@@ -151,6 +300,18 @@ export function desktopWindowTitle(
     return win.title || externalWindowTitle(win.url ?? "");
   }
   const space = ctx.spaces.get(win.agentId ?? win.spaceId ?? "");
+  if (win.kind === "files") {
+    return win.title || space?.name || win.agentId || "";
+  }
+  if (win.kind === "html") {
+    return win.title || win.path || space?.name || win.agentId || "";
+  }
+  if (win.kind === "browser") {
+    return win.title || (win.url ? externalWindowTitle(win.url) : "");
+  }
+  if (win.kind === "system") {
+    return win.title || space?.name || "";
+  }
   return space?.name ?? win.title ?? win.agentId ?? "";
 }
 
@@ -159,6 +320,11 @@ export interface NewDesktopWindowInput extends DesktopWindowIdentity {
   title?: string;
   contextAppId?: string | null;
   seed?: DesktopChatSeed;
+  path?: string;
+  threadId?: string;
+  pathFromWorkspace?: boolean;
+  filesTab?: DesktopFilesTab;
+  pathSeq?: number;
   z: number;
   list: readonly DesktopWindowState[];
   appSpace: ReadonlyMap<string, string>;
@@ -204,6 +370,21 @@ export function createDesktopWindow(
     height = Math.max(spec.minHeight, Math.min(780, maxWindowH));
     x = Math.round((maxW - width) / 2) + cascade * 22;
     y = 44 + cascade * 22;
+  } else if (input.kind === "files") {
+    width = Math.max(spec.minWidth, Math.min(980, maxW - 48));
+    height = Math.max(spec.minHeight, Math.min(680, maxWindowH));
+    x = 48 + cascade * 24;
+    y = 52 + cascade * 22;
+  } else if (input.kind === "html") {
+    width = Math.max(spec.minWidth, Math.min(960, maxW - 48));
+    height = Math.max(spec.minHeight, Math.min(700, maxWindowH));
+    x = 56 + cascade * 22;
+    y = 50 + cascade * 20;
+  } else if (input.kind === "browser") {
+    width = Math.max(spec.minWidth, Math.min(980, maxW - 48));
+    height = Math.max(spec.minHeight, Math.min(700, maxWindowH));
+    x = 44 + cascade * 24;
+    y = 54 + cascade * 20;
   } else {
     width = Math.max(spec.minWidth, Math.min(760, maxW - 40));
     height = Math.max(spec.minHeight, Math.min(560, maxWindowH));
@@ -222,7 +403,13 @@ export function createDesktopWindow(
       input.kind === "external"
         ? input.title || externalWindowTitle(input.url ?? "")
         : input.title,
+    path: input.path,
+    threadId: input.threadId,
+    pathFromWorkspace: input.pathFromWorkspace,
+    filesTab: input.filesTab,
+    pathSeq: input.pathSeq,
     contextAppId: input.contextAppId,
+    systemKey: input.systemKey,
     seed: input.seed,
     x: Math.max(8, Math.min(maxW - width - 8, x)),
     y: Math.max(MENU_BAR_HEIGHT + 8, Math.min(maxH - bottomInset - height, y)),
@@ -269,10 +456,14 @@ export function loadDesktopWindows(): DesktopWindowState[] {
     return parsed.slice(0, WINDOWS_STORE_LIMIT).flatMap((entry) => {
       const row = asRecord(entry);
       if (!row) return [];
-      const kind = row.kind;
-      if (kind !== "app" && kind !== "chat" && kind !== "external") {
+      const rawKind = row.kind;
+      if (
+        typeof rawKind !== "string" ||
+        !Object.prototype.hasOwnProperty.call(WINDOW_REGISTRY, rawKind)
+      ) {
         return [];
       }
+      const kind = rawKind as DesktopWindowKind;
       const id = asString(row.id);
       if (!id) return [];
       const spec = WINDOW_REGISTRY[kind];
@@ -284,7 +475,22 @@ export function loadDesktopWindows(): DesktopWindowState[] {
         spaceId: asString(row.spaceId),
         url: asString(row.url),
         title: asString(row.title),
+        path: asString(row.path),
+        threadId: asString(row.threadId),
+        pathFromWorkspace:
+          row.pathFromWorkspace === true
+            ? true
+            : row.pathFromWorkspace === false
+            ? false
+            : undefined,
+        filesTab:
+          row.filesTab === "all"
+            ? "all"
+            : row.filesTab === "generated"
+            ? "generated"
+            : undefined,
         contextAppId: asString(row.contextAppId),
+        systemKey: asString(row.systemKey),
         x: asFinite(row.x, 0),
         y: asFinite(row.y, MENU_BAR_HEIGHT),
         w: asFinite(row.w, spec.minWidth),

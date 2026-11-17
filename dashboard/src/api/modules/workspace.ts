@@ -11,6 +11,42 @@ import type {
   SyncFromOpenClawResponse,
 } from "../types";
 
+/** One generated file from the agent's conversation artifact ledger. */
+export interface WorkspaceArtifact {
+  path: string;
+  name: string;
+  agent_id: string;
+  thread_id: string;
+  thread_title: string;
+  last_active: number;
+  in_workspace: boolean;
+}
+
+export interface WorkspaceArtifactList {
+  items: WorkspaceArtifact[];
+}
+
+/** Scoped, short-lived token for rendering a workspace HTML file in an iframe. */
+export interface HtmlPreviewSession {
+  token: string;
+  base_path: string;
+  entry: string;
+  expires_at: number;
+}
+
+export interface WorkspaceTreeEntry {
+  path: string;
+  is_dir?: boolean;
+  size?: number;
+  modified_at?: string;
+}
+
+function agentWorkspaceQuery(path: string, fromWorkspace: boolean): string {
+  const params = new URLSearchParams({ path });
+  if (fromWorkspace) params.set("from_workspace", "true");
+  return params.toString();
+}
+
 export const workspaceApi = {
   getWorkspaceTree: () => request<FileTreeNode[]>("/workspace/tree"),
 
@@ -129,6 +165,66 @@ export const workspaceApi = {
       withFromWorkspace(
         `/agents/${agentId}/workspace/file?path=${encodeURIComponent(path)}`,
       ),
+    ),
+
+  /** Generated files recorded in the agent's recent conversations. */
+  listAgentArtifacts: (
+    agentId: string,
+    limit = 100,
+    threadId?: string | null,
+  ): Promise<WorkspaceArtifactList> => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (threadId) params.set("thread_id", threadId);
+    return request<WorkspaceArtifactList>(
+      `/agents/${agentId}/artifacts?${params.toString()}`,
+    );
+  },
+
+  /** One directory level of the agent workspace (works while the expert is stopped). */
+  listAgentTree: (agentId: string, path = "/"): Promise<WorkspaceTreeEntry[]> =>
+    request<WorkspaceTreeEntry[]>(
+      withFromWorkspace(
+        `/agents/${agentId}/workspace/tree?path=${encodeURIComponent(path)}`,
+      ),
+    ),
+
+  /** Read a text file with either workspace-relative or host-absolute paths. */
+  readAgentFile: (
+    agentId: string,
+    path: string,
+    fromWorkspace = true,
+  ): Promise<{ path: string; content: string }> =>
+    request<{ path: string; content: string }>(
+      `/agents/${agentId}/workspace/file?${agentWorkspaceQuery(
+        path,
+        fromWorkspace,
+      )}`,
+    ),
+
+  /** Download a file with either workspace-relative or host-absolute paths. */
+  downloadAgentFile: (
+    agentId: string,
+    path: string,
+    fromWorkspace = true,
+  ): Promise<Blob> =>
+    requestBlob(
+      `/agents/${agentId}/workspace/download?${agentWorkspaceQuery(
+        path,
+        fromWorkspace,
+      )}`,
+    ),
+
+  /** Mint a short-lived token for the sandboxed HTML preview iframe. */
+  createHtmlPreviewSession: (
+    agentId: string,
+    path: string,
+  ): Promise<HtmlPreviewSession> =>
+    request<HtmlPreviewSession>(
+      `/agents/${agentId}/workspace/preview-session`,
+      {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      },
     ),
 
   createWorkspaceFile: (

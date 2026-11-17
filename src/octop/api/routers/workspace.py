@@ -3,25 +3,36 @@
 from __future__ import annotations
 
 import logging
+import posixpath
 import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from octop_harness.backends.utils import BackendOperationNotSupportedError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from octop.api.common.agent_workspace import resolve_agent_workspace_dir
+from octop.api.common.agent import require_agent_row
+from octop.api.common.agent_workspace import (
+    agent_facing_workspace_dir,
+    resolve_agent_workspace_dir,
+)
 from octop.api.common.content_disposition import content_disposition
 from octop.api.common.workspace import (
     coerce_read_content,
     file_info_to_dict,
+    normalize_preview_rel,
     reanchor_entry_path,
     require_agent_workspace,
     require_running_workspace,
     workspace_api_path,
 )
 from octop.api.deps import current_user, get_server
+from octop.infra.agents.threads.artifact import collect_recent_artifacts
+from octop.infra.agents.workspace.preview_tokens import (
+    DEFAULT_WORKSPACE_PREVIEW_TTL,
+    create_workspace_preview_token,
+)
 from octop.infra.backend.tree_listing import dedupe_tree_rows
 from octop.infra.backup.workspace_archive import export_workspace_zip, import_workspace_zip
 from octop.infra.errors import ErrorCode, OctopError
@@ -127,8 +138,13 @@ async def list_tree(
     user: Any = Depends(current_user),
     server: Any = Depends(get_server),
 ) -> list[dict[str, Any]]:
-    """Single-level directory listing under ``path`` (agent must be running)."""
-    ws = await require_running_workspace(
+    """Single-level directory listing under ``path`` (works while stopped).
+
+    Read-only browsing is owner-only, but unlike mutations it does not require
+    the harness agent to be running: the workspace backend can be rebuilt from
+    the agent row.
+    """
+    ws = await require_agent_workspace(
         agent_id, user=user, as_user=as_user, server=server, owner_only=True
     )
     io_path = _workspace_io_path(path, from_workspace=from_workspace)
@@ -141,6 +157,168 @@ async def list_tree(
         for row in rows:
             row["path"] = reanchor_entry_path(str(row.get("path") or ""), parent=io_path)
     return dedupe_tree_rows(rows, parent=io_path)
+
+
+class WorkspaceArtifactItem(BaseModel):
+    path: str = Field(
+        description=(
+            "Workspace-relative path when ``in_workspace`` is true; otherwise the "
+            "host-absolute path the tool reported."
+        )
+    )
+    name: str = Field(description="File basename.")
+    agent_id: str = Field(default="", description="Agent that produced the file.")
+    thread_id: str = Field(description="Conversation that produced the file.")
+    thread_title: str = Field(default="", description="Conversation title, when set.")
+    last_active: int = Field(description="Conversation last-active unix timestamp.")
+    in_workspace: bool = Field(
+        description=(
+            "True when the path is workspace-relative (the producer's workspace "
+            "when ``agent_id`` names a team member)."
+        )
+    )
+
+
+class WorkspaceArtifactList(BaseModel):
+    items: list[WorkspaceArtifactItem]
+
+
+@router.get(
+    "/agents/{agent_id}/artifacts",
+    response_model=WorkspaceArtifactList,
+    summary="List generated workspace files",
+    description=(
+        "Flatten recent conversation artifacts (files written, edited or sent by "
+        "the agent) into the generated-files list used by the desktop Files window. "
+        "Newest conversations first; newest files first within a conversation."
+    ),
+)
+async def list_agent_artifacts(
+    agent_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    thread_id: str | None = Query(default=None, description="Only this conversation."),
+    as_user: int | None = None,
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> WorkspaceArtifactList:
+    """Return generated files recorded in the agent's conversation artifacts."""
+    require_agent_row(agent_id, user=user, as_user=as_user, server=server)
+    effective_uid = as_user if as_user is not None else user.id
+    registry = server.app_runtime.gateway.thread_registry
+    if thread_id:
+        row = registry.get_thread(thread_id)
+        rows = (
+            [row]
+            if row is not None and row.agent_id == agent_id and row.user_id == effective_uid
+            else []
+        )
+    else:
+        rows = registry.list_threads(agent_id=agent_id, user_id=effective_uid, limit=50)
+    workspace_dir = agent_facing_workspace_dir(server, agent_id)
+    items = collect_recent_artifacts(
+        rows,
+        workspace_dir,
+        default_agent_id=agent_id,
+        limit=limit,
+        thread_id=thread_id,
+    )
+    return WorkspaceArtifactList(items=[WorkspaceArtifactItem(**item.as_dict()) for item in items])
+
+
+class PreviewSessionBody(BaseModel):
+    path: str = Field(
+        description=(
+            "Workspace-relative HTML file or directory. Leading '/' is treated as "
+            "workspace-relative (dashboard tree paths)."
+        )
+    )
+
+
+class PreviewSessionOut(BaseModel):
+    token: str = Field(description="Short-lived read-only capability token.")
+    base_path: str = Field(
+        description=(
+            "API path fragment for the preview mount, relative to the /api prefix "
+            "(e.g. pass it to the dashboard's getApiUrl())."
+        )
+    )
+    entry: str = Field(description="File to load inside the iframe, relative to the token root.")
+    expires_at: int = Field(description="Unix timestamp when the token expires.")
+
+
+def _preview_dir_names(listed: Any) -> dict[str, str]:
+    """Map casefolded entry basenames to their original spelling."""
+    names: dict[str, str] = {}
+    for entry in getattr(listed, "entries", None) or []:
+        raw_path = entry.get("path") if isinstance(entry, dict) else getattr(entry, "path", None)
+        path = str(raw_path or "").replace("\\", "/").rstrip("/")
+        name = path.rsplit("/", 1)[-1]
+        if name:
+            names.setdefault(name.casefold(), name)
+    return names
+
+
+@router.post(
+    "/agents/{agent_id}/workspace/preview-session",
+    response_model=PreviewSessionOut,
+    summary="Create an HTML preview session",
+    description=(
+        "Mint a short-lived capability token for rendering an agent-generated HTML "
+        "file in a sandboxed iframe. The token is scoped to the file's directory and "
+        "expires quickly; it is not an access token."
+    ),
+)
+async def create_preview_session(
+    agent_id: str,
+    body: PreviewSessionBody,
+    as_user: int | None = None,
+    user: Any = Depends(current_user),
+    server: Any = Depends(get_server),
+) -> PreviewSessionOut:
+    """Issue a scoped preview token for one workspace HTML file or directory."""
+    rel = normalize_preview_rel(body.path)
+    ws = await require_agent_workspace(agent_id, user=user, as_user=as_user, server=server)
+    try:
+        if rel.casefold().endswith((".html", ".htm")):
+            root = posixpath.dirname(rel) or "."
+            listed = await ws.als(root)
+            if listed is None:
+                raise OctopError(ErrorCode.NOT_FOUND, f"cannot preview {body.path!r}")
+            name = posixpath.basename(rel)
+            entry = _preview_dir_names(listed).get(name.casefold(), "")
+            if not entry:
+                raise OctopError(ErrorCode.NOT_FOUND, f"cannot preview {body.path!r}")
+        else:
+            listed = await ws.als(rel)
+            if listed is None:
+                raise OctopError(ErrorCode.NOT_FOUND, f"cannot preview {body.path!r}")
+            names = _preview_dir_names(listed)
+            root = rel
+            entry = names.get("index.html", "")
+    except PermissionError as exc:
+        raise OctopError(ErrorCode.FORBIDDEN, f"cannot preview {body.path!r}") from exc
+    except BackendOperationNotSupportedError as exc:
+        raise OctopError(ErrorCode.WORKSPACE_OP_UNSUPPORTED, str(exc)) from exc
+
+    assert server.services is not None
+    secret = server.services.secret_repo.get("jwt")
+    if secret is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
+    token, expires_at = create_workspace_preview_token(
+        secret,
+        agent_id=agent_id,
+        user_id=user.id,
+        root=root,
+        as_user=as_user,
+        is_admin=user.is_admin,
+        ttl_seconds=DEFAULT_WORKSPACE_PREVIEW_TTL,
+    )
+    return PreviewSessionOut(
+        token=token,
+        base_path=f"/workspace-preview/{token}/",
+        entry=entry,
+        expires_at=expires_at,
+    )
 
 
 class WriteFileBody(BaseModel):
@@ -440,7 +618,7 @@ async def preview_media(
     """Stream an image or video inline for dashboard tool-result previews."""
     path_agent = _agent_id_from_media_source(source)
     effective_agent = path_agent or agent_id
-    ws = await require_running_workspace(effective_agent, user=user, as_user=as_user, server=server)
+    ws = await require_agent_workspace(effective_agent, user=user, as_user=as_user, server=server)
     payload = await resolve_preview_payload(
         source=source,
         workspace=ws,

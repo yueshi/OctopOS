@@ -39,6 +39,8 @@ _JWT_EXEMPT_PREFIXES = (
     "/api/downloads/link/",
     # Public read-only light-app links: the unguessable token is the credential.
     "/api/public/apps/",
+    # Workspace HTML previews: the scoped, short-lived preview token is the credential.
+    "/api/workspace-preview/",
     # External game result writes: the scoped, short-lived session token is the credential.
     "/api/game-sessions/",
     # Public webhook ingress: HMAC signature and source id are the credentials.

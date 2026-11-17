@@ -8,6 +8,7 @@ import {
   needsAuthBlobFetch,
   type ToolMediaItem,
 } from "../../../utils/toolMediaBlocks";
+import { fullscreenContainer } from "../../../utils/overlayContainer";
 import { MessageFileCard } from "./MessageFileCard";
 import styles from "../index.module.less";
 
@@ -123,7 +124,7 @@ export function ToolMediaStrip({
     <div className={styles.toolMediaStrip}>
       {images.length > 0 && (
         <div className={styles.messageImages}>
-          <Image.PreviewGroup>
+          <Image.PreviewGroup preview={{ getContainer: fullscreenContainer }}>
             {images.map((img, idx) => (
               <RefreshableImage
                 key={`${img.url}-${idx}`}

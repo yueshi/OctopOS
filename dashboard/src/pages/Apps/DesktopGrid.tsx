@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -32,6 +34,7 @@ import {
   Database,
   FileText,
   FolderKanban,
+  FolderOpen,
   Gamepad2,
   Gauge,
   Globe,
@@ -96,6 +99,13 @@ import { useTranslation } from "react-i18next";
 
 import { appsApi, type AppSummary } from "../../api/modules/apps";
 import { request } from "../../api/request";
+import { isHostAbsolutePath } from "../../utils/workspaceIoPath";
+import { toWorkspaceRelativePath } from "../../utils/workspacePath";
+import {
+  desktopFileBasename,
+  isHtmlPath,
+  type DesktopFileRef,
+} from "./desktopFiles";
 import MiniAppFrame from "../../components/MiniAppFrame";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useDashboardNotifySocket } from "../../hooks/useDashboardNotifySocket";
@@ -135,51 +145,107 @@ import {
 } from "./appActions";
 import {
   appWindowId,
+  browserWindowId,
   chatWindowId,
   createDesktopWindow,
   desktopWindowTitle,
-  DOCK_SPACE,
   externalWindowId,
+  externalWindowTitle,
+  filesWindowId,
+  htmlWindowId,
   loadDesktopWindows,
   MENU_BAR_HEIGHT,
   saveDesktopWindows,
+  systemWindowId,
   WINDOW_REGISTRY,
   windowSpaceId,
   type DesktopWindowState,
 } from "./desktopWindows";
+import { SYSTEM_APP_BY_KEY, visibleSystemApps } from "./system/registry";
+import type { SystemAppDefinition, SystemAppKey } from "./system/types";
 import styles from "./index.module.less";
+
+const DesktopFilesWindow = lazy(() => import("./DesktopFilesWindow"));
+const DesktopHtmlWindow = lazy(() => import("./DesktopHtmlWindow"));
+const DesktopBrowserWindow = lazy(() => import("./DesktopBrowserWindow"));
+const SystemAppFrame = lazy(() => import("./system/SystemAppFrame"));
 
 const { Text } = Typography;
 
-/** Hidden app/web windows are unloaded after this delay to reclaim memory. */
-export const HIDDEN_WINDOW_SUSPEND_MS = 30 * 60 * 1000;
+/** Windows hidden in another desktop are unloaded after this delay. */
+export const HIDDEN_WINDOW_SUSPEND_MS = 5 * 60 * 1000;
+/** Web pages (browser / HTML / external) are more expensive while hidden. */
+export const HIDDEN_WEB_WINDOW_SUSPEND_MS = 60 * 1000;
+/** Minimized windows are out of sight: reclaim their realm almost at once. */
+export const MINIMIZED_WINDOW_SUSPEND_MS = 5 * 1000;
 
+/**
+ * Generated app-icon gradients.
+ *
+ * Keep this palette brand-adjacent and mostly cool: the desktop wallpaper is
+ * dark navy and the default brand is teal/tech blue. Saturated reds and
+ * yellows read as alerts and clash with the chrome, so the only warm entry is
+ * one rose→violet accent. App ids hash into this list, so every app still gets
+ * a stable, distinct tint.
+ */
 const PALETTES: ReadonlyArray<readonly [string, string]> = [
-  ["#5b8cff", "#7c5cff"],
-  ["#ff7a59", "#ff4d8d"],
-  ["#22c55e", "#0ea5e9"],
-  ["#f59e0b", "#ef4444"],
-  ["#8b5cf6", "#ec4899"],
-  ["#06b6d4", "#3b82f6"],
-  ["#f97316", "#facc15"],
-  ["#14b8a6", "#84cc16"],
-  ["#6366f1", "#0ea5e9"],
-  ["#ec4899", "#f43f5e"],
-  ["#ff9a3c", "#ff3cac"],
-  ["#00c6ff", "#0072ff"],
-  ["#7f00ff", "#e100ff"],
-  ["#00f5a0", "#00d9f5"],
-  ["#f83600", "#f9d423"],
-  ["#fc466b", "#3f5efb"],
-  ["#11998e", "#38ef7d"],
-  ["#ff416c", "#ff4b2b"],
-  ["#ffd200", "#f7971e"],
-  ["#1fa2ff", "#12d8fa"],
-  ["#a18cd1", "#fbc2eb"],
-  ["#f093fb", "#f5576c"],
-  ["#4facfe", "#00f2fe"],
-  ["#43e97b", "#38f9d7"],
+  // Blue / azure
+  ["#4b74fa", "#7c5cff"],
+  ["#3b82f6", "#06b6d4"],
+  ["#2563eb", "#4f46e5"],
+  ["#1d4ed8", "#3b82f6"],
+  ["#0284c7", "#4b74fa"],
+  ["#0ea5e9", "#22d3ee"],
+  ["#0891b2", "#4f46e5"],
+  ["#38bdf8", "#6366f1"],
+  ["#1e40af", "#0ea5e9"],
+  // Indigo / violet
+  ["#6366f1", "#8b5cf6"],
+  ["#7c3aed", "#a78bfa"],
+  ["#4f46e5", "#9333ea"],
+  ["#8b5cf6", "#c084fc"],
+  ["#5b21b6", "#6366f1"],
+  ["#a855f7", "#6366f1"],
+  // Teal / cyan / emerald
+  ["#0d9488", "#14b8a6"],
+  ["#0f766e", "#0ea5e9"],
+  ["#14b8a6", "#22c55e"],
+  ["#10b981", "#34d399"],
+  ["#059669", "#14b8a6"],
+  ["#06b6d4", "#10b981"],
+  ["#2dd4bf", "#0ea5e9"],
+  // Neutral + the single rose accent
+  ["#64748b", "#4b74fa"],
+  ["#e85d75", "#7c3aed"],
 ];
+
+/**
+ * Window kinds whose whole body is an iframe: pointer events inside the frame
+ * never reach the desktop, so an unfocused window needs a click catcher to
+ * raise it (the title bar already works).
+ */
+const IFRAME_WINDOW_KINDS: ReadonlySet<DesktopWindowState["kind"]> = new Set([
+  "app",
+  "external",
+  "browser",
+  "html",
+  "system",
+]);
+
+/**
+ * Live iframe realms allowed in one desktop. Windows beyond the budget keep
+ * their chrome but sleep (presentational placeholder) until focused; `z` is
+ * focus recency, so the least recently used window is evicted first.
+ * MiniApps/HTML cost 1, full web pages cost 2.
+ */
+export const LIVE_IFRAME_BUDGET = 6;
+const IFRAME_COST: Partial<Record<DesktopWindowState["kind"], number>> = {
+  app: 1,
+  html: 1,
+  system: 1,
+  browser: 2,
+  external: 2,
+};
 
 type AppIconStyle = "aurora" | "glass" | "ring" | "mesh" | "solid";
 const ICON_STYLES: readonly AppIconStyle[] = [
@@ -362,6 +428,7 @@ const DOCK_APP_LIMIT = 10;
 const ACTIVE_SPACE_KEY = "octop:apps-desktop-space:v1";
 const ADMIN_MODE_KEY = "octop:apps-desktop-admin-mode:v1";
 const EMPTY_APPS: AppSummary[] = [];
+const EMPTY_SYSTEM_APPS: SystemAppDefinition[] = [];
 
 interface DesktopSpace {
   id: string;
@@ -374,6 +441,8 @@ interface DesktopSpace {
   state?: string;
   unreadCount: number;
   apps: AppSummary[];
+  /** Platform-owned apps available on this expert's desktop. */
+  systemApps: SystemAppDefinition[];
 }
 
 function spaceIdForApp(app: AppSummary): string {
@@ -507,6 +576,65 @@ function DesktopIcon({
   );
 }
 
+function SystemDesktopIcon({
+  definition,
+  selected,
+  onSelect,
+  onOpen,
+}: {
+  definition: SystemAppDefinition;
+  selected: boolean;
+  onSelect: () => void;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const Icon = definition.icon;
+  const label = t(definition.titleKey, definition.key);
+
+  return (
+    <Tooltip title={t(definition.descriptionKey, label)} placement="right">
+      <button
+        type="button"
+        className={[
+          styles.desktopIcon,
+          selected ? styles.desktopIconSelected : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        data-testid="desktop-system-icon"
+        data-system-key={definition.key}
+        aria-label={t("apps.desktop.open", "Open") + " " + label}
+        aria-pressed={selected}
+        onClick={onSelect}
+        onDoubleClick={onOpen}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onOpen();
+          }
+        }}
+      >
+        <span
+          className={[styles.desktopIconArt, styles.desktopIconArtSystem].join(
+            " ",
+          )}
+          style={{ width: 72, height: 72, borderRadius: 18 }}
+        >
+          <Icon
+            size={31}
+            strokeWidth={1.9}
+            className={styles.desktopIconGlyph}
+          />
+          <span className={styles.desktopIconSystemTag}>SYS</span>
+        </span>
+        <Text ellipsis className={styles.desktopIconName}>
+          {label}
+        </Text>
+      </button>
+    </Tooltip>
+  );
+}
+
 /**
  * macOS-style desktop: generated squircle icons on a dark wallpaper, a glass
  * dock, and draggable/resizable app windows with traffic-light controls.
@@ -520,7 +648,7 @@ export default function DesktopGrid({
   autoFullscreen?: boolean;
 }) {
   const { t } = useTranslation();
-  const { agents } = useAgent();
+  const { agents, setActiveAgent } = useAgent();
   const currentUser = useCurrentUser();
   const isAdmin = currentUser?.role === "admin";
   const [adminMode, setAdminMode] = useState(false);
@@ -594,6 +722,8 @@ export default function DesktopGrid({
   const [suspendedWindows, setSuspendedWindows] = useState<Set<string>>(
     new Set(),
   );
+  /** Windows that were visible at least once; hidden ones stay lazy otherwise. */
+  const [mountedWindows, setMountedWindows] = useState<Set<string>>(new Set());
   const suspendTimersRef = useRef<Map<string, number>>(new Map());
   const toggleCommandPalette = useCallback(() => {
     setSpacesOpen(false);
@@ -617,37 +747,38 @@ export default function DesktopGrid({
   } | null>(null);
   const titleBarTimersRef = useRef(new Map<string, number>());
   const windowsRef = useRef(windows);
-  const [dockInset, setDockInset] = useState(DOCK_SPACE);
+  const [dockRevealed, setDockRevealed] = useState(false);
+  const dockHideTimerRef = useRef<number | null>(null);
   useEffect(() => {
     windowsRef.current = windows;
   }, [windows]);
 
-  // The dock height depends on its content and CSS. Measure its top edge
-  // instead of hard-coding a gap, so windows always stop above the dock.
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const measure = () => {
-      const surface = root.querySelector<HTMLElement>(
-        '[data-testid="desktop-dock-surface"]',
-      );
-      if (!surface) return;
-      const rootRect = root.getBoundingClientRect();
-      const surfaceRect = surface.getBoundingClientRect();
-      if (rootRect.height <= 0 || surfaceRect.height <= 0) return;
-      const next = Math.max(0, Math.ceil(rootRect.bottom - surfaceRect.top));
-      setDockInset((current) => (current === next ? current : next));
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    const dock = root.querySelector<HTMLElement>(
-      '[data-testid="desktop-dock"]',
-    );
-    if (dock) observer.observe(dock);
-    return () => observer.disconnect();
+  const revealDock = useCallback(() => {
+    if (dockHideTimerRef.current !== null) {
+      window.clearTimeout(dockHideTimerRef.current);
+      dockHideTimerRef.current = null;
+    }
+    setDockRevealed(true);
   }, []);
+
+  const scheduleDockHide = useCallback(() => {
+    if (dockHideTimerRef.current !== null) {
+      window.clearTimeout(dockHideTimerRef.current);
+    }
+    dockHideTimerRef.current = window.setTimeout(() => {
+      dockHideTimerRef.current = null;
+      setDockRevealed(false);
+    }, 550);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (dockHideTimerRef.current !== null) {
+        window.clearTimeout(dockHideTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => saveDesktopWindows(windows), 250);
@@ -672,13 +803,12 @@ export default function DesktopGrid({
     if (!root) return;
     const maxW = root.clientWidth;
     const maxH = root.clientHeight;
-    const dockTop = maxH - dockInset;
     setWindows((list) => {
       let changed = false;
       const next = list.map((win) => {
         const spec = WINDOW_REGISTRY[win.kind];
         if (win.maximized) {
-          const h = Math.max(spec.minHeight, dockTop - MENU_BAR_HEIGHT);
+          const h = Math.max(spec.minHeight, maxH - MENU_BAR_HEIGHT);
           if (
             win.x === 0 &&
             win.y === MENU_BAR_HEIGHT &&
@@ -693,12 +823,12 @@ export default function DesktopGrid({
         const w = Math.min(win.w, Math.max(220, maxW - 8));
         const h = Math.min(
           win.h,
-          Math.max(spec.minHeight, dockTop - MENU_BAR_HEIGHT - 8),
+          Math.max(spec.minHeight, maxH - MENU_BAR_HEIGHT - 8),
         );
         const x = Math.max(0, Math.min(Math.max(0, maxW - w), win.x));
         const y = Math.max(
           MENU_BAR_HEIGHT,
-          Math.min(Math.max(MENU_BAR_HEIGHT, dockTop - h), win.y),
+          Math.min(Math.max(MENU_BAR_HEIGHT, maxH - h), win.y),
         );
         if (x === win.x && y === win.y && w === win.w && h === win.h) {
           return win;
@@ -708,7 +838,7 @@ export default function DesktopGrid({
       });
       return changed ? next : list;
     });
-  }, [dockInset]);
+  }, []);
 
   // Admin mode is an explicit, opt-in elevation: when off, even admins only
   // see experts they own or that another user shared.
@@ -727,6 +857,15 @@ export default function DesktopGrid({
   const knownAgentIds = useMemo(
     () => new Set(effectiveAgents.map((agent) => agent.agent_id)),
     [effectiveAgents],
+  );
+  const canBrowseAgentFiles = useCallback(
+    (id: string): boolean => {
+      if (isAdmin) return true;
+      return Boolean(
+        effectiveAgents.find((agent) => agent.agent_id === id)?.is_owner,
+      );
+    },
+    [effectiveAgents, isAdmin],
   );
   // Apps shared from an expert the viewer cannot open must not borrow that
   // expert's name: they gather in one "Shared with me" desktop instead. Own
@@ -803,6 +942,13 @@ export default function DesktopGrid({
         state: agent?.state,
         unreadCount: agent?.unread_count ?? 0,
         apps: group,
+        systemApps: agent
+          ? visibleSystemApps({
+              agent,
+              user: currentUser,
+              isAdmin,
+            })
+          : EMPTY_SYSTEM_APPS,
       };
     });
     const spaceRank = (id: string) =>
@@ -826,11 +972,13 @@ export default function DesktopGrid({
       state: "running",
       unreadCount: 0,
       apps: ordered,
+      systemApps: EMPTY_SYSTEM_APPS,
     });
     return result;
-  }, [accessibleAgents, ordered, spaceIdForViewer, t]);
+  }, [accessibleAgents, currentUser, isAdmin, ordered, spaceIdForViewer, t]);
   const space = spaces.find((item) => item.id === spaceId) ?? spaces[0] ?? null;
   const currentApps = space?.apps ?? EMPTY_APPS;
+  const currentSystemApps = space?.systemApps ?? EMPTY_SYSTEM_APPS;
   const selectedApp =
     currentApps.find((app) => app.app_id === selectedAppId) ?? null;
   const appSpace = useMemo(
@@ -840,6 +988,57 @@ export default function DesktopGrid({
       ),
     [ordered, spaceIdForViewer],
   );
+  const visibleWindowIds = useMemo(
+    () =>
+      new Set(
+        windows
+          .filter(
+            (win) =>
+              !win.minimized && windowSpaceId(win, appSpace) === space?.id,
+          )
+          .map((win) => win.id),
+      ),
+    [appSpace, space?.id, windows],
+  );
+  // Cap concurrently live iframe realms. Sorted by `z` (focus recency), the
+  // focused window is always first; lower windows sleep until they are raised.
+  const liveIframeIds = useMemo(() => {
+    let used = 0;
+    const live = new Set<string>();
+    const candidates = windows
+      .filter(
+        (win) =>
+          visibleWindowIds.has(win.id) && IFRAME_COST[win.kind] !== undefined,
+      )
+      .sort((left, right) => right.z - left.z);
+    for (const win of candidates) {
+      const cost = IFRAME_COST[win.kind] ?? 1;
+      if (used + cost > LIVE_IFRAME_BUDGET) continue;
+      used += cost;
+      live.add(win.id);
+    }
+    return live;
+  }, [visibleWindowIds, windows]);
+  // A restored desktop can hold windows from several spaces. Do not boot their
+  // iframes (and chats) until the user actually visits that space.
+  useEffect(() => {
+    setMountedWindows((current) => {
+      let next: Set<string> | null = null;
+      for (const id of visibleWindowIds) {
+        if (current.has(id)) continue;
+        if (!next) next = new Set(current);
+        next.add(id);
+      }
+      return next ?? current;
+    });
+  }, [visibleWindowIds]);
+  useEffect(() => {
+    setMountedWindows((current) => {
+      const alive = new Set(windows.map((win) => win.id));
+      if ([...current].every((id) => alive.has(id))) return current;
+      return new Set([...current].filter((id) => alive.has(id)));
+    });
+  }, [windows]);
   const spaceNameById = useMemo(
     () =>
       new Map(spaces.map((item) => [item.id, { name: item.name }] as const)),
@@ -848,15 +1047,39 @@ export default function DesktopGrid({
   const windowTitles = useMemo(
     () =>
       new Map(
-        windows.map(
-          (win) =>
-            [
+        windows.map((win) => {
+          if (win.kind === "files") {
+            const name = win.agentId
+              ? spaceNameById.get(win.agentId)?.name ?? win.agentId
+              : "";
+            return [
               win.id,
-              desktopWindowTitle(win, { apps: byId, spaces: spaceNameById }),
-            ] as const,
-        ),
+              `${t("apps.desktop.files.label", "Files")} · ${name}`,
+            ] as const;
+          }
+          if (win.kind === "browser") {
+            return [
+              win.id,
+              win.url
+                ? externalWindowTitle(win.url)
+                : t("apps.desktop.browser.label", "Browser"),
+            ] as const;
+          }
+          if (win.kind === "system" && win.systemKey) {
+            const definition = SYSTEM_APP_BY_KEY.get(
+              win.systemKey as SystemAppKey,
+            );
+            if (definition) {
+              return [win.id, t(definition.titleKey, definition.key)] as const;
+            }
+          }
+          return [
+            win.id,
+            desktopWindowTitle(win, { apps: byId, spaces: spaceNameById }),
+          ] as const;
+        }),
       ),
-    [byId, spaceNameById, windows],
+    [byId, spaceNameById, t, windows],
   );
 
   // Server-backed inbox: drop the previous account's snapshot, load this
@@ -881,19 +1104,12 @@ export default function DesktopGrid({
   // polling immediately via ``active`` and unload the content after a long
   // hide; reopening remounts the page, whose data is server-backed.
   useEffect(() => {
-    const visible = new Set(
-      windows
-        .filter(
-          (win) => !win.minimized && windowSpaceId(win, appSpace) === space?.id,
-        )
-        .map((win) => win.id),
-    );
     setSuspendedWindows((current) => {
       let changed = false;
       const next = new Set(current);
       for (const id of current) {
         const win = windows.find((item) => item.id === id);
-        if (!win || win.kind === "chat" || visible.has(id)) {
+        if (!win || win.kind === "chat" || visibleWindowIds.has(id)) {
           next.delete(id);
           changed = true;
         }
@@ -902,8 +1118,11 @@ export default function DesktopGrid({
     });
     for (const win of windows) {
       if (win.kind === "chat") continue;
+      if (!visibleWindowIds.has(win.id) && suspendedWindows.has(win.id)) {
+        continue;
+      }
       const timer = suspendTimersRef.current.get(win.id);
-      if (visible.has(win.id)) {
+      if (visibleWindowIds.has(win.id)) {
         if (timer !== undefined) {
           window.clearTimeout(timer);
           suspendTimersRef.current.delete(win.id);
@@ -911,6 +1130,13 @@ export default function DesktopGrid({
         continue;
       }
       if (timer === undefined) {
+        const suspendMs = win.minimized
+          ? MINIMIZED_WINDOW_SUSPEND_MS
+          : win.kind === "browser" ||
+            win.kind === "html" ||
+            win.kind === "external"
+          ? HIDDEN_WEB_WINDOW_SUSPEND_MS
+          : HIDDEN_WINDOW_SUSPEND_MS;
         const next = window.setTimeout(() => {
           suspendTimersRef.current.delete(win.id);
           setSuspendedWindows((current) => {
@@ -919,7 +1145,7 @@ export default function DesktopGrid({
             updated.add(win.id);
             return updated;
           });
-        }, HIDDEN_WINDOW_SUSPEND_MS);
+        }, suspendMs);
         suspendTimersRef.current.set(win.id, next);
       }
     }
@@ -929,7 +1155,7 @@ export default function DesktopGrid({
         suspendTimersRef.current.delete(id);
       }
     }
-  }, [appSpace, space?.id, windows]);
+  }, [suspendedWindows, visibleWindowIds, windows]);
 
   useEffect(
     () => () => {
@@ -1111,14 +1337,14 @@ export default function DesktopGrid({
           z: ++zRef.current,
           list,
           appSpace,
-          bottomInset: dockInset,
+          bottomInset: 0,
           viewportWidth: root?.clientWidth ?? 1280,
           viewportHeight: root?.clientHeight ?? 800,
         });
         return win ? [...list, win] : list;
       });
     },
-    [accessibleAgentIds, appSpace, dockInset, knownAgentIds],
+    [accessibleAgentIds, appSpace, knownAgentIds],
   );
 
   const openExternalWindow = useCallback(
@@ -1142,15 +1368,204 @@ export default function DesktopGrid({
           z: ++zRef.current,
           list,
           appSpace,
-          bottomInset: dockInset,
+          bottomInset: 0,
           viewportWidth: root?.clientWidth ?? 1280,
           viewportHeight: root?.clientHeight ?? 800,
         });
         return win ? [...list, win] : list;
       });
     },
-    [appSpace, dockInset],
+    [appSpace],
   );
+
+  const openFilesWindow = useCallback(
+    (
+      agentId: string,
+      options?: {
+        path?: string | null;
+        threadId?: string | null;
+        fromWorkspace?: boolean;
+        tab?: "generated" | "all";
+      },
+    ) => {
+      if (knownAgentIds.has(agentId) && !accessibleAgentIds.has(agentId)) {
+        return;
+      }
+      const id = filesWindowId(agentId);
+      setWindows((list) => {
+        const existing = list.find((win) => win.id === id);
+        if (existing) {
+          const z = ++zRef.current;
+          return list.map((win) =>
+            win.id === id
+              ? {
+                  ...win,
+                  minimized: false,
+                  z,
+                  ...(options?.path
+                    ? {
+                        path: options.path,
+                        pathFromWorkspace: options.fromWorkspace,
+                        pathSeq: (win.pathSeq ?? 0) + 1,
+                      }
+                    : {}),
+                  ...(options?.threadId !== undefined
+                    ? { threadId: options.threadId ?? undefined }
+                    : {}),
+                  ...(options?.tab ? { filesTab: options.tab } : {}),
+                }
+              : win,
+          );
+        }
+        const root = rootRef.current;
+        const win = createDesktopWindow({
+          kind: "files",
+          agentId,
+          spaceId: agentId,
+          path: options?.path ?? undefined,
+          threadId: options?.threadId ?? undefined,
+          pathFromWorkspace: options?.fromWorkspace,
+          filesTab: options?.tab ?? "generated",
+          pathSeq: options?.path ? 1 : undefined,
+          z: ++zRef.current,
+          list,
+          appSpace,
+          bottomInset: 0,
+          viewportWidth: root?.clientWidth ?? 1280,
+          viewportHeight: root?.clientHeight ?? 800,
+        });
+        return win ? [...list, win] : list;
+      });
+    },
+    [accessibleAgentIds, appSpace, knownAgentIds],
+  );
+
+  const openHtmlWindow = useCallback(
+    (
+      agentId: string,
+      path: string,
+      fromWorkspace: boolean,
+      title?: string | null,
+    ) => {
+      if (!path) return;
+      if (knownAgentIds.has(agentId) && !accessibleAgentIds.has(agentId)) {
+        return;
+      }
+      const id = htmlWindowId(agentId, path);
+      setWindows((list) => {
+        const existing = list.find((win) => win.id === id);
+        if (existing) {
+          const z = ++zRef.current;
+          return list.map((win) =>
+            win.id === id ? { ...win, minimized: false, z } : win,
+          );
+        }
+        const root = rootRef.current;
+        const win = createDesktopWindow({
+          kind: "html",
+          agentId,
+          spaceId: agentId,
+          path,
+          pathFromWorkspace: fromWorkspace,
+          title: title || desktopFileBasename(path),
+          z: ++zRef.current,
+          list,
+          appSpace,
+          bottomInset: 0,
+          viewportWidth: root?.clientWidth ?? 1280,
+          viewportHeight: root?.clientHeight ?? 800,
+        });
+        return win ? [...list, win] : list;
+      });
+    },
+    [accessibleAgentIds, appSpace, knownAgentIds],
+  );
+
+  const openFileInWindow = useCallback(
+    (path: string, sourceAgentId: string | null, threadId: string | null) => {
+      const agentId = sourceAgentId ?? space?.agentId;
+      if (!agentId) return;
+      const raw = path.trim().replace(/\\/g, "/");
+      const rawIsRelative =
+        Boolean(raw) &&
+        !raw.startsWith("/") &&
+        !/^[A-Za-z]:/.test(raw) &&
+        !raw.toLowerCase().startsWith("file://");
+      const normalized = toWorkspaceRelativePath(path, agentId);
+      const fromWorkspace = rawIsRelative || !isHostAbsolutePath(normalized);
+      if (isHtmlPath(normalized)) {
+        openHtmlWindow(agentId, normalized, fromWorkspace);
+        return;
+      }
+      openFilesWindow(agentId, {
+        path: normalized,
+        threadId,
+        fromWorkspace,
+      });
+    },
+    [openFilesWindow, openHtmlWindow, space?.agentId],
+  );
+
+  const openHtmlFromFiles = useCallback(
+    (file: DesktopFileRef) => {
+      openHtmlWindow(file.agentId, file.path, file.fromWorkspace, file.name);
+    },
+    [openHtmlWindow],
+  );
+
+  const openFilesFromChat = useCallback(
+    (agentId: string, threadId: string | null) => {
+      openFilesWindow(agentId, { threadId });
+    },
+    [openFilesWindow],
+  );
+
+  const openFilesFromHtml = useCallback(
+    (agentId: string, path: string, fromWorkspace: boolean) => {
+      openFilesWindow(agentId, { path, fromWorkspace });
+    },
+    [openFilesWindow],
+  );
+
+  const openBrowserWindow = useCallback(
+    (agentId: string) => {
+      if (knownAgentIds.has(agentId) && !accessibleAgentIds.has(agentId)) {
+        return;
+      }
+      const id = browserWindowId(agentId);
+      setWindows((list) => {
+        const existing = list.find((win) => win.id === id);
+        if (existing) {
+          const z = ++zRef.current;
+          return list.map((win) =>
+            win.id === id ? { ...win, minimized: false, z } : win,
+          );
+        }
+        const root = rootRef.current;
+        const win = createDesktopWindow({
+          kind: "browser",
+          agentId,
+          spaceId: agentId,
+          z: ++zRef.current,
+          list,
+          appSpace,
+          bottomInset: 0,
+          viewportWidth: root?.clientWidth ?? 1280,
+          viewportHeight: root?.clientHeight ?? 800,
+        });
+        return win ? [...list, win] : list;
+      });
+    },
+    [accessibleAgentIds, appSpace, knownAgentIds],
+  );
+
+  const updateBrowserUrl = useCallback((id: string, url: string) => {
+    setWindows((list) =>
+      list.map((win) =>
+        win.id === id ? { ...win, url: url || undefined } : win,
+      ),
+    );
+  }, []);
 
   const consumeChatSeed = useCallback((id: string) => {
     setWindows((list) =>
@@ -1268,7 +1683,12 @@ export default function DesktopGrid({
           if (!knownAgentIds.has(win.agentId)) return true;
           return accessibleAgentIds.has(win.agentId);
         }
-        return Boolean(win.appId) && byId.has(win.appId!);
+        if (win.kind === "app") {
+          return Boolean(win.appId) && byId.has(win.appId!);
+        }
+        // Files / HTML / browser / system windows do not depend on the app
+        // catalog; their own validators decide whether they are usable.
+        return true;
       });
       // Keep the previous array when nothing was pruned; otherwise a fresh
       // array on every render would re-trigger this effect forever.
@@ -1378,7 +1798,7 @@ export default function DesktopGrid({
         drag.nextX = Math.max(0, Math.min(maxW - drag.w, drag.x + dx));
         drag.nextY = Math.max(
           MENU_BAR_HEIGHT,
-          Math.min(maxH - dockInset - drag.h, drag.y + dy),
+          Math.min(maxH - drag.h, drag.y + dy),
         );
         setDragPreview({ id: drag.id, x: drag.nextX, y: drag.nextY });
         return;
@@ -1393,7 +1813,7 @@ export default function DesktopGrid({
       );
       drag.nextH = Math.max(
         spec.minHeight,
-        Math.min(maxH - dockInset - drag.y, drag.h + dy),
+        Math.min(maxH - drag.y, drag.h + dy),
       );
       setResizePreview({
         id: drag.id,
@@ -1442,7 +1862,7 @@ export default function DesktopGrid({
       window.removeEventListener("pointerup", finishDrag);
       window.removeEventListener("pointercancel", finishDrag);
     };
-  }, [dockInset]);
+  }, []);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -1460,7 +1880,7 @@ export default function DesktopGrid({
                 w: maxW,
                 h: Math.max(
                   WINDOW_REGISTRY[win.kind].minHeight,
-                  maxH - MENU_BAR_HEIGHT - dockInset,
+                  maxH - MENU_BAR_HEIGHT,
                 ),
               }
             : win,
@@ -1469,7 +1889,7 @@ export default function DesktopGrid({
     });
     observer.observe(root);
     return () => observer.disconnect();
-  }, [dockInset]);
+  }, []);
 
   const toggleFullscreen = useCallback(() => {
     const root = rootRef.current;
@@ -1529,14 +1949,47 @@ export default function DesktopGrid({
           z: ++zRef.current,
           list,
           appSpace,
-          bottomInset: dockInset,
+          bottomInset: 0,
           viewportWidth: root?.clientWidth ?? 1280,
           viewportHeight: root?.clientHeight ?? 800,
         });
         return win ? [...list, win] : list;
       });
     },
-    [accessibleAgentIds, appSpace, dockInset, knownAgentIds, space?.kind],
+    [accessibleAgentIds, appSpace, knownAgentIds, space?.kind],
+  );
+
+  const openSystemApp = useCallback(
+    (definition: SystemAppDefinition) => {
+      const agentId = space?.agentId;
+      if (!agentId) return;
+      const id = systemWindowId(agentId, definition.key);
+      setWindows((list) => {
+        const existing = list.find((win) => win.id === id);
+        if (existing) {
+          const z = ++zRef.current;
+          return list.map((win) =>
+            win.id === id ? { ...win, minimized: false, z } : win,
+          );
+        }
+        const root = rootRef.current;
+        const win = createDesktopWindow({
+          kind: "system",
+          systemKey: definition.key,
+          agentId,
+          spaceId: space?.id,
+          title: t(definition.titleKey, definition.key),
+          z: ++zRef.current,
+          list,
+          appSpace,
+          bottomInset: 0,
+          viewportWidth: root?.clientWidth ?? 1280,
+          viewportHeight: root?.clientHeight ?? 800,
+        });
+        return win ? [...list, win] : list;
+      });
+    },
+    [appSpace, space?.agentId, space?.id, t],
   );
 
   const commandItems = useMemo<DesktopCommandItem[]>(() => {
@@ -1555,6 +2008,19 @@ export default function DesktopGrid({
           if (target) selectSpace(target);
           openWindow(app);
         },
+      });
+    }
+
+    for (const systemApp of currentSystemApps) {
+      const Icon = systemApp.icon;
+      items.push({
+        id: `system:${space?.agentId ?? "none"}:${systemApp.key}`,
+        group: "apps",
+        label: tr(systemApp.titleKey, systemApp.key),
+        hint: tr(systemApp.descriptionKey, ""),
+        keywords: `system ${systemApp.key}`,
+        icon: <Icon size={16} />,
+        run: () => openSystemApp(systemApp),
       });
     }
 
@@ -1619,6 +2085,28 @@ export default function DesktopGrid({
             app: selectedApp ?? undefined,
           }),
       });
+      items.push({
+        id: "action:files",
+        group: "actions",
+        label: tr("apps.desktop.files.openAction", "Open files"),
+        hint: tr(
+          "apps.desktop.files.openHint",
+          "View files generated by this expert",
+        ),
+        icon: <FolderOpen size={16} />,
+        run: () => openFilesWindow(space.agentId!),
+      });
+      items.push({
+        id: "action:browser",
+        group: "actions",
+        label: tr("apps.desktop.browser.openAction", "Open browser"),
+        hint: tr(
+          "apps.desktop.browser.openHint",
+          "Open a blank browser window",
+        ),
+        icon: <Globe size={16} />,
+        run: () => openBrowserWindow(space.agentId!),
+      });
     }
 
     items.push({
@@ -1655,9 +2143,13 @@ export default function DesktopGrid({
     return items;
   }, [
     appSpace,
+    currentSystemApps,
     fullscreen,
+    openBrowserWindow,
     openChatWindow,
+    openFilesWindow,
     openNotificationWindow,
+    openSystemApp,
     openWindow,
     ordered,
     selectSpace,
@@ -1688,47 +2180,44 @@ export default function DesktopGrid({
     );
   }, []);
 
-  const toggleMaximize = useCallback(
-    (id: string) => {
-      setWindows((list) =>
-        list.map((win) => {
-          if (win.id !== id) return win;
-          const root = rootRef.current;
-          const maxW = root?.clientWidth ?? 1280;
-          const maxH = root?.clientHeight ?? 800;
-          if (win.maximized) {
-            const restore = win.restore ?? {
-              x: win.x,
-              y: win.y,
-              w: win.w,
-              h: win.h,
-            };
-            return {
-              ...win,
-              ...restore,
-              maximized: false,
-              restore: undefined,
-              z: ++zRef.current,
-            };
-          }
+  const toggleMaximize = useCallback((id: string) => {
+    setWindows((list) =>
+      list.map((win) => {
+        if (win.id !== id) return win;
+        const root = rootRef.current;
+        const maxW = root?.clientWidth ?? 1280;
+        const maxH = root?.clientHeight ?? 800;
+        if (win.maximized) {
+          const restore = win.restore ?? {
+            x: win.x,
+            y: win.y,
+            w: win.w,
+            h: win.h,
+          };
           return {
             ...win,
-            restore: { x: win.x, y: win.y, w: win.w, h: win.h },
-            x: 0,
-            y: MENU_BAR_HEIGHT,
-            w: maxW,
-            h: Math.max(
-              WINDOW_REGISTRY[win.kind].minHeight,
-              maxH - MENU_BAR_HEIGHT - dockInset,
-            ),
-            maximized: true,
+            ...restore,
+            maximized: false,
+            restore: undefined,
             z: ++zRef.current,
           };
-        }),
-      );
-    },
-    [dockInset],
-  );
+        }
+        return {
+          ...win,
+          restore: { x: win.x, y: win.y, w: win.w, h: win.h },
+          x: 0,
+          y: MENU_BAR_HEIGHT,
+          w: maxW,
+          h: Math.max(
+            WINDOW_REGISTRY[win.kind].minHeight,
+            maxH - MENU_BAR_HEIGHT,
+          ),
+          maximized: true,
+          z: ++zRef.current,
+        };
+      }),
+    );
+  }, []);
 
   const startDrag = useCallback(
     (win: DesktopWindowState, event: ReactPointerEvent<HTMLElement>) => {
@@ -1843,6 +2332,30 @@ export default function DesktopGrid({
       );
     }
     if (win.kind === "external") return webArt(size);
+    if (win.kind === "html") {
+      return <FileText size={size} color="#64748b" strokeWidth={1.6} />;
+    }
+    if (win.kind === "system") {
+      const definition = win.systemKey
+        ? SYSTEM_APP_BY_KEY.get(win.systemKey as SystemAppKey)
+        : undefined;
+      const Icon = definition?.icon ?? WINDOW_REGISTRY.system.icon;
+      return (
+        <span
+          style={{
+            display: "grid",
+            placeItems: "center",
+            width: size,
+            height: size,
+            borderRadius: Math.round(size * 0.24),
+            background: "linear-gradient(145deg, #0f766e, #0e7490)",
+            color: "#fff",
+          }}
+        >
+          <Icon size={Math.round(size * 0.5)} strokeWidth={1.9} />
+        </span>
+      );
+    }
     return expertArt(ownerOf(win), size);
   };
 
@@ -1957,6 +2470,71 @@ export default function DesktopGrid({
       onActivate: () => openChatWindow(space.agentId!),
     });
   }
+  if (space?.agentId && space.kind === "expert") {
+    const filesWin = currentWindows.find(
+      (win) => win.kind === "files" && win.agentId === space.agentId,
+    );
+    dockItems.unshift({
+      id: `dock:files:${space.agentId}`,
+      kind: "files",
+      windowId: filesWin?.id,
+      label: t("apps.desktop.files.label", "Files"),
+      icon: (
+        <span className={styles.desktopDockLauncherArt} aria-hidden>
+          <FolderOpen size={20} />
+        </span>
+      ),
+      running: Boolean(filesWin),
+      minimized: filesWin?.minimized,
+      active: Boolean(filesWin && !filesWin.minimized && filesWin.z === topZ),
+      dividerAfter: false,
+      onActivate: () => openFilesWindow(space.agentId!),
+      onMinimize: filesWin ? () => minimizeWindow(filesWin.id) : undefined,
+      onClose: filesWin ? () => closeWindow(filesWin.id) : undefined,
+    });
+    const browserWin = currentWindows.find(
+      (win) => win.kind === "browser" && win.agentId === space.agentId,
+    );
+    dockItems.splice(1, 0, {
+      id: `dock:browser:${space.agentId}`,
+      kind: "browser",
+      windowId: browserWin?.id,
+      label: t("apps.desktop.browser.label", "Browser"),
+      icon: (
+        <span className={styles.desktopDockLauncherArt} aria-hidden>
+          <Globe size={20} />
+        </span>
+      ),
+      running: Boolean(browserWin),
+      minimized: browserWin?.minimized,
+      active: Boolean(
+        browserWin && !browserWin.minimized && browserWin.z === topZ,
+      ),
+      dividerAfter: true,
+      onActivate: () => openBrowserWindow(space.agentId!),
+      onMinimize: browserWin ? () => minimizeWindow(browserWin.id) : undefined,
+      onClose: browserWin ? () => closeWindow(browserWin.id) : undefined,
+    });
+  }
+  for (const win of currentWindows.filter((item) => item.kind === "html")) {
+    dockItems.push({
+      id: `dock:html:${win.id}`,
+      kind: "html",
+      windowId: win.id,
+      label: windowTitles.get(win.id) ?? "",
+      icon: (
+        <span className={styles.desktopDockLauncherArt} aria-hidden>
+          <FileText size={20} />
+        </span>
+      ),
+      running: true,
+      minimized: win.minimized,
+      active: !win.minimized && win.z === topZ,
+      onActivate: () => openNotificationWindow(win.id),
+      onMinimize: () => minimizeWindow(win.id),
+      onClose: () => closeWindow(win.id),
+    });
+  }
   for (const win of currentWindows.filter((item) => item.kind === "external")) {
     dockItems.push({
       id: `dock:external:${win.id}`,
@@ -1964,6 +2542,29 @@ export default function DesktopGrid({
       windowId: win.id,
       label: windowTitles.get(win.id) ?? "",
       icon: webArt(46),
+      running: true,
+      minimized: win.minimized,
+      active: !win.minimized && win.z === topZ,
+      onActivate: () => openNotificationWindow(win.id),
+      onMinimize: () => minimizeWindow(win.id),
+      onClose: () => closeWindow(win.id),
+    });
+  }
+  for (const win of currentWindows.filter((item) => item.kind === "system")) {
+    const definition = win.systemKey
+      ? SYSTEM_APP_BY_KEY.get(win.systemKey as SystemAppKey)
+      : undefined;
+    const Icon = definition?.icon ?? WINDOW_REGISTRY.system.icon;
+    dockItems.push({
+      id: `dock:system:${win.id}`,
+      kind: "system",
+      windowId: win.id,
+      label: windowTitles.get(win.id) ?? "",
+      icon: (
+        <span className={styles.desktopDockLauncherArt} aria-hidden>
+          <Icon size={20} />
+        </span>
+      ),
       running: true,
       minimized: win.minimized,
       active: !win.minimized && win.z === topZ,
@@ -2215,6 +2816,15 @@ export default function DesktopGrid({
         </>
       )}
       <div className={styles.desktopIcons}>
+        {currentSystemApps.map((definition) => (
+          <SystemDesktopIcon
+            key={definition.key}
+            definition={definition}
+            selected={selectedAppId === `system:${definition.key}`}
+            onSelect={() => setSelectedAppId(`system:${definition.key}`)}
+            onOpen={() => openSystemApp(definition)}
+          />
+        ))}
         {currentApps.map((app) => (
           <DesktopIcon
             key={app.app_id}
@@ -2227,7 +2837,8 @@ export default function DesktopGrid({
       </div>
       {space?.kind === "expert" &&
         space.agentId &&
-        currentApps.length === 0 && (
+        currentApps.length === 0 &&
+        currentSystemApps.length === 0 && (
           <div
             className={styles.desktopEmptySpace}
             data-testid="desktop-empty-space"
@@ -2268,7 +2879,7 @@ export default function DesktopGrid({
               : null;
           const winSpace = win.spaceId
             ? spaces.find((item) => item.id === win.spaceId) ?? space
-            : win.kind === "chat"
+            : win.kind === "chat" || win.kind === "files"
             ? spaces.find((item) => item.id === win.agentId) ?? space
             : space;
           const chatAgent =
@@ -2277,11 +2888,26 @@ export default function DesktopGrid({
               : null;
           if (win.kind === "app" && !app) return null;
           if (win.kind === "chat" && !win.agentId) return null;
+          if (win.kind === "files" && !win.agentId) return null;
+          if (win.kind === "html" && (!win.agentId || !win.path)) return null;
+          if (win.kind === "browser" && !win.agentId) return null;
+          if (win.kind === "system" && (!win.agentId || !win.systemKey))
+            return null;
           if (win.kind === "external" && !win.url) return null;
           const title = windowTitles.get(win.id) ?? app?.name ?? "";
           const inSpace = windowSpaceId(win, appSpace) === space?.id;
           const focused = inSpace && win.z === topZ;
-          const suspended = suspendedWindows.has(win.id);
+          const visible = visibleWindowIds.has(win.id);
+          const contentMounted = visible || mountedWindows.has(win.id);
+          const suspended = !visible && suspendedWindows.has(win.id);
+          const budgetSleeping =
+            visible &&
+            IFRAME_WINDOW_KINDS.has(win.kind) &&
+            !liveIframeIds.has(win.id);
+          const showSuspended =
+            !contentMounted ||
+            (suspended && win.kind !== "chat") ||
+            budgetSleeping;
           const titleBarVisible = visibleTitleBars.has(win.id);
           const preview = dragPreview?.id === win.id ? dragPreview : null;
           const resizing = resizePreview?.id === win.id ? resizePreview : null;
@@ -2319,7 +2945,7 @@ export default function DesktopGrid({
               data-url={win.url ?? ""}
               data-minimized={win.minimized ? "true" : "false"}
               data-maximized={win.maximized ? "true" : "false"}
-              data-suspended={suspended ? "true" : "false"}
+              data-suspended={showSuspended ? "true" : "false"}
               data-dragging={preview ? "true" : "false"}
               data-resizing={resizing ? "true" : "false"}
               role="group"
@@ -2406,15 +3032,20 @@ export default function DesktopGrid({
                       : undefined
                   }
                 >
-                  {suspended && win.kind !== "chat" ? (
+                  {showSuspended ? (
                     <div
                       className={styles.desktopWindowSuspended}
                       data-testid="desktop-window-suspended"
                     >
-                      {t(
-                        "apps.desktop.suspendedWindow",
-                        "Sleeping to save resources. This window reloads when you restore it.",
-                      )}
+                      {budgetSleeping
+                        ? t(
+                            "apps.desktop.budgetSleepingWindow",
+                            "Paused to keep the desktop fast. Click to wake it.",
+                          )
+                        : t(
+                            "apps.desktop.suspendedWindow",
+                            "Sleeping to save resources. This window reloads when you restore it.",
+                          )}
                     </div>
                   ) : app ? (
                     <MiniAppFrame
@@ -2422,6 +3053,7 @@ export default function DesktopGrid({
                       title={app.name}
                       fill
                       active={inSpace && !win.minimized}
+                      foreground={focused && !win.minimized}
                       capabilities={app.capabilities}
                       onComposeMessage={(text) => {
                         const target =
@@ -2440,12 +3072,61 @@ export default function DesktopGrid({
                         )
                       }
                     />
+                  ) : win.kind === "system" && win.systemKey && win.agentId ? (
+                    <Suspense fallback={null}>
+                      <SystemAppFrame
+                        appKey={win.systemKey as SystemAppKey}
+                        agentId={win.agentId}
+                        title={windowTitles.get(win.id)}
+                        active={inSpace && !win.minimized}
+                        foreground={focused && !win.minimized}
+                        onOpenConsole={(path) => {
+                          setActiveAgent(win.agentId!);
+                          window.open(path, "_blank", "noopener,noreferrer");
+                        }}
+                      />
+                    </Suspense>
                   ) : win.kind === "external" && win.url ? (
                     <DesktopWebView
+                      windowId={win.id}
                       url={win.url}
                       title={win.title}
-                      onClose={() => closeWindow(win.id)}
+                      onClose={closeWindow}
                     />
+                  ) : win.kind === "browser" && win.agentId ? (
+                    <Suspense fallback={null}>
+                      <DesktopBrowserWindow
+                        windowId={win.id}
+                        agentId={win.agentId}
+                        agentName={winSpace?.name}
+                        url={win.url ?? ""}
+                        onNavigate={updateBrowserUrl}
+                      />
+                    </Suspense>
+                  ) : win.kind === "html" && win.agentId && win.path ? (
+                    <Suspense fallback={null}>
+                      <DesktopHtmlWindow
+                        agentId={win.agentId}
+                        path={win.path}
+                        fromWorkspace={Boolean(win.pathFromWorkspace)}
+                        title={win.title}
+                        onOpenFiles={openFilesFromHtml}
+                      />
+                    </Suspense>
+                  ) : win.kind === "files" && win.agentId ? (
+                    <Suspense fallback={null}>
+                      <DesktopFilesWindow
+                        agentId={win.agentId}
+                        agentName={winSpace?.name ?? win.agentId}
+                        threadId={win.threadId}
+                        initialPath={win.path}
+                        initialFromWorkspace={win.pathFromWorkspace}
+                        initialPathSeq={win.pathSeq}
+                        initialTab={win.filesTab}
+                        canBrowseAll={canBrowseAgentFiles(win.agentId)}
+                        onOpenHtml={openHtmlFromFiles}
+                      />
+                    </Suspense>
                   ) : win.agentId ? (
                     <DesktopChatWindow
                       agentId={win.agentId}
@@ -2454,13 +3135,36 @@ export default function DesktopGrid({
                       apps={winSpace?.apps ?? EMPTY_APPS}
                       initialAppId={win.contextAppId}
                       seed={win.seed}
-                      onSeedConsumed={() => consumeChatSeed(win.id)}
+                      onSeedConsumed={consumeChatSeed}
                       onOpenApp={openWindow}
+                      onOpenFile={openFileInWindow}
+                      onOpenFiles={openFilesFromChat}
                       windowId={win.id}
+                      spaceId={
+                        win.spaceId ??
+                        winSpace?.id ??
+                        space?.id ??
+                        UNASSIGNED_SPACE
+                      }
+                      onOpenExternal={openExternalWindow}
                       active={focused && !win.minimized}
                     />
                   ) : null}
                 </div>
+                {!focused &&
+                  !suspended &&
+                  IFRAME_WINDOW_KINDS.has(win.kind) && (
+                    <div
+                      className={styles.desktopWindowFocusShield}
+                      data-testid="desktop-window-focus-shield"
+                      aria-hidden
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        focusWindow(win.id);
+                      }}
+                    />
+                  )}
               </div>
               {!win.maximized && (
                 <span
@@ -2564,7 +3268,22 @@ export default function DesktopGrid({
           </button>
         </div>
       )}
-      <DesktopDock items={dockItems} />
+      <button
+        type="button"
+        className={styles.desktopDockHotspot}
+        data-testid="desktop-dock-hotspot"
+        aria-label={t("apps.desktop.dock.show", "Show dock")}
+        onPointerEnter={revealDock}
+        onPointerLeave={scheduleDockHide}
+        onFocus={revealDock}
+        onClick={revealDock}
+      />
+      <DesktopDock
+        items={dockItems}
+        revealed={dockRevealed}
+        onPointerEnter={revealDock}
+        onPointerLeave={scheduleDockHide}
+      />
       <DesktopCommandPalette
         open={commandOpen}
         onClose={() => setCommandOpen(false)}

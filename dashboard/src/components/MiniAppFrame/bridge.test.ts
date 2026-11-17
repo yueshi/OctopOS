@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CAP } from "./capabilities";
+import { CAP, SYSTEM_CAP } from "./capabilities";
 import { checkMethodAllowed, isAppRequest } from "./bridge";
 
 describe("bridge request checks", () => {
@@ -48,6 +48,28 @@ describe("bridge request checks", () => {
 
   it("lets the page ask about itself", () => {
     expect(checkMethodAllowed("me", [])).toBe(true);
+  });
+
+  it("keeps system methods behind an explicit extra allowlist", () => {
+    expect(
+      checkMethodAllowed("systemQuery", [SYSTEM_CAP.READ], ["systemQuery"]),
+    ).toBe(true);
+    expect(checkMethodAllowed("systemQuery", [SYSTEM_CAP.READ])).toBe(false);
+    expect(
+      checkMethodAllowed("systemQuery", [CAP.DATA_READ], ["systemQuery"]),
+    ).toBe(false);
+    // Legacy apps receive ALL_CAPABILITIES; system caps are intentionally not
+    // part of that set.
+    expect(checkMethodAllowed("systemQuery", undefined, ["systemQuery"])).toBe(
+      false,
+    );
+    expect(
+      checkMethodAllowed(
+        "openConsole",
+        [SYSTEM_CAP.OPEN_CONSOLE],
+        ["openConsole"],
+      ),
+    ).toBe(true);
   });
 });
 

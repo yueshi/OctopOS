@@ -41,6 +41,8 @@ def test_exempt_paths() -> None:
     assert is_jwt_exempt_path("/api/docs")
     assert is_jwt_exempt_path("/api/openapi.json")
     assert is_jwt_exempt_path("/api/downloads/link/abc")
+    assert is_jwt_exempt_path("/api/workspace-preview/token/report.html")
+    assert not is_jwt_exempt_path("/api/workspace-preview")
     assert is_jwt_exempt_path("/api/hooks/src-1")
     assert not is_jwt_exempt_path("/api/hooks")
     assert not is_jwt_exempt_path("/api/external/sources")

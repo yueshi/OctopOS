@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 
 import { appsApi, type AppTableVersion } from "../../api/modules/apps";
 
-/** How often the host checks table data versions while the app is visible. */
+/** How often the host checks table data versions while the app is focused. */
 export const MINIAPP_DATA_VERSION_POLL_MS = 5_000;
+
+/** Background windows refresh less often: many visible frames share one API. */
+export const MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS = 30_000;
 
 /**
  * Poll the app's per-table ``data_version`` and forward changes to the app
@@ -18,14 +21,20 @@ export function useMiniAppDataVersion(
   appId: string,
   frameRef: RefObject<HTMLIFrameElement | null>,
   enabled = true,
+  intervalMs = MINIAPP_DATA_VERSION_POLL_MS,
 ): number {
   const [version, setVersion] = useState(0);
+  // Survives effect restarts (focus / interval changes) so a frame that was
+  // polled less often in the background still reports the changes it missed.
+  const baselineRef = useRef<{
+    appId: string;
+    versions: Record<string, number>;
+  } | null>(null);
 
   useEffect(() => {
     if (!enabled || !appId) return;
     let disposed = false;
     let inflight = false;
-    let baseline: Record<string, number> | null = null;
 
     const poll = async () => {
       if (disposed || inflight) return;
@@ -38,14 +47,15 @@ export function useMiniAppDataVersion(
         for (const table of data.tables) {
           next[table.table_key] = table.data_version;
         }
-        if (baseline === null) {
-          baseline = next;
+        const baseline = baselineRef.current;
+        if (!baseline || baseline.appId !== appId) {
+          baselineRef.current = { appId, versions: next };
           return;
         }
         const changed: AppTableVersion[] = data.tables.filter(
-          (table) => baseline?.[table.table_key] !== table.data_version,
+          (table) => baseline.versions[table.table_key] !== table.data_version,
         );
-        baseline = next;
+        baselineRef.current = { appId, versions: next };
         if (changed.length === 0) return;
         setVersion((current) => current + 1);
         frameRef.current?.contentWindow?.postMessage(
@@ -66,7 +76,7 @@ export function useMiniAppDataVersion(
     void poll();
     const timer = window.setInterval(() => {
       void poll();
-    }, MINIAPP_DATA_VERSION_POLL_MS);
+    }, intervalMs);
     const onVisible = () => {
       if (document.visibilityState === "visible") void poll();
     };
@@ -78,7 +88,7 @@ export function useMiniAppDataVersion(
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("focus", onVisible);
     };
-  }, [appId, enabled, frameRef]);
+  }, [appId, enabled, frameRef, intervalMs]);
 
   return version;
 }

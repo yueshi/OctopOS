@@ -6,6 +6,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -198,6 +199,114 @@ def thread_artifacts_payload(
     }
 
 
+@dataclass(frozen=True)
+class RecentArtifact:
+    """One generated file surfaced by the desktop Files window."""
+
+    path: str
+    name: str
+    agent_id: str
+    thread_id: str
+    thread_title: str
+    last_active: int
+    in_workspace: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "name": self.name,
+            "agent_id": self.agent_id,
+            "thread_id": self.thread_id,
+            "thread_title": self.thread_title,
+            "last_active": self.last_active,
+            "in_workspace": self.in_workspace,
+        }
+
+
+def _is_user_visible_artifact_path(posix: str) -> bool:
+    parts = [part for part in posix.replace("\\", "/").split("/") if part]
+    if not parts:
+        return False
+    for part in parts:
+        if part in {".", ".."} or part.startswith(".") or part == "_builtin_skills":
+            return False
+    return True
+
+
+def _artifact_workspace_path(path: str, workspace_dir: Path) -> tuple[str, bool]:
+    """Return ``(display_path, in_workspace)`` for one stored artifact path."""
+    raw = _coerce_raw_path(path)
+    if not raw:
+        return "", False
+    if is_host_absolute_path(raw):
+        try:
+            rel = Path(raw).relative_to(workspace_dir)
+        except ValueError:
+            return raw, False
+        rel_text = rel.as_posix()
+        return (rel_text, True) if rel_text not in {"", "."} else ("", False)
+    rel_text = raw.lstrip("/")
+    return (rel_text, True) if rel_text else ("", False)
+
+
+def collect_recent_artifacts(
+    rows: Sequence[Any],
+    workspace_dir: Path,
+    *,
+    default_agent_id: str = "",
+    limit: int = 50,
+    thread_id: str | None = None,
+) -> list[RecentArtifact]:
+    """Flatten thread rows into newest-first generated-file entries.
+
+    Each row is a thread row carrying ``artifacts``, ``thread_id``, ``title``
+    and ``last_active``. Files inside ``workspace_dir`` are returned with a
+    workspace-relative path; outputs outside the workspace keep their absolute
+    spelling and set ``in_workspace=False``.
+    """
+    if limit <= 0:
+        return []
+    ordered = [
+        row
+        for row in rows
+        if thread_id is None or str(getattr(row, "thread_id", "") or "") == thread_id
+    ]
+    ordered.sort(key=lambda row: int(getattr(row, "last_active", 0) or 0), reverse=True)
+    ws = workspace_dir.expanduser()
+    out: list[RecentArtifact] = []
+    seen: set[str] = set()
+    for row in ordered:
+        refs = artifacts_for_response(
+            getattr(row, "artifacts", ()) or (),
+            ws,
+            default_agent_id=default_agent_id,
+        )
+        for ref in reversed(refs):
+            display, in_workspace = _artifact_workspace_path(ref.path, ws)
+            if not display or not _is_user_visible_artifact_path(display):
+                continue
+            agent_id = ref.agent_id or default_agent_id
+            key_path = display.casefold() if os.name == "nt" else display
+            key = f"{agent_id}\0{key_path}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                RecentArtifact(
+                    path=display,
+                    name=display.rsplit("/", 1)[-1],
+                    agent_id=agent_id,
+                    thread_id=str(getattr(row, "thread_id", "") or ""),
+                    thread_title=str(getattr(row, "title", "") or ""),
+                    last_active=int(getattr(row, "last_active", 0) or 0),
+                    in_workspace=in_workspace,
+                )
+            )
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def _dedupe_paths(paths: Sequence[str], workspace_dir: Path | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -298,11 +407,13 @@ def _paths_from_text(text: str) -> list[str]:
 
 __all__ = [
     "ARTIFACT_TOOL_BASES",
+    "RecentArtifact",
     "ThreadArtifact",
     "artifact_path_allowed",
     "artifact_paths_for_response",
     "artifact_refs_for_response",
     "artifacts_for_response",
+    "collect_recent_artifacts",
     "extract_artifact_paths",
     "is_artifact_tool_name",
     "normalize_artifact_path",

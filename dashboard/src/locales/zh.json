@@ -1875,6 +1875,37 @@
   "apps": {
     "title": "工作台",
     "subtitle": "由专家在对话中搭建的小工具：清单、追踪表和轻量看板，数据保存在专家工作区",
+    "system": {
+      "usage": {
+        "title": "用量与预算",
+        "description": "Token 消耗、缓存命中与预算使用"
+      },
+      "connections": {
+        "title": "连接",
+        "description": "IM 通道与连接器状态"
+      },
+      "capabilities": {
+        "title": "能力",
+        "description": "技能、工具与插件的启用情况"
+      },
+      "operations": {
+        "title": "经营看板",
+        "description": "任务、预算与待办"
+      },
+      "unknown": "未知系统应用",
+      "noHtml": "这个系统应用没有页面。",
+      "errorTitle": "无法打开应用",
+      "windowTitle": "系统应用",
+      "openConsoleTitle": "打开完整设置页？",
+      "openConsoleOk": "打开设置",
+      "tasks": {
+        "title": "任务",
+        "description": "定时任务与立即运行"
+      },
+      "confirmActionTitle": "执行这个操作？",
+      "confirmActionBody": "这会修改专家的配置或触发一次运行。",
+      "confirmActionOk": "确认"
+    },
     "capabilities": {
       "title": "页面能力",
       "hint": "控制小程序页面能向宿主请求什么；不影响 Agent 工具和本控制台。",
@@ -1917,6 +1948,53 @@
       "adminProxyAgent": "专家归属",
       "adminProxyApp": "小程序归属",
       "adminProxyAudit": "写操作会记入审计日志",
+      "files": {
+        "label": "文件",
+        "generated": "生成文件",
+        "all": "全部文件",
+        "refresh": "刷新",
+        "emptyGenerated": "这位专家还没有生成文件",
+        "browseAll": "浏览全部文件",
+        "currentThread": "本次会话",
+        "readOnly": "只读",
+        "preview": "预览",
+        "source": "源码",
+        "download": "下载",
+        "previewFailed": "HTML 预览不可用，请切换源码或下载文件",
+        "readFailed": "读取文件失败",
+        "loadFailedHint": "服务端可能未更新或暂时不可用；可先浏览工作区文件。",
+        "loadFailed": "加载生成文件失败",
+        "downloadFailed": "下载失败",
+        "producer": "由 {{name}} 生成",
+        "pickGenerated": "选择一个生成文件进行预览",
+        "pickFile": "选择一个文件进行预览",
+        "openAction": "打开文件",
+        "openHint": "查看这位专家生成的文件",
+        "htmlWindow": "HTML 页面",
+        "openInWindow": "在独立窗口打开",
+        "openInline": "在此预览",
+        "openedInWindow": "已在独立窗口打开",
+        "backToFiles": "文件"
+      },
+      "browser": {
+        "label": "浏览器",
+        "openAction": "打开浏览器",
+        "openHint": "打开一个空白浏览器窗口",
+        "address": "网址",
+        "placeholder": "输入网址，例如 example.com",
+        "go": "打开",
+        "reload": "刷新",
+        "openExternal": "在系统浏览器打开",
+        "blank": "输入网址开始浏览",
+        "blankHint": "部分网站可能禁止在窗口内嵌入，可在系统浏览器打开。",
+        "invalidUrl": "请输入有效的 http(s) 网址"
+      },
+      "consoleNotice": {
+        "title": "这是 Octop 控制台本身",
+        "body": "在桌面窗口里打开它，会再运行一整套控制台（自带轮询和窗口恢复），可能占用大量内存。",
+        "openBrowser": "在系统浏览器打开",
+        "loadAnyway": "仍在此窗口加载"
+      },
       "adminMode": "管理员模式",
       "adminModeHint": "开启后可操作未共享给其他用户的专家（仅管理员）",
       "accessRequestTitle": "访问申请",
@@ -1933,6 +2011,7 @@
       "maximizeWindow": "最大化",
       "restoreWindow": "还原",
       "suspendedWindow": "已休眠以节省资源，恢复窗口后会重新加载。",
+      "budgetSleepingWindow": "为保证桌面流畅已暂停，点击窗口即可唤醒。",
       "spaces": "专家桌面",
       "previousSpace": "上一个桌面",
       "nextSpace": "下一个桌面",

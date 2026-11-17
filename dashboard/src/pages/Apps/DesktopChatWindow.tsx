@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Spin, Tooltip } from "antd";
 import {
   AppWindow,
   ArrowUpRight,
   Check,
   ChevronDown,
+  FolderOpen,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -13,7 +14,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { AppSummary } from "../../api/modules/apps";
+import type { AppGameSession, AppSummary } from "../../api/modules/apps";
 import {
   octopThreadsApi,
   type OctopThread,
@@ -22,6 +23,11 @@ import type { HitlDecisionHandler } from "../../api/types/hitl";
 import type { OctopAgent } from "../../context/AgentContext";
 import { useAgent } from "../../context/AgentContext";
 import { parseOctopToolOutput } from "../../plugins/toolRenderers/parseToolOutput";
+import { ToolHostScopeProvider } from "../../plugins/toolRenderers/ToolHostScope";
+import type {
+  OpenGamePanelOptions,
+  OpenSidePanelOptions,
+} from "../../plugins/toolRenderers/types";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { message } from "../../utils/antdMessage";
@@ -30,6 +36,8 @@ import { formatMessageTime } from "../../utils/formatMessageTime";
 import { isTeamAgent } from "../../utils/teamAgent";
 import ChatInput, { type ChatInputHandle } from "../Chat/components/ChatInput";
 import MessageList from "../Chat/components/MessageList";
+import { ChatFilePreviewProvider } from "../Chat/ChatFilePreviewContext";
+import * as chatStore from "../Chat/hooks/chatStore";
 import { useChat, type ChatAttachment } from "../Chat/hooks/useChat";
 import { parseConversationMode } from "../Chat/utils/conversationMode";
 import {
@@ -39,8 +47,16 @@ import {
 } from "../Chat/utils/pendingHitl";
 import { formatThreadTitle } from "../Chat/utils/threadTitle";
 import { ExpertIcon } from "../Experts/components/iconForName";
+import DesktopChatToolPanel, {
+  type DesktopChatPanelState,
+} from "./DesktopChatToolPanel";
 import { addDesktopNotification } from "./desktopNotifications";
-import type { DesktopChatSeed } from "./desktopWindows";
+import { isArtifactToolName } from "./desktopFiles";
+import {
+  DESKTOP_ARTIFACTS_EVENT,
+  type DesktopArtifactsEventDetail,
+  type DesktopChatSeed,
+} from "./desktopWindows";
 import {
   APP_ACTIONS,
   actionPromptFor,
@@ -58,11 +74,23 @@ interface DesktopChatWindowProps {
   initialAppId?: string | null;
   /** One-shot composer prefill from the desktop pet or an action button. */
   seed?: DesktopChatSeed | null;
-  onSeedConsumed?: () => void;
+  onSeedConsumed?: (windowId: string) => void;
   /** Open or focus the MiniApp window inside the current desktop. */
   onOpenApp?: (app: AppSummary) => void;
+  /** Open a chat file card in the desktop Files window. */
+  onOpenFile?: (
+    path: string,
+    agentId: string | null,
+    threadId: string | null,
+  ) => void;
+  /** Open the Files window at the current conversation. */
+  onOpenFiles?: (agentId: string, threadId: string | null) => void;
   /** Desktop window id, used to focus this chat from a notification. */
   windowId?: string;
+  /** Space owning this window; external links open as web windows in it. */
+  spaceId?: string;
+  /** Open an in-desktop web window instead of a browser tab. */
+  onOpenExternal?: (url: string, spaceId: string) => void;
   /** True when this chat window is focused and on the current desktop. */
   active?: boolean;
 }
@@ -98,7 +126,7 @@ function recallThread(agentId: string): string | null {
  * message renderer and composer, then adds desktop-app chrome: expert identity,
  * thread history, app context with expert actions, and a status footer.
  */
-export default function DesktopChatWindow({
+function DesktopChatWindow({
   agentId,
   agentName,
   agent = null,
@@ -107,7 +135,11 @@ export default function DesktopChatWindow({
   seed = null,
   onSeedConsumed,
   onOpenApp,
+  onOpenFile,
+  onOpenFiles,
   windowId,
+  spaceId,
+  onOpenExternal,
   active = true,
 }: DesktopChatWindowProps) {
   const { t } = useTranslation();
@@ -125,6 +157,9 @@ export default function DesktopChatWindow({
   const [threadsError, setThreadsError] = useState(false);
   const [bootKey, setBootKey] = useState(0);
   const [panel, setPanel] = useState<ChatPanel>(null);
+  const [toolPanel, setToolPanel] = useState<DesktopChatPanelState | null>(
+    null,
+  );
   const [activeAppId, setActiveAppId] = useState<string | null>(initialAppId);
   const creatingRef = useRef(false);
   const inputRef = useRef<ChatInputHandle | null>(null);
@@ -330,12 +365,32 @@ export default function DesktopChatWindow({
     }
   }, [agentId]);
 
+  const notifyArtifacts = useCallback(() => {
+    if (!threadId) return;
+    const detail: DesktopArtifactsEventDetail = { agentId, threadId };
+    window.dispatchEvent(new CustomEvent(DESKTOP_ARTIFACTS_EVENT, { detail }));
+  }, [agentId, threadId]);
+
   useEffect(() => {
     if (wasStreamingRef.current && !isStreaming) {
       void refreshThreads();
+      notifyArtifacts();
     }
     wasStreamingRef.current = isStreaming;
-  }, [isStreaming, refreshThreads]);
+  }, [isStreaming, notifyArtifacts, refreshThreads]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    return chatStore.onToolEvent((event) => {
+      if (
+        event.kind === "toolDone" &&
+        event.sessionId === threadId &&
+        isArtifactToolName(event.toolName)
+      ) {
+        notifyArtifacts();
+      }
+    });
+  }, [notifyArtifacts, threadId]);
 
   const activeThread =
     threads.find((row) => row.thread_id === threadId) ?? null;
@@ -371,15 +426,63 @@ export default function DesktopChatWindow({
       seedAppliedRef.current = seed.id;
       inputRef.current.setPrefillText(seed.text);
       inputRef.current.focusComposer();
-      onSeedConsumed?.();
+      onSeedConsumed?.(windowId ?? "");
     });
     return () => cancelAnimationFrame(frame);
-  }, [onSeedConsumed, seed, threadId]);
+  }, [onSeedConsumed, seed, threadId, windowId]);
 
   const prefill = useCallback((text: string) => {
     inputRef.current?.setPrefillText(text);
     inputRef.current?.focusComposer();
   }, []);
+
+  // Plugin renderers call ``host.openSidePanel``; inside the desktop that
+  // opens a panel in this window instead of the chat page's global dock.
+  const openToolPanel = useCallback((opts: OpenSidePanelOptions) => {
+    setToolPanel({
+      kind: "tool",
+      callId: opts.callId,
+      title: opts.title,
+      toolName: opts.toolName,
+    });
+  }, []);
+  const closeToolPanel = useCallback(() => setToolPanel(null), []);
+  const closeToolPanelForCall = useCallback((callId: string) => {
+    setToolPanel((current) =>
+      current?.kind === "tool" && current.callId === callId ? null : current,
+    );
+  }, []);
+  const openGamePanel = useCallback((opts: OpenGamePanelOptions) => {
+    setToolPanel({ kind: "game", appId: opts.appId, session: opts.session });
+  }, []);
+  const toolHostOverrides = useMemo(
+    () => ({
+      openSidePanel: openToolPanel,
+      closeSidePanel: closeToolPanelForCall,
+      openGamePanel,
+    }),
+    [closeToolPanelForCall, openGamePanel, openToolPanel],
+  );
+  const handleGameSession = useCallback(
+    (appId: string, session: AppGameSession) => {
+      setToolPanel({ kind: "game", appId, session });
+    },
+    [],
+  );
+  const handleOpenExternal = useCallback(
+    (url: string) => {
+      if (onOpenExternal && spaceId) onOpenExternal(url, spaceId);
+    },
+    [onOpenExternal, spaceId],
+  );
+
+  const openFilePreview = useCallback(
+    (path: string, sourceAgentId?: string | null) => {
+      onOpenFile?.(path, sourceAgentId ?? agentId, threadId);
+    },
+    [agentId, onOpenFile, threadId],
+  );
+  const openKnowledgeCitation = useCallback(() => {}, []);
 
   const pendingApproval = useMemo(
     () => hasPendingHitl(messages) || Boolean(findPendingAsk(messages)),
@@ -475,6 +578,7 @@ export default function DesktopChatWindow({
 
   const handleNewChat = useCallback(() => {
     setPanel(null);
+    setToolPanel(null);
     void createThread();
   }, [createThread]);
 
@@ -498,6 +602,7 @@ export default function DesktopChatWindow({
       setThreadId(id);
       rememberThread(agentId, id);
       setPanel(null);
+      setToolPanel(null);
     },
     [agentId],
   );
@@ -591,6 +696,19 @@ export default function DesktopChatWindow({
           </span>
         </div>
         <div className={styles.desktopChatHeaderActions}>
+          {onOpenFiles && (
+            <Tooltip title={tr("apps.desktop.files.label", "Files")}>
+              <button
+                type="button"
+                className={styles.desktopChatIconButton}
+                data-testid="desktop-chat-files"
+                aria-label={tr("apps.desktop.files.label", "Files")}
+                onClick={() => onOpenFiles(agentId, threadId)}
+              >
+                <FolderOpen size={15} />
+              </button>
+            </Tooltip>
+          )}
           <button
             type="button"
             className={styles.desktopChatThreadButton}
@@ -902,139 +1020,175 @@ export default function DesktopChatWindow({
         </div>
       )}
 
-      <div className={styles.desktopChatBody}>
-        {historyError && (
-          <div className={styles.desktopChatError}>
-            <span>
-              {tr(
-                "apps.desktop.historyError",
-                "Could not load this conversation.",
+      <ToolHostScopeProvider overrides={toolHostOverrides}>
+        <div className={styles.desktopChatSplit}>
+          <div className={styles.desktopChatMain}>
+            <div className={styles.desktopChatBody}>
+              {historyError && (
+                <div className={styles.desktopChatError}>
+                  <span>
+                    {tr(
+                      "apps.desktop.historyError",
+                      "Could not load this conversation.",
+                    )}
+                  </span>
+                  <button type="button" onClick={() => void retryHistory()}>
+                    <RefreshCw size={12} />
+                    {tr("common.retry", "Retry")}
+                  </button>
+                </div>
               )}
-            </span>
-            <button type="button" onClick={() => void retryHistory()}>
-              <RefreshCw size={12} />
-              {tr("common.retry", "Retry")}
-            </button>
-          </div>
-        )}
-        {!historyLoading && historyHydrated && messages.length === 0 ? (
-          <div className={styles.desktopChatWelcome}>
-            <span
-              className={styles.desktopChatWelcomeAvatar}
-              style={{ color: agent?.color || "#6366f1" }}
-            >
-              <ExpertIcon
-                iconName={agent?.icon_name}
-                iconUrl={agent?.icon_url}
-                size={30}
-              />
-            </span>
-            <h3>{agentName}</h3>
-            <p>
-              {agent?.welcome_message ||
-                agent?.description ||
-                tr(
-                  "apps.desktop.chatWelcome",
-                  "Ask about your MiniApps, data, or anything else on this desktop.",
-                )}
-            </p>
-            <div className={styles.desktopChatQuickActions}>
-              {quickPrompts.map(({ key, icon: Icon, label, prompt }) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={styles.desktopChatQuickAction}
-                  onClick={() => prefill(prompt)}
+              {!historyLoading && historyHydrated && messages.length === 0 ? (
+                <div className={styles.desktopChatWelcome}>
+                  <span
+                    className={styles.desktopChatWelcomeAvatar}
+                    style={{ color: agent?.color || "#6366f1" }}
+                  >
+                    <ExpertIcon
+                      iconName={agent?.icon_name}
+                      iconUrl={agent?.icon_url}
+                      size={30}
+                    />
+                  </span>
+                  <h3>{agentName}</h3>
+                  <p>
+                    {agent?.welcome_message ||
+                      agent?.description ||
+                      tr(
+                        "apps.desktop.chatWelcome",
+                        "Ask about your MiniApps, data, or anything else on this desktop.",
+                      )}
+                  </p>
+                  <div className={styles.desktopChatQuickActions}>
+                    {quickPrompts.map(({ key, icon: Icon, label, prompt }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={styles.desktopChatQuickAction}
+                        onClick={() => prefill(prompt)}
+                      >
+                        <Icon size={14} />
+                        <span>{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {!activeApp && apps.length > 0 && (
+                    <button
+                      type="button"
+                      className={styles.desktopChatWelcomePick}
+                      onClick={() => setPanel("apps")}
+                    >
+                      <AppWindow size={13} />
+                      {tr(
+                        "apps.desktop.pickAppHint",
+                        "Pick a MiniApp to work on it together",
+                      )}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <ChatFilePreviewProvider
+                  openFilePreview={openFilePreview}
+                  openKnowledgeCitation={openKnowledgeCitation}
                 >
-                  <Icon size={14} />
-                  <span>{label}</span>
-                </button>
-              ))}
+                  <MessageList
+                    messages={messages}
+                    agentId={agentId}
+                    loading={historyLoading}
+                    historyHasMore={historyHasMore}
+                    historyLoadingMore={historyLoadingMore}
+                    historyRefreshing={historyRefreshing}
+                    onLoadMoreHistory={loadMoreHistory}
+                    onRefreshHistory={refreshHistory}
+                    isStreaming={isStreaming}
+                    liveSpeakers={liveSpeakers}
+                    thinkingStartedAt={thinkingStartedAt}
+                    sessionKey={threadId ?? undefined}
+                    onEditUserMessage={handleEditUserMessage}
+                    onHitlDecision={handleHitlDecision}
+                    onEditFile={
+                      onOpenFiles
+                        ? () => onOpenFiles(agentId, threadId)
+                        : undefined
+                    }
+                  />
+                </ChatFilePreviewProvider>
+              )}
             </div>
-            {!activeApp && apps.length > 0 && (
-              <button
-                type="button"
-                className={styles.desktopChatWelcomePick}
-                onClick={() => setPanel("apps")}
+
+            <div className={styles.desktopChatComposer}>
+              {!chatReady && (
+                <div className={styles.desktopChatOffline}>
+                  {tr(
+                    "apps.desktop.expertOffline",
+                    "This expert is not running. Start it before sending a message.",
+                  )}
+                </div>
+              )}
+              {threadId && (
+                <ChatInput
+                  ref={inputRef}
+                  onSend={handleSend}
+                  onCancel={cancelStream}
+                  onNewChat={handleNewChat}
+                  isStreaming={isStreaming}
+                  disabled={!chatReady}
+                  agentId={agentId}
+                  threadId={threadId}
+                  defaultModel={agent?.default_model ?? null}
+                  conversationMode={conversationMode}
+                  hitlPolicy={hitlPolicy ?? undefined}
+                  availableAgents={agents}
+                  contextUsedTokens={contextUsage?.input_tokens ?? null}
+                  contextMaxTokens={agent?.max_input_length ?? 128_000}
+                  decisionSaved={contextUsage?.decision_saved ?? 0}
+                />
+              )}
+            </div>
+
+            <footer className={styles.desktopChatFooter}>
+              <span
+                className={styles.desktopChatFooterState}
+                data-state={stateKey}
               >
-                <AppWindow size={13} />
-                {tr(
-                  "apps.desktop.pickAppHint",
-                  "Pick a MiniApp to work on it together",
+                <span className={styles.desktopChatFooterDot} />
+                {statusLabel}
+              </span>
+              <span>
+                {fillTemplate(
+                  tr("apps.desktop.messageCount", "{{count}} messages"),
+                  {
+                    count: messages.length,
+                  },
                 )}
-              </button>
-            )}
+              </span>
+              {runUsage?.total_tokens ? (
+                <span>{runUsage.total_tokens.toLocaleString()} tokens</span>
+              ) : null}
+              <span className={styles.desktopChatFooterSpacer} />
+              <span className={styles.desktopChatFooterModel}>
+                {agent?.default_model ||
+                  tr("apps.desktop.defaultModel", "Default model")}
+              </span>
+            </footer>
           </div>
-        ) : (
-          <MessageList
-            messages={messages}
-            agentId={agentId}
-            loading={historyLoading}
-            historyHasMore={historyHasMore}
-            historyLoadingMore={historyLoadingMore}
-            historyRefreshing={historyRefreshing}
-            onLoadMoreHistory={loadMoreHistory}
-            onRefreshHistory={refreshHistory}
-            isStreaming={isStreaming}
-            liveSpeakers={liveSpeakers}
-            thinkingStartedAt={thinkingStartedAt}
-            sessionKey={threadId ?? undefined}
-            onEditUserMessage={handleEditUserMessage}
-            onHitlDecision={handleHitlDecision}
-            compactProcess
-          />
-        )}
-      </div>
-
-      <div className={styles.desktopChatComposer}>
-        {!chatReady && (
-          <div className={styles.desktopChatOffline}>
-            {tr(
-              "apps.desktop.expertOffline",
-              "This expert is not running. Start it before sending a message.",
-            )}
-          </div>
-        )}
-        {threadId && (
-          <ChatInput
-            ref={inputRef}
-            onSend={handleSend}
-            onCancel={cancelStream}
-            onNewChat={handleNewChat}
-            isStreaming={isStreaming}
-            disabled={!chatReady}
-            agentId={agentId}
-            threadId={threadId}
-            defaultModel={agent?.default_model ?? null}
-            conversationMode={conversationMode}
-            hitlPolicy={hitlPolicy ?? undefined}
-            availableAgents={agents}
-            contextUsedTokens={contextUsage?.input_tokens ?? null}
-            contextMaxTokens={agent?.max_input_length ?? 128_000}
-            decisionSaved={contextUsage?.decision_saved ?? 0}
-          />
-        )}
-      </div>
-
-      <footer className={styles.desktopChatFooter}>
-        <span className={styles.desktopChatFooterState} data-state={stateKey}>
-          <span className={styles.desktopChatFooterDot} />
-          {statusLabel}
-        </span>
-        <span>
-          {fillTemplate(tr("apps.desktop.messageCount", "{{count}} messages"), {
-            count: messages.length,
-          })}
-        </span>
-        {runUsage?.total_tokens ? (
-          <span>{runUsage.total_tokens.toLocaleString()} tokens</span>
-        ) : null}
-        <span className={styles.desktopChatFooterSpacer} />
-        <span className={styles.desktopChatFooterModel}>
-          {agent?.default_model ||
-            tr("apps.desktop.defaultModel", "Default model")}
-        </span>
-      </footer>
+          {toolPanel && (
+            <DesktopChatToolPanel
+              state={toolPanel}
+              messages={messages}
+              agentId={agentId}
+              isStreaming={isStreaming}
+              active={active}
+              onClose={closeToolPanel}
+              onComposeMessage={prefill}
+              onGameSession={handleGameSession}
+              onOpenExternal={onOpenExternal ? handleOpenExternal : undefined}
+            />
+          )}
+        </div>
+      </ToolHostScopeProvider>
     </div>
   );
 }
+
+export default memo(DesktopChatWindow);

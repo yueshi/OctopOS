@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from octop.api.common.agent import require_agent_row
-from octop.api.common.agent_workspace import resolve_agent_workspace_dir
+from octop.api.common.agent_workspace import agent_facing_workspace_dir
 from octop.api.deps import current_user, get_server
 from octop.api.routers.chat.models import ForkThreadBody, RebindSessionBody, RenameThreadBody
 from octop.api.routers.chat.serialize import (
@@ -25,7 +24,6 @@ from octop.infra.agents.security.hitl_session import parse_hitl_session_policy
 from octop.infra.agents.threads.artifact import thread_artifacts_payload
 from octop.infra.agents.threads.context_breakdown import SEGMENT_KEYS, compute_context_breakdown
 from octop.infra.agents.threads.fork import fork_dashboard_thread
-from octop.infra.agents.workspace.dir import agent_facing_workspace_dir_from_config
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.hitl.coordinator import pending_hitl_payload
 from octop.infra.gateway.threads import ThreadRegistry, thread_row_has_messages
@@ -76,16 +74,6 @@ def _history_migration_payload(server: Any, *, agent_id: str, user_id: int) -> d
     }
 
 
-def _agent_facing_workspace_dir(server: Any, agent_id: str) -> Path:
-    """Agent-visible workspace_dir for artifact path joins (not host root_dir map)."""
-    registry = getattr(getattr(server, "app_runtime", None), "agent_registry", None)
-    if registry is not None and hasattr(registry, "get_config"):
-        facing = agent_facing_workspace_dir_from_config(registry.get_config(agent_id))
-        if facing:
-            return Path(facing)
-    return resolve_agent_workspace_dir(server, agent_id)
-
-
 def _require_thread(
     server: Any, agent_id: str, thread_id: str, user: Any, as_user: int | None
 ) -> Any:
@@ -124,7 +112,7 @@ async def list_threads(
     bound = thread_registry.get_bound_thread_id(
         ThreadRegistry.dashboard_key(agent_id=agent_id, user_id=effective_uid)
     )
-    workspace_dir = _agent_facing_workspace_dir(server, agent_id)
+    workspace_dir = agent_facing_workspace_dir(server, agent_id)
     hub = server.app_runtime.gateway.ws_hub
     awaiting_ids = server.app_runtime.gateway.processor.hitl_coordinator.store.pending_thread_ids(
         agent_id=agent_id, user_id=effective_uid
@@ -420,7 +408,7 @@ async def get_thread_history(
                 )
             except Exception:  # noqa: BLE001 - history must still render
                 logger.warning("failed to persist HITL notification", exc_info=True)
-    workspace_dir = _agent_facing_workspace_dir(server, agent_id)
+    workspace_dir = agent_facing_workspace_dir(server, agent_id)
     return {
         "thread_id": thread_id,
         "messages": messages,

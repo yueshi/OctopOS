@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppSummary } from "../../api/modules/apps";
 import DesktopGrid, {
-  HIDDEN_WINDOW_SUSPEND_MS,
+  LIVE_IFRAME_BUDGET,
+  MINIMIZED_WINDOW_SUSPEND_MS,
   iconSpecForApp,
 } from "./DesktopGrid";
 
@@ -49,22 +50,108 @@ vi.mock("./DesktopWebView", () => ({
   ),
 }));
 
+vi.mock("./DesktopFilesWindow", () => ({
+  default: ({
+    agentId,
+    onOpenHtml,
+  }: {
+    agentId: string;
+    onOpenHtml?: (file: {
+      agentId: string;
+      path: string;
+      name: string;
+      fromWorkspace: boolean;
+    }) => void;
+  }) => (
+    <div data-testid="desktop-files-window" data-agent-id={agentId}>
+      <button
+        type="button"
+        data-testid="mock-open-html"
+        onClick={() =>
+          onOpenHtml?.({
+            agentId,
+            path: "outbound/report.html",
+            name: "report.html",
+            fromWorkspace: true,
+          })
+        }
+      />
+    </div>
+  ),
+}));
+
+vi.mock("./DesktopBrowserWindow", () => ({
+  default: ({
+    windowId,
+    url,
+    onNavigate,
+  }: {
+    windowId: string;
+    url: string;
+    onNavigate: (windowId: string, url: string) => void;
+  }) => (
+    <div data-testid="desktop-browser-window" data-url={url}>
+      <button
+        type="button"
+        data-testid="mock-browser-navigate"
+        onClick={() => onNavigate(windowId, "https://example.com/")}
+      />
+    </div>
+  ),
+}));
+
+vi.mock("./DesktopHtmlWindow", () => ({
+  default: ({
+    agentId,
+    path,
+    fromWorkspace,
+  }: {
+    agentId: string;
+    path: string;
+    fromWorkspace: boolean;
+  }) => (
+    <div
+      data-testid="desktop-html-window"
+      data-agent-id={agentId}
+      data-path={path}
+      data-from-workspace={fromWorkspace ? "true" : "false"}
+    />
+  ),
+}));
+
 vi.mock("./DesktopChatWindow", () => ({
   default: ({
     agentId,
     initialAppId,
     seed,
+    onOpenFile,
   }: {
     agentId: string;
     initialAppId?: string | null;
     seed?: { id: number; text: string } | null;
+    onOpenFile?: (
+      path: string,
+      agentId: string | null,
+      threadId: string | null,
+    ) => void;
   }) => (
     <div
       data-testid="desktop-chat"
       data-agent-id={agentId}
       data-app-id={initialAppId ?? ""}
       data-seed={seed?.text ?? ""}
-    />
+    >
+      <button
+        type="button"
+        data-testid="mock-chat-file"
+        onClick={() => onOpenFile?.("outbound/report.html", "agent_1", "thr_1")}
+      />
+      <button
+        type="button"
+        data-testid="mock-chat-root-file"
+        onClick={() => onOpenFile?.("report.html", "agent_1", "thr_1")}
+      />
+    </div>
   ),
 }));
 
@@ -118,6 +205,21 @@ describe("DesktopGrid", () => {
     expect(screen.getAllByTestId("desktop-icon")).toHaveLength(2);
     expect(screen.getByText("客户跟进台账")).toBeInTheDocument();
     expect(screen.getByText("本月业绩看板")).toBeInTheDocument();
+  });
+
+  it("reveals the dock from the bottom hotspot and hides it after leaving", async () => {
+    render(<DesktopGrid apps={apps} />);
+    const dock = screen.getByTestId("desktop-dock");
+    expect(dock).toHaveAttribute("data-revealed", "false");
+
+    fireEvent.pointerEnter(screen.getByTestId("desktop-dock-hotspot"));
+    expect(dock).toHaveAttribute("data-revealed", "true");
+
+    fireEvent.pointerLeave(dock);
+    await waitFor(
+      () => expect(dock).toHaveAttribute("data-revealed", "false"),
+      { timeout: 1200 },
+    );
   });
 
   it("draws generated icons instead of app screenshots", () => {
@@ -219,6 +321,93 @@ describe("DesktopGrid", () => {
       "app_1",
     );
     expect(screen.getByTestId("dock-running")).toBeInTheDocument();
+  });
+
+  it("raises a background app window when its iframe area is clicked", () => {
+    render(<DesktopGrid apps={apps} />);
+    openAppWindow("app_1");
+    openAppWindow("app_2");
+
+    const windowNode = (appId: string) =>
+      screen
+        .getAllByTestId("desktop-window")
+        .find((node) => node.getAttribute("data-app-id") === appId)!;
+
+    const first = windowNode("app_1");
+    const second = windowNode("app_2");
+    expect(
+      second.querySelector('[data-testid="desktop-window-focus-shield"]'),
+    ).toBeNull();
+
+    const shield = first.querySelector(
+      '[data-testid="desktop-window-focus-shield"]',
+    );
+    expect(shield).not.toBeNull();
+    fireEvent(
+      shield!,
+      new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+
+    expect(Number(first.style.zIndex)).toBeGreaterThan(
+      Number(second.style.zIndex),
+    );
+    expect(
+      first.querySelector('[data-testid="desktop-window-focus-shield"]'),
+    ).toBeNull();
+  });
+
+  it("keeps at most the iframe budget live per desktop", () => {
+    const budgetApps: AppSummary[] = Array.from(
+      { length: LIVE_IFRAME_BUDGET + 1 },
+      (_, index) => ({
+        ...base,
+        app_id: `app_budget_${index}`,
+        name: `预算应用 ${index}`,
+      }),
+    );
+    render(<DesktopGrid apps={budgetApps} />);
+
+    for (const item of budgetApps) openAppWindow(item.app_id);
+
+    const windowNode = (appId: string) =>
+      screen
+        .getAllByTestId("desktop-window")
+        .find((node) => node.getAttribute("data-app-id") === appId)!;
+    const sleepingIds = () =>
+      screen
+        .getAllByTestId("desktop-window")
+        .filter((node) => node.getAttribute("data-suspended") === "true")
+        .map((node) => node.getAttribute("data-app-id"));
+
+    expect(screen.getAllByTestId("mini-app-frame")).toHaveLength(
+      LIVE_IFRAME_BUDGET,
+    );
+    expect(sleepingIds()).toEqual(["app_budget_0"]);
+    // The last opened window owns focus and must stay live.
+    expect(
+      windowNode(`app_budget_${LIVE_IFRAME_BUDGET}`).querySelector(
+        '[data-testid="mini-app-frame"]',
+      ),
+    ).not.toBeNull();
+
+    // Raising the sleeping window wakes it and evicts the next oldest one.
+    const shield = windowNode("app_budget_0").querySelector(
+      '[data-testid="desktop-window-focus-shield"]',
+    );
+    fireEvent(
+      shield!,
+      new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+    );
+
+    expect(screen.getAllByTestId("mini-app-frame")).toHaveLength(
+      LIVE_IFRAME_BUDGET,
+    );
+    expect(sleepingIds()).toEqual(["app_budget_1"]);
+    expect(
+      windowNode("app_budget_0").querySelector(
+        '[data-testid="mini-app-frame"]',
+      ),
+    ).not.toBeNull();
   });
 
   it("opens an app window with Enter for keyboard users", () => {
@@ -350,7 +539,7 @@ describe("DesktopGrid", () => {
     }
   });
 
-  it("unloads a hidden app window after the grace period and reloads it", () => {
+  it("unloads a minimized app window quickly and reloads it", () => {
     vi.useFakeTimers();
     try {
       render(<DesktopGrid apps={apps} />);
@@ -361,7 +550,7 @@ describe("DesktopGrid", () => {
       expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
 
       act(() => {
-        vi.advanceTimersByTime(HIDDEN_WINDOW_SUSPEND_MS);
+        vi.advanceTimersByTime(MINIMIZED_WINDOW_SUSPEND_MS);
       });
       expect(screen.queryByTestId("mini-app-frame")).not.toBeInTheDocument();
       expect(
@@ -373,6 +562,32 @@ describe("DesktopGrid", () => {
         .find((node) => node.getAttribute("data-app-id") === "app_1")!;
       fireEvent.click(dockIcon);
       expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unloads a minimized browser window quickly", async () => {
+    render(<DesktopGrid apps={apps} />);
+    switchSpace("agent_1");
+    fireEvent.click(screen.getByTestId("desktop-dock-browser"));
+    expect(
+      await screen.findByTestId("desktop-browser-window"),
+    ).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Minimize" }));
+      act(() => {
+        vi.advanceTimersByTime(MINIMIZED_WINDOW_SUSPEND_MS);
+      });
+
+      expect(
+        screen.queryByTestId("desktop-browser-window"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByTestId("desktop-window-suspended"),
+      ).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -401,6 +616,31 @@ describe("DesktopGrid", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByTestId("desktop-window")).not.toBeInTheDocument();
+  });
+
+  it("keeps a maximized window full when the dock is revealed", () => {
+    render(<DesktopGrid apps={apps} />);
+    const root = screen.getByTestId("desktop-root");
+    Object.defineProperty(root, "clientWidth", {
+      configurable: true,
+      value: 1280,
+    });
+    Object.defineProperty(root, "clientHeight", {
+      configurable: true,
+      value: 800,
+    });
+    openAppWindow("app_1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Maximize" }));
+    const win = screen.getByTestId("desktop-window");
+    expect(win.style.height).toBe("762px");
+
+    fireEvent.pointerEnter(screen.getByTestId("desktop-dock-hotspot"));
+    expect(screen.getByTestId("desktop-dock")).toHaveAttribute(
+      "data-revealed",
+      "true",
+    );
+    expect(win.style.height).toBe("762px");
   });
 
   it("groups apps into one desktop per expert and switches desktops", () => {
@@ -451,6 +691,109 @@ describe("DesktopGrid", () => {
     switchSpace("agent_1");
     expect(screen.getByTestId("desktop-window")).toHaveAttribute(
       "data-current",
+      "true",
+    );
+  });
+
+  it("opens the files window for the current expert", async () => {
+    render(<DesktopGrid apps={apps} />);
+    switchSpace("agent_1");
+
+    const surface = screen.getByTestId("desktop-dock-surface");
+    const slots = [...surface.children];
+    expect(
+      slots[0]?.querySelector('[data-testid="desktop-dock-files"]'),
+    ).not.toBeNull();
+    expect(
+      slots[0]?.querySelector('[data-testid="desktop-dock-divider"]'),
+    ).toBeNull();
+    expect(
+      slots[1]?.querySelector('[data-testid="desktop-dock-browser"]'),
+    ).not.toBeNull();
+    expect(
+      slots[1]?.querySelector('[data-testid="desktop-dock-divider"]'),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("desktop-dock-files"));
+
+    expect(await screen.findByTestId("desktop-files-window")).toHaveAttribute(
+      "data-agent-id",
+      "agent_1",
+    );
+    expect(screen.getByTestId("desktop-window")).toHaveAttribute(
+      "data-kind",
+      "files",
+    );
+  });
+
+  it("opens a blank browser window and persists navigation", async () => {
+    render(<DesktopGrid apps={apps} />);
+    switchSpace("agent_1");
+
+    fireEvent.click(screen.getByTestId("desktop-dock-browser"));
+    expect(await screen.findByTestId("desktop-browser-window")).toHaveAttribute(
+      "data-url",
+      "",
+    );
+
+    fireEvent.click(screen.getByTestId("mock-browser-navigate"));
+    await waitFor(() =>
+      expect(screen.getByTestId("desktop-browser-window")).toHaveAttribute(
+        "data-url",
+        "https://example.com/",
+      ),
+    );
+    const browserWindow = screen
+      .getAllByTestId("desktop-window")
+      .find((node) => node.getAttribute("data-kind") === "browser");
+    expect(browserWindow).toHaveAttribute("data-url", "https://example.com/");
+  });
+
+  it("opens an independent HTML window from the files window", async () => {
+    render(<DesktopGrid apps={apps} />);
+    switchSpace("agent_1");
+
+    fireEvent.click(screen.getByTestId("desktop-dock-files"));
+    fireEvent.click(await screen.findByTestId("mock-open-html"));
+
+    expect(await screen.findByTestId("desktop-html-window")).toHaveAttribute(
+      "data-path",
+      "outbound/report.html",
+    );
+    const windows = screen.getAllByTestId("desktop-window");
+    expect(
+      windows.some((node) => node.getAttribute("data-kind") === "html"),
+    ).toBe(true);
+  });
+
+  it("opens HTML file cards in an independent window", async () => {
+    render(<DesktopGrid apps={apps} />);
+    switchSpace("agent_1");
+
+    fireEvent.click(screen.getByTestId("desktop-pet"));
+    fireEvent.click(screen.getByTestId("desktop-pet"));
+    fireEvent.click(await screen.findByTestId("mock-chat-file"));
+
+    expect(await screen.findByTestId("desktop-html-window")).toHaveAttribute(
+      "data-path",
+      "/outbound/report.html",
+    );
+  });
+
+  it("treats relative chat file paths as workspace files", async () => {
+    render(<DesktopGrid apps={apps} />);
+    switchSpace("agent_1");
+
+    fireEvent.click(screen.getByTestId("desktop-pet"));
+    fireEvent.click(screen.getByTestId("desktop-pet"));
+    fireEvent.click(await screen.findByTestId("mock-chat-root-file"));
+
+    expect(await screen.findByTestId("desktop-html-window")).toHaveAttribute(
+      "data-path",
+      "/report.html",
+    );
+    expect(screen.getByTestId("desktop-html-window")).toHaveAttribute(
+      "data-from-workspace",
       "true",
     );
   });
@@ -509,6 +852,54 @@ describe("DesktopGrid", () => {
     expect(
       screen.queryByTestId("desktop-command-palette"),
     ).not.toBeInTheDocument();
+  });
+
+  it("does not boot windows from another desktop until it is visited", async () => {
+    const otherApp: AppSummary = {
+      ...base,
+      app_id: "app_ops",
+      name: "库存预警",
+      agent_id: "agent_2",
+      agent_name: "运营专家",
+    };
+    localStorage.setItem(
+      "octop:apps-desktop-windows:v1",
+      JSON.stringify([
+        {
+          id: "app:app_ops",
+          kind: "app",
+          appId: "app_ops",
+          agentId: "agent_2",
+          z: 21,
+          minimized: false,
+          maximized: false,
+          x: 40,
+          y: 60,
+          w: 520,
+          h: 400,
+        },
+      ]),
+    );
+    localStorage.setItem("octop:apps-desktop-space:v1", "agent_1");
+
+    render(<DesktopGrid apps={[...apps, otherApp]} />);
+
+    expect(screen.queryByTestId("mini-app-frame")).not.toBeInTheDocument();
+    expect(screen.getByTestId("desktop-window")).toHaveAttribute(
+      "data-app-id",
+      "app_ops",
+    );
+    expect(screen.getByTestId("desktop-window")).toHaveAttribute(
+      "data-suspended",
+      "true",
+    );
+
+    switchSpace("agent_2");
+
+    expect(await screen.findByTestId("mini-app-frame")).toHaveAttribute(
+      "data-app-id",
+      "app_ops",
+    );
   });
 
   it("restores open desktop windows after a reload", async () => {
@@ -635,6 +1026,7 @@ describe("DesktopGrid", () => {
     fireEvent.click(screen.getByTestId("mini-app-open-external"));
 
     expect(screen.getByTestId("desktop-dock-chat")).toBeInTheDocument();
+    expect(screen.getByTestId("desktop-dock-browser")).toBeInTheDocument();
     expect(screen.getByTestId("desktop-dock-external")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("desktop-dock-launcher"));

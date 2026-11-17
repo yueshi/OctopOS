@@ -21,6 +21,8 @@ export interface DesktopDockItem {
   running?: boolean;
   minimized?: boolean;
   active?: boolean;
+  /** Draw a divider to the right of this item (e.g. the Files entry). */
+  dividerAfter?: boolean;
   onActivate: () => void;
   onMinimize?: () => void;
   onClose?: () => void;
@@ -34,6 +36,9 @@ interface DockMenuState {
 
 interface DesktopDockProps {
   items: DesktopDockItem[];
+  revealed: boolean;
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
 }
 
 const MENU_WIDTH = 176;
@@ -44,10 +49,19 @@ const MENU_HEIGHT = 118;
  * an All Apps launcher, and right-click window actions. It stays inside the
  * desktop root so it remains visible while the Fullscreen API is active.
  */
-export default function DesktopDock({ items }: DesktopDockProps) {
+export default function DesktopDock({
+  items,
+  revealed,
+  onPointerEnter,
+  onPointerLeave,
+}: DesktopDockProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState<DockMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!revealed) setMenu(null);
+  }, [revealed]);
 
   useEffect(() => {
     if (!menu) return;
@@ -86,7 +100,19 @@ export default function DesktopDock({ items }: DesktopDockProps) {
 
   return (
     <>
-      <div className={styles.desktopDock} data-testid="desktop-dock">
+      <div
+        className={[
+          styles.desktopDock,
+          revealed ? "" : styles.desktopDockHidden,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        data-testid="desktop-dock"
+        data-revealed={revealed ? "true" : "false"}
+        aria-hidden={!revealed}
+        onPointerEnter={onPointerEnter}
+        onPointerLeave={onPointerLeave}
+      >
         <div
           className={styles.desktopDockInner}
           data-testid="desktop-dock-surface"
@@ -95,11 +121,16 @@ export default function DesktopDock({ items }: DesktopDockProps) {
             const divider =
               item.kind === "launcher" &&
               index > 0 &&
-              items[index - 1]?.kind !== "launcher";
+              items[index - 1]?.kind !== "launcher" &&
+              !items[index - 1]?.dividerAfter;
             return (
               <span key={item.id} className={styles.desktopDockSlot}>
                 {divider && (
-                  <span className={styles.desktopDockDivider} aria-hidden />
+                  <span
+                    className={styles.desktopDockDivider}
+                    data-testid="desktop-dock-divider"
+                    aria-hidden
+                  />
                 )}
                 <Tooltip title={item.label} placement="top">
                   <button
@@ -149,6 +180,13 @@ export default function DesktopDock({ items }: DesktopDockProps) {
                     )}
                   </button>
                 </Tooltip>
+                {item.dividerAfter && (
+                  <span
+                    className={styles.desktopDockDivider}
+                    data-testid="desktop-dock-divider"
+                    aria-hidden
+                  />
+                )}
               </span>
             );
           })}
@@ -163,6 +201,8 @@ export default function DesktopDock({ items }: DesktopDockProps) {
           role="menu"
           data-testid="desktop-dock-menu"
           aria-label={menu.item.label}
+          onPointerEnter={onPointerEnter}
+          onPointerLeave={onPointerLeave}
         >
           <div className={styles.desktopDockMenuTitle}>{menu.item.label}</div>
           <button

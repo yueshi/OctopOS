@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -9,13 +9,16 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import DesktopConsoleNotice from "./DesktopConsoleNotice";
+import { isDashboardConsoleUrl } from "./desktopWindows";
 import styles from "./index.module.less";
 
 interface DesktopWebViewProps {
+  windowId: string;
   url: string;
   title?: string | null;
   /** Return to the MiniApp desktop, mirroring WeChat's web-view back action. */
-  onClose?: () => void;
+  onClose?: (windowId: string) => void;
 }
 
 function splitUrl(url: string): { host: string; path: string } {
@@ -36,7 +39,8 @@ function splitUrl(url: string): { host: string; path: string } {
  * capsule control. The window itself is portrait-sized by the desktop window
  * manager, so mobile pages get the viewport they expect.
  */
-export default function DesktopWebView({
+function DesktopWebView({
+  windowId,
   url,
   title,
   onClose,
@@ -46,7 +50,13 @@ export default function DesktopWebView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loadConsole, setLoadConsole] = useState(false);
+  const consoleUrl = !loadConsole && isDashboardConsoleUrl(url);
   const { host, path } = splitUrl(url);
+
+  useEffect(() => {
+    setLoadConsole(false);
+  }, [url]);
 
   const openInBrowser = () => {
     window.open(url, "_blank", "noopener,noreferrer");
@@ -70,7 +80,7 @@ export default function DesktopWebView({
           className={styles.desktopWebViewBack}
           aria-label={t("apps.webview.back", "Back")}
           title={t("apps.webview.back", "Back")}
-          onClick={onClose}
+          onClick={() => onClose?.(windowId)}
           disabled={!onClose}
         >
           <ChevronLeft size={23} />
@@ -94,7 +104,7 @@ export default function DesktopWebView({
             className={styles.desktopWebViewCapsuleButton}
             aria-label={t("apps.webview.close", "Close")}
             title={t("apps.webview.close", "Close")}
-            onClick={onClose}
+            onClick={() => onClose?.(windowId)}
             disabled={!onClose}
           >
             <Circle size={13} strokeWidth={2.4} />
@@ -142,52 +152,71 @@ export default function DesktopWebView({
       )}
 
       <div className={styles.desktopWebViewBody}>
-        {loading && !error && (
-          <div className={styles.desktopWebViewLoading}>
-            <span className={styles.desktopWebViewSpinner} aria-hidden />
-            <span>{t("apps.webview.loading", "Loading page…")}</span>
-          </div>
-        )}
-        {error ? (
-          <div className={styles.desktopWebViewError}>
-            <AlertTriangle size={26} strokeWidth={1.5} />
-            <span className={styles.desktopWebViewErrorTitle}>
-              {t(
-                "apps.webview.errorTitle",
-                "This page can't be shown inside the desktop",
-              )}
-            </span>
-            <span className={styles.desktopWebViewErrorHint}>
-              {t(
-                "apps.webview.errorHint",
-                "The site may block embedding. Open it in your browser instead.",
-              )}
-            </span>
-            <button
-              type="button"
-              className={styles.desktopWebViewErrorAction}
-              onClick={openInBrowser}
-            >
-              <ExternalLink size={13} />
-              {t("apps.webview.openInBrowser", "Open in browser")}
-            </button>
-          </div>
-        ) : (
-          <iframe
-            key={`${url}:${reloadKey}`}
-            className={styles.desktopWebViewFrame}
-            src={url}
-            title={title || host || url}
-            sandbox="allow-scripts allow-forms allow-modals"
-            referrerPolicy="no-referrer"
-            onLoad={() => setLoading(false)}
-            onError={() => {
-              setLoading(false);
-              setError(true);
+        {consoleUrl ? (
+          <DesktopConsoleNotice
+            onOpenExternal={openInBrowser}
+            onLoadAnyway={() => {
+              setLoadConsole(true);
+              setLoading(true);
             }}
           />
+        ) : (
+          <>
+            {loading && !error && (
+              <div className={styles.desktopWebViewLoading}>
+                <span className={styles.desktopWebViewSpinner} aria-hidden />
+                <span>{t("apps.webview.loading", "Loading page…")}</span>
+              </div>
+            )}
+            {error ? (
+              <div className={styles.desktopWebViewError}>
+                <AlertTriangle size={26} strokeWidth={1.5} />
+                <span className={styles.desktopWebViewErrorTitle}>
+                  {t(
+                    "apps.webview.errorTitle",
+                    "This page can't be shown inside the desktop",
+                  )}
+                </span>
+                <span className={styles.desktopWebViewErrorHint}>
+                  {t(
+                    "apps.webview.errorHint",
+                    "The site may block embedding. Open it in your browser instead.",
+                  )}
+                </span>
+                <button
+                  type="button"
+                  className={styles.desktopWebViewErrorAction}
+                  onClick={openInBrowser}
+                >
+                  <ExternalLink size={13} />
+                  {t("apps.webview.openInBrowser", "Open in browser")}
+                </button>
+              </div>
+            ) : (
+              <iframe
+                key={`${url}:${reloadKey}`}
+                data-testid="desktop-webview-frame"
+                className={styles.desktopWebViewFrame}
+                src={url}
+                title={title || host || url}
+                /* User-entered / agent-shared pages need their own cookies and
+                   same-origin ES modules. Without allow-same-origin the frame is an
+                   opaque origin: module scripts fail CORS and localStorage throws,
+                   leaving modern sites blank (same issue as DesktopBrowserWindow). */
+                sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+                referrerPolicy="no-referrer"
+                onLoad={() => setLoading(false)}
+                onError={() => {
+                  setLoading(false);
+                  setError(true);
+                }}
+              />
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
+
+export default memo(DesktopWebView);
