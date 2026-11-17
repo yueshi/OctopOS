@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   systemAppAllowsAction,
+  systemAppAllowsManager,
   systemAppAllowsQuery,
   visibleSystemApps,
 } from "./registry";
@@ -97,5 +98,18 @@ describe("system app action allowlists", () => {
     expect(systemAppAllowsAction("capabilities", "cron.run")).toBe(false);
     expect(systemAppAllowsAction("tasks", "cron.run")).toBe(true);
     expect(systemAppAllowsAction("usage", "skills.toggle")).toBe(false);
+  });
+});
+
+describe("system app manager allowlists", () => {
+  it("opens only the native managers an app declares", () => {
+    expect(systemAppAllowsManager("capabilities", "skills")).toBe(true);
+    expect(systemAppAllowsManager("capabilities", "tools")).toBe(true);
+    expect(systemAppAllowsManager("capabilities", "channels")).toBe(false);
+    expect(systemAppAllowsManager("connections", "channels")).toBe(true);
+    expect(systemAppAllowsManager("connections", "connectors")).toBe(true);
+    expect(systemAppAllowsManager("tasks", "tasks")).toBe(true);
+    expect(systemAppAllowsManager("operations", "tasks")).toBe(true);
+    expect(systemAppAllowsManager("usage", "tasks")).toBe(false);
   });
 });

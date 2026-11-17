@@ -1,7 +1,15 @@
+import type { ReactElement } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DesktopGrid from "./DesktopGrid";
+
+function renderGrid(ui: ReactElement, initialEntries = ["/"]) {
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>,
+  );
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -58,11 +66,11 @@ vi.mock("./system/SystemAppFrame", () => ({
   default: ({
     appKey,
     agentId,
-    onOpenConsole,
+    onOpenManager,
   }: {
     appKey: string;
     agentId: string;
-    onOpenConsole?: (path: string) => void;
+    onOpenManager?: (key: string) => void;
   }) => (
     <div
       data-testid="system-app-frame"
@@ -71,10 +79,26 @@ vi.mock("./system/SystemAppFrame", () => ({
     >
       <button
         type="button"
-        data-testid="system-open-console"
-        onClick={() => onOpenConsole?.("/token-usage")}
+        data-testid="system-open-manager"
+        onClick={() => onOpenManager?.("skills")}
       />
     </div>
+  ),
+}));
+
+vi.mock("./desktopManager/DesktopManagerDrawer", () => ({
+  default: ({
+    managerKey,
+    agentId,
+  }: {
+    managerKey: string;
+    agentId: string;
+  }) => (
+    <div
+      data-testid="desktop-manager"
+      data-manager-key={managerKey}
+      data-agent-id={agentId}
+    />
   ),
 }));
 
@@ -83,11 +107,15 @@ describe("DesktopGrid system apps", () => {
     localStorage.clear();
   });
 
-  it("shows the expert's permitted system apps as desktop icons", () => {
-    render(<DesktopGrid apps={[]} />);
+  it("groups the expert's system apps in one desktop folder", () => {
+    renderGrid(<DesktopGrid apps={[]} />);
 
+    expect(screen.getByTestId("desktop-system-folder")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("desktop-system-icon")).toHaveLength(0);
+
+    fireEvent.click(screen.getByTestId("desktop-system-folder"));
     const keys = screen
-      .getAllByTestId("desktop-system-icon")
+      .getAllByTestId("desktop-system-folder-item")
       .map((node) => node.getAttribute("data-system-key"));
     expect(keys).toEqual([
       "usage",
@@ -98,13 +126,14 @@ describe("DesktopGrid system apps", () => {
     ]);
   });
 
-  it("opens a system app in its own window", async () => {
-    render(<DesktopGrid apps={[]} />);
+  it("opens a system app from the folder in its own window", async () => {
+    renderGrid(<DesktopGrid apps={[]} />);
+    fireEvent.click(screen.getByTestId("desktop-system-folder"));
 
     const usage = screen
-      .getAllByTestId("desktop-system-icon")
+      .getAllByTestId("desktop-system-folder-item")
       .find((node) => node.getAttribute("data-system-key") === "usage")!;
-    fireEvent.doubleClick(usage);
+    fireEvent.click(usage);
 
     const frame = await screen.findByTestId("system-app-frame");
     expect(frame).toHaveAttribute("data-system-key", "usage");
@@ -113,6 +142,33 @@ describe("DesktopGrid system apps", () => {
       "data-kind",
       "system",
     );
+  });
+
+  it("opens a native desktop manager instead of navigating away", async () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderGrid(<DesktopGrid apps={[]} />);
+    fireEvent.click(screen.getByTestId("desktop-system-folder"));
+    const capabilities = screen
+      .getAllByTestId("desktop-system-folder-item")
+      .find((node) => node.getAttribute("data-system-key") === "capabilities")!;
+    fireEvent.click(capabilities);
+    fireEvent.click(await screen.findByTestId("system-open-manager"));
+
+    const manager = await screen.findByTestId("desktop-manager");
+    expect(manager).toHaveAttribute("data-manager-key", "skills");
+    expect(manager).toHaveAttribute("data-agent-id", "agent_1");
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it("opens a deep-linked system app on its expert desktop", async () => {
+    renderGrid(<DesktopGrid apps={[]} />, [
+      "/apps/desktop?agent=agent_1&system=tasks",
+    ]);
+
+    const frame = await screen.findByTestId("system-app-frame");
+    expect(frame).toHaveAttribute("data-system-key", "tasks");
+    expect(frame).toHaveAttribute("data-agent-id", "agent_1");
   });
 
   it("restores a system window from localStorage", async () => {
@@ -137,7 +193,7 @@ describe("DesktopGrid system apps", () => {
       ]),
     );
 
-    render(<DesktopGrid apps={[]} />);
+    renderGrid(<DesktopGrid apps={[]} />);
 
     const frame = await screen.findByTestId("system-app-frame");
     expect(frame).toHaveAttribute("data-system-key", "usage");

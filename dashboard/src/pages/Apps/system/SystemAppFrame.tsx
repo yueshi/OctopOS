@@ -17,32 +17,16 @@ import { runSystemAction, type SystemActionParams } from "./actions";
 import {
   SYSTEM_APP_BY_KEY,
   systemAppAllowsAction,
+  systemAppAllowsManager,
   systemAppAllowsQuery,
 } from "./registry";
 import { runSystemQuery } from "./queries";
 import { SYSTEM_APP_SDK } from "./systemSdk";
-import type { SystemAppKey, SystemQueryParams } from "./types";
-
-/** Console pages a system app may deep-link to. */
-const CONSOLE_PATH_PREFIXES = [
-  "/token-usage",
-  "/personalization/channels",
-  "/personalization/skills",
-  "/personalization/tools",
-  "/personalization/memory",
-  "/connectors",
-  "/tasks",
-  "/knowledge-bases",
-  "/agent-config",
-] as const;
-
-export function isSystemConsolePath(path: string): boolean {
-  const clean = path.trim();
-  if (!clean.startsWith("/") || clean.startsWith("//")) return false;
-  return CONSOLE_PATH_PREFIXES.some(
-    (prefix) => clean === prefix || clean.startsWith(`${prefix}?`),
-  );
-}
+import type {
+  SystemAppKey,
+  SystemManagerKey,
+  SystemQueryParams,
+} from "./types";
 
 interface Props {
   appKey: SystemAppKey;
@@ -52,7 +36,8 @@ interface Props {
   active?: boolean;
   /** True when the hosting window is the focused one. */
   foreground?: boolean;
-  onOpenConsole?: (path: string) => void;
+  /** Open a native desktop manager instead of the console web page. */
+  onOpenManager?: (key: SystemManagerKey) => void;
 }
 
 /**
@@ -68,34 +53,33 @@ export default function SystemAppFrame({
   title,
   active = true,
   foreground = true,
-  onOpenConsole,
+  onOpenManager,
 }: Props) {
   const { t, i18n } = useTranslation();
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const onOpenConsoleRef = useRef(onOpenConsole);
+  const onOpenManagerRef = useRef(onOpenManager);
   const definition = SYSTEM_APP_BY_KEY.get(appKey);
   const hasActions = Boolean(definition?.actions?.length);
-  const capabilities = useMemo(
-    () =>
-      hasActions
-        ? [...SYSTEM_APP_CAPABILITIES, SYSTEM_CAP.ACT]
-        : SYSTEM_APP_CAPABILITIES,
-    [hasActions],
-  );
-  const extraMethods = useMemo(
-    () =>
-      hasActions
-        ? ["systemQuery", "systemAction", "openConsole"]
-        : ["systemQuery", "openConsole"],
-    [hasActions],
-  );
+  const hasManagers = Boolean(definition?.managers?.length);
+  const capabilities = useMemo(() => {
+    const next = [...SYSTEM_APP_CAPABILITIES];
+    if (hasActions) next.push(SYSTEM_CAP.ACT);
+    if (hasManagers) next.push(SYSTEM_CAP.MANAGE);
+    return next;
+  }, [hasActions, hasManagers]);
+  const extraMethods = useMemo(() => {
+    const methods = ["systemQuery"];
+    if (hasActions) methods.push("systemAction");
+    if (hasManagers) methods.push("openManager");
+    return methods;
+  }, [hasActions, hasManagers]);
   const [html, setHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    onOpenConsoleRef.current = onOpenConsole;
-  }, [onOpenConsole]);
+    onOpenManagerRef.current = onOpenManager;
+  }, [onOpenManager]);
 
   useEffect(() => {
     let alive = true;
@@ -179,28 +163,15 @@ export default function SystemAppFrame({
               });
             });
           }
-          if (method === "openConsole") {
-            const path = String(params.url ?? "").trim();
-            if (!isSystemConsolePath(path)) {
-              throw new Error("unsupported console path");
+          if (method === "openManager") {
+            const key = String(params.name ?? "").trim();
+            if (!systemAppAllowsManager(appKey, key)) {
+              throw new Error("manager not declared by this app");
             }
-            if (!onOpenConsoleRef.current) {
-              throw new Error("console navigation is unavailable");
+            if (!onOpenManagerRef.current) {
+              throw new Error("manager is unavailable");
             }
-            // Open from the confirmation click, not from this async handler:
-            // browsers treat it as part of the user gesture, so popup
-            // blockers do not swallow the settings tab.
-            Modal.confirm({
-              getContainer: fullscreenContainer,
-              title: t(
-                "apps.system.openConsoleTitle",
-                "Open the full settings page?",
-              ),
-              content: path,
-              okText: t("apps.system.openConsoleOk", "Open settings"),
-              cancelText: t("common.cancel", "Cancel"),
-              onOk: () => onOpenConsoleRef.current?.(path),
-            });
+            onOpenManagerRef.current(key as SystemManagerKey);
             return { opened: true };
           }
           throw new Error("unsupported method");

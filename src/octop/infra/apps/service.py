@@ -975,8 +975,10 @@ class AppService:
         return granted
 
     def list_for_user(self, user_id: int, *, is_admin: bool) -> list[tuple[LightAppRow, str]]:
-        if is_admin:
-            return [(row, "edit_structure") for row in self._app_repo.list_all()]
+        # Admins list the same apps as everyone else: owned + explicitly
+        # shared. Direct access to a known app id still bypasses ACL through
+        # ``permission_for``; only the catalogue is scoped.
+        del is_admin
         entries: list[tuple[LightAppRow, str]] = [
             (row, "edit_structure") for row in self._app_repo.list_owned(user_id)
         ]

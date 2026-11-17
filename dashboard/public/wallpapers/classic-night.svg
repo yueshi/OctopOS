@@ -52,9 +52,11 @@
       <stop offset="1" stop-color="#7dd3fc" stop-opacity="0"/>
     </linearGradient>
 
-    <filter id="soften" x="-20%" y="-40%" width="140%" height="180%">
-      <feGaussianBlur stdDeviation="38"/>
-    </filter>
+    <radialGradient id="horizonGlow" cx="0" cy="0" r="1" gradientTransform="translate(1320 800) scale(720 120)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#67e8f9" stop-opacity="0.14"/>
+      <stop offset="0.55" stop-color="#67e8f9" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#67e8f9" stop-opacity="0"/>
+    </radialGradient>
   </defs>
 
   <rect width="2560" height="1440" fill="url(#sky)"/>
@@ -80,7 +82,7 @@
     <circle cx="2158" cy="458" r="1.3"/>
   </g>
 
-  <ellipse cx="1320" cy="800" rx="720" ry="120" fill="#67e8f9" opacity="0.08" filter="url(#soften)"/>
+  <ellipse cx="1320" cy="800" rx="720" ry="120" fill="url(#horizonGlow)"/>
 
   <path d="M0 792C232 742 430 668 702 618C960 570 1110 636 1348 648C1600 660 1780 572 2010 568C2226 564 2380 610 2560 656V1440H0Z" fill="url(#ridgeFar)"/>
   <path d="M0 792C232 742 430 668 702 618C960 570 1110 636 1348 648C1600 660 1780 572 2010 568C2226 564 2380 610 2560 656" fill="none" stroke="url(#crest)" stroke-width="3" opacity="0.65"/>

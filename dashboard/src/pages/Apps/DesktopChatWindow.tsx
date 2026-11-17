@@ -22,6 +22,7 @@ import {
 import type { HitlDecisionHandler } from "../../api/types/hitl";
 import type { OctopAgent } from "../../context/AgentContext";
 import { useAgent } from "../../context/AgentContext";
+import { usePluginToolUis } from "../../plugins/toolRenderers";
 import { parseOctopToolOutput } from "../../plugins/toolRenderers/parseToolOutput";
 import { ToolHostScopeProvider } from "../../plugins/toolRenderers/ToolHostScope";
 import type {
@@ -307,6 +308,11 @@ function DesktopChatWindow({
     retryHistory,
     resumeHitl,
   } = useChat(threadId, agentId, isTeamAgent(agent));
+
+  // Desktop chat windows are separate React trees from `/chat`; without this
+  // the builtin `app_card` renderer (and plugin UIs) never register here and
+  // MiniApp cards fall back to a generic key/value block.
+  usePluginToolUis({ agentId, threadId });
 
   useEffect(() => {
     if (!threadId) return;

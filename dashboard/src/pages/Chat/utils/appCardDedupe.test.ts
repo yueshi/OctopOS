@@ -44,6 +44,30 @@ describe("dedupeAppCardMessages", () => {
     expect(isPinnedToolUiMessage(result[1])).toBe(true);
   });
 
+  it("keeps a write-html card when the turn has no app_open", () => {
+    const write = appCardMessage("write", "app_write_html", "app_1");
+    const result = dedupeAppCardMessages([write]);
+
+    expect(isSilent(result[0])).toBe(false);
+    expect(isPinnedToolUiMessage(result[0])).toBe(true);
+  });
+
+  it("refreshes the kept write card when the turn has no app_open", () => {
+    const first = appCardMessage("first", "app_write_html", "app_1", {
+      row_count: 0,
+    });
+    const latest = appCardMessage("latest", "app_write_html", "app_1", {
+      row_count: 4,
+    });
+    const result = dedupeAppCardMessages([first, latest]);
+
+    const kept = parseOctopToolOutput(result[0].toolData?.output).data as {
+      row_count?: number;
+    };
+    expect(kept.row_count).toBe(4);
+    expect(isSilent(result[1])).toBe(true);
+  });
+
   it("keeps only the first open card in a turn", () => {
     const first = appCardMessage("first", "app_open", "app_1");
     const second = appCardMessage("second", "app_open", "app_1");

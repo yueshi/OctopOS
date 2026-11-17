@@ -8,6 +8,14 @@ export type SystemAppKey =
   | "operations"
   | "tasks";
 
+/** Native desktop management surface a system app may open. */
+export type SystemManagerKey =
+  | "skills"
+  | "tools"
+  | "channels"
+  | "connectors"
+  | "tasks";
+
 export interface SystemAppDefinition {
   key: SystemAppKey;
   /** i18n key for the window/icon label. */
@@ -22,6 +30,8 @@ export interface SystemAppDefinition {
   permissions: readonly string[];
   /** Query keys this page may call. Deny-by-default per app. */
   queryKeys: readonly string[];
+  /** Native management surfaces this app may request from the host. */
+  managers?: readonly SystemManagerKey[];
   /** Write actions this page may call after a host confirmation. */
   actions?: readonly string[];
   /** Bundled single-file HTML, loaded lazily with Vite's `?raw` import. */

@@ -376,7 +376,7 @@
             renderSection({
               title: text.channels,
               manage: text.manageChannels,
-              path: "/personalization/channels",
+              manager: "channels",
               rows: state.channels,
               empty: text.emptyChannels,
               row: function (channel) {
@@ -395,7 +395,7 @@
             renderSection({
               title: text.connectors,
               manage: text.manageConnectors,
-              path: "/connectors",
+              manager: "connectors",
               rows: state.connectors,
               empty: text.emptyConnectors,
               row: function (connector) {
@@ -455,7 +455,7 @@
           manage.textContent = options.manage;
           manage.addEventListener("click", function () {
             if (window.octopSystem)
-              window.octopSystem.openConsole(options.path);
+              window.octopSystem.openManager(options.manager);
           });
           head.appendChild(manage);
           card.appendChild(head);

@@ -1,7 +1,13 @@
+import type { ReactElement } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DesktopGrid from "./DesktopGrid";
+
+function renderGrid(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -38,39 +44,6 @@ vi.mock("../../api/request", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/request")>();
   return { ...actual, request: requestMock };
 });
-
-const allAgents = [
-  {
-    agent_id: "agent_owned",
-    name: "自建专家",
-    state: "running",
-    color: "#22c55e",
-    icon_name: "sparkles",
-    icon_url: null,
-    is_owner: true,
-    is_shared: false,
-  },
-  {
-    agent_id: "agent_shared",
-    name: "共享专家",
-    state: "running",
-    color: "#6366f1",
-    icon_name: "bot",
-    icon_url: null,
-    is_owner: false,
-    is_shared: true,
-  },
-  {
-    agent_id: "agent_blocked",
-    name: "无权专家",
-    state: "running",
-    color: "#ef4444",
-    icon_name: "bot",
-    icon_url: null,
-    is_owner: false,
-    is_shared: false,
-  },
-];
 
 vi.mock("../../context/AgentContext", () => ({
   useAgent: () => ({
@@ -131,11 +104,10 @@ describe("DesktopGrid expert access", () => {
     localStorage.clear();
     currentUser.value = { id: 1, username: "root", role: "admin" };
     requestMock.mockReset();
-    requestMock.mockResolvedValue(allAgents);
   });
 
   it("only lists experts the user owns or that are shared", () => {
-    render(<DesktopGrid apps={[]} />);
+    renderGrid(<DesktopGrid apps={[]} />);
 
     fireEvent.click(screen.getByTestId("desktop-space-trigger"));
 
@@ -146,30 +118,23 @@ describe("DesktopGrid expert access", () => {
     expect(screen.queryAllByText("无权专家")).toHaveLength(0);
   });
 
-  it("fetches all experts and reveals unshared ones in admin mode", async () => {
-    render(<DesktopGrid apps={[]} />);
+  it("gives admins the same owned/shared catalogue as everyone else", async () => {
+    renderGrid(<DesktopGrid apps={[]} />);
 
     fireEvent.click(screen.getByTestId("desktop-space-trigger"));
     expect(screen.getAllByTestId("desktop-space-option")).toHaveLength(3);
     expect(screen.queryAllByText("无权专家")).toHaveLength(0);
-    // The desktop also syncs the notification inbox on mount; only the
-    // all-experts fetch must wait for the admin switch.
+    expect(screen.queryByTestId("desktop-admin-mode")).not.toBeInTheDocument();
     expect(requestMock).not.toHaveBeenCalledWith("/agents?scope=all");
-
-    fireEvent.click(screen.getByRole("switch"));
-    expect((await screen.findAllByText("无权专家")).length).toBeGreaterThan(0);
-    expect(requestMock).toHaveBeenCalledWith("/agents?scope=all");
-
-    if (screen.queryAllByTestId("desktop-space-option").length === 0) {
-      fireEvent.click(screen.getByTestId("desktop-space-trigger"));
-    }
-    expect(screen.getAllByTestId("desktop-space-option")).toHaveLength(4);
   });
 
-  it("hides the admin mode switch from non-admins", () => {
+  it("keeps the same narrow catalogue for non-admins", () => {
     currentUser.value = { id: 2, username: "bob", role: "user" };
-    render(<DesktopGrid apps={[]} />);
+    renderGrid(<DesktopGrid apps={[]} />);
 
+    fireEvent.click(screen.getByTestId("desktop-space-trigger"));
+    expect(screen.getAllByTestId("desktop-space-option")).toHaveLength(3);
+    expect(screen.queryAllByText("无权专家")).toHaveLength(0);
     expect(screen.queryByTestId("desktop-admin-mode")).not.toBeInTheDocument();
   });
 
@@ -204,7 +169,7 @@ describe("DesktopGrid expert access", () => {
       ]),
     );
 
-    render(<DesktopGrid apps={[]} />);
+    renderGrid(<DesktopGrid apps={[]} />);
 
     const chats = screen.getAllByTestId("desktop-chat");
     expect(chats).toHaveLength(1);

@@ -1,8 +1,14 @@
+import type { ReactElement } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppSummary } from "../../api/modules/apps";
 import DesktopGrid from "./DesktopGrid";
+
+function renderGrid(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -57,7 +63,7 @@ describe("DesktopGrid expert workspaces", () => {
   });
 
   it("gives an enabled expert an empty desktop that opens chat", () => {
-    render(<DesktopGrid apps={[]} />);
+    renderGrid(<DesktopGrid apps={[]} />);
 
     expect(screen.getByTestId("desktop-empty-space")).toBeInTheDocument();
     expect(screen.getAllByText("空桌面专家").length).toBeGreaterThan(0);
@@ -108,7 +114,7 @@ describe("DesktopGrid expert workspaces", () => {
       permission: "edit_structure",
     };
 
-    render(<DesktopGrid apps={[sharedApp, ownApp]} />);
+    renderGrid(<DesktopGrid apps={[sharedApp, ownApp]} />);
 
     fireEvent.click(screen.getByTestId("desktop-space-trigger"));
     const options = screen.getAllByTestId("desktop-space-option");

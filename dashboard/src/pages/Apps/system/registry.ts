@@ -11,6 +11,7 @@ import type {
   SystemAppDefinition,
   SystemAppKey,
   SystemAppVisibilityAgent,
+  SystemManagerKey,
 } from "./types";
 
 /**
@@ -37,6 +38,7 @@ export const SYSTEM_APPS: readonly SystemAppDefinition[] = [
     icon: Link2,
     permissions: ["channels", "connectors"],
     queryKeys: ["channels.list", "connectors.list"],
+    managers: ["channels", "connectors"],
     loadHtml: () =>
       import("./apps/connections.html?raw").then((mod) => mod.default),
   },
@@ -47,6 +49,7 @@ export const SYSTEM_APPS: readonly SystemAppDefinition[] = [
     icon: Sparkles,
     permissions: ["skills", "tools"],
     queryKeys: ["skills.list", "tools.summary"],
+    managers: ["skills", "tools"],
     actions: ["skills.toggle"],
     loadHtml: () =>
       import("./apps/capabilities.html?raw").then((mod) => mod.default),
@@ -58,6 +61,7 @@ export const SYSTEM_APPS: readonly SystemAppDefinition[] = [
     icon: BriefcaseBusiness,
     permissions: [],
     queryKeys: ["agent.metrics", "agent.inbox", "agent.status"],
+    managers: ["tasks"],
     loadHtml: () =>
       import("./apps/operations.html?raw").then((mod) => mod.default),
   },
@@ -68,6 +72,7 @@ export const SYSTEM_APPS: readonly SystemAppDefinition[] = [
     icon: Timer,
     permissions: ["tasks"],
     queryKeys: ["cron.list"],
+    managers: ["tasks"],
     actions: ["cron.run"],
     loadHtml: () => import("./apps/tasks.html?raw").then((mod) => mod.default),
   },
@@ -94,6 +99,18 @@ export function systemAppAllowsAction(
   actionKey: string,
 ): boolean {
   return SYSTEM_APP_BY_KEY.get(appKey)?.actions?.includes(actionKey) ?? false;
+}
+
+/** Native manager windows are deny-by-default per system app. */
+export function systemAppAllowsManager(
+  appKey: SystemAppKey,
+  managerKey: string,
+): boolean {
+  return (
+    SYSTEM_APP_BY_KEY.get(appKey)?.managers?.includes(
+      managerKey as SystemManagerKey,
+    ) ?? false
+  );
 }
 
 interface VisibilityOptions {

@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import {
   act,
   fireEvent,
@@ -5,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppSummary } from "../../api/modules/apps";
@@ -13,6 +15,10 @@ import DesktopGrid, {
   MINIMIZED_WINDOW_SUSPEND_MS,
   iconSpecForApp,
 } from "./DesktopGrid";
+
+function renderGrid(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -198,7 +204,7 @@ describe("DesktopGrid", () => {
   });
 
   it("renders every app as a desktop icon", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
 
     expect(screen.getByTestId("desktop-root")).toBeInTheDocument();
     expect(screen.getByTestId("desktop-dock")).toBeInTheDocument();
@@ -207,8 +213,53 @@ describe("DesktopGrid", () => {
     expect(screen.getByText("本月业绩看板")).toBeInTheDocument();
   });
 
+  it("reorders desktop icons by drag and drop", () => {
+    renderGrid(<DesktopGrid apps={apps} />);
+    const icons = () =>
+      screen
+        .getAllByTestId("desktop-icon")
+        .map((node) => node.getAttribute("data-app-id"));
+    const [first, second] = icons();
+    const store = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      setData: (type: string, value: string) => store.set(type, value),
+      getData: (type: string) => store.get(type) ?? "",
+    };
+    const nodes = screen.getAllByTestId("desktop-icon");
+
+    fireEvent.dragStart(nodes[1], { dataTransfer });
+    fireEvent.dragOver(nodes[0], { dataTransfer });
+    fireEvent.drop(nodes[0], { dataTransfer });
+
+    expect(icons()).toEqual([second, first]);
+  });
+
+  it("renders a custom folder as one icon and opens its apps", () => {
+    localStorage.setItem(
+      "octop:apps-desktop-org:v1",
+      JSON.stringify({
+        hiddenSystem: {},
+        hiddenApps: [],
+        folders: [{ id: "f1", name: "客户", appIds: ["app_1"] }],
+        order: ["folder:f1", "app:app_2"],
+      }),
+    );
+    renderGrid(<DesktopGrid apps={apps} />);
+
+    expect(screen.getByTestId("desktop-app-folder")).toHaveTextContent("客户");
+    expect(screen.getAllByTestId("desktop-icon")).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("desktop-app-folder"));
+    expect(screen.getByTestId("desktop-app-folder-item")).toHaveAttribute(
+      "data-app-id",
+      "app_1",
+    );
+  });
+
   it("reveals the dock from the bottom hotspot and hides it after leaving", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     const dock = screen.getByTestId("desktop-dock");
     expect(dock).toHaveAttribute("data-revealed", "false");
 
@@ -223,7 +274,7 @@ describe("DesktopGrid", () => {
   });
 
   it("draws generated icons instead of app screenshots", () => {
-    const { container } = render(<DesktopGrid apps={apps} />);
+    const { container } = renderGrid(<DesktopGrid apps={apps} />);
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelectorAll("svg").length).toBeGreaterThan(0);
@@ -263,7 +314,7 @@ describe("DesktopGrid", () => {
       value: requestFullscreen,
     });
 
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     fireEvent.click(screen.getByRole("button", { name: "Full screen" }));
 
     expect(requestFullscreen).toHaveBeenCalled();
@@ -271,6 +322,30 @@ describe("DesktopGrid", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     expect(screen.queryByTestId("desktop-boot")).not.toBeInTheDocument();
+  });
+
+  it("marks fullscreen so the desktop can drop expensive glass blur", () => {
+    Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+      configurable: true,
+      value: vi.fn().mockResolvedValue(undefined),
+    });
+    renderGrid(<DesktopGrid apps={apps} />);
+    const root = screen.getByTestId("desktop-root");
+    expect(root).toHaveAttribute("data-fullscreen", "false");
+
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      value: root,
+    });
+    fireEvent(document, new Event("fullscreenchange"));
+    expect(root).toHaveAttribute("data-fullscreen", "true");
+
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      value: null,
+    });
+    fireEvent(document, new Event("fullscreenchange"));
+    expect(root).toHaveAttribute("data-fullscreen", "false");
   });
 
   it("auto-enters fullscreen and plays the 4.5-second 智管家 OS boot", () => {
@@ -281,7 +356,7 @@ describe("DesktopGrid", () => {
     });
     vi.useFakeTimers();
     try {
-      render(<DesktopGrid apps={apps} autoFullscreen />);
+      renderGrid(<DesktopGrid apps={apps} autoFullscreen />);
 
       expect(screen.getByTestId("desktop-boot")).toBeInTheDocument();
       expect(screen.getByText("智管家")).toBeInTheDocument();
@@ -301,7 +376,7 @@ describe("DesktopGrid", () => {
       configurable: true,
       value: vi.fn().mockResolvedValue(undefined),
     });
-    render(<DesktopGrid apps={apps} autoFullscreen />);
+    renderGrid(<DesktopGrid apps={apps} autoFullscreen />);
 
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
 
@@ -309,7 +384,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens an app in a desktop window on double-click", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     expect(screen.getByTestId("desktop-window")).toHaveAttribute(
@@ -324,7 +399,7 @@ describe("DesktopGrid", () => {
   });
 
   it("raises a background app window when its iframe area is clicked", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
     openAppWindow("app_2");
 
@@ -365,7 +440,7 @@ describe("DesktopGrid", () => {
         name: `预算应用 ${index}`,
       }),
     );
-    render(<DesktopGrid apps={budgetApps} />);
+    renderGrid(<DesktopGrid apps={budgetApps} />);
 
     for (const item of budgetApps) openAppWindow(item.app_id);
 
@@ -411,7 +486,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens an app window with Enter for keyboard users", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
 
     const icon = screen
       .getAllByTestId("desktop-icon")
@@ -425,7 +500,7 @@ describe("DesktopGrid", () => {
   });
 
   it("moves a window through a compositor transform while dragging", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
     const root = screen.getByTestId("desktop-root");
     Object.defineProperty(root, "clientWidth", {
@@ -471,7 +546,7 @@ describe("DesktopGrid", () => {
   });
 
   it("scales window content while resizing and commits once", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
     const root = screen.getByTestId("desktop-root");
     Object.defineProperty(root, "clientWidth", {
@@ -517,7 +592,7 @@ describe("DesktopGrid", () => {
   });
 
   it("reveals the window title bar only from the top edge", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     const zone = screen.getByTestId("desktop-window-top-zone");
@@ -542,7 +617,7 @@ describe("DesktopGrid", () => {
   it("unloads a minimized app window quickly and reloads it", () => {
     vi.useFakeTimers();
     try {
-      render(<DesktopGrid apps={apps} />);
+      renderGrid(<DesktopGrid apps={apps} />);
       openAppWindow("app_1");
       expect(screen.getByTestId("mini-app-frame")).toBeInTheDocument();
 
@@ -568,7 +643,7 @@ describe("DesktopGrid", () => {
   });
 
   it("unloads a minimized browser window quickly", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     switchSpace("agent_1");
     fireEvent.click(screen.getByTestId("desktop-dock-browser"));
     expect(
@@ -594,7 +669,7 @@ describe("DesktopGrid", () => {
   });
 
   it("minimizes, maximizes/restores and closes a window", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     const windowNode = () => screen.getByTestId("desktop-window");
@@ -619,7 +694,7 @@ describe("DesktopGrid", () => {
   });
 
   it("keeps a maximized window full when the dock is revealed", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     const root = screen.getByTestId("desktop-root");
     Object.defineProperty(root, "clientWidth", {
       configurable: true,
@@ -651,7 +726,7 @@ describe("DesktopGrid", () => {
       agent_id: "agent_2",
       agent_name: "运营专家",
     };
-    render(<DesktopGrid apps={[...apps, otherExpert]} />);
+    renderGrid(<DesktopGrid apps={[...apps, otherExpert]} />);
 
     fireEvent.click(screen.getByTestId("desktop-space-trigger"));
     // Two expert desktops plus the global All Apps library.
@@ -674,7 +749,7 @@ describe("DesktopGrid", () => {
       agent_id: "agent_2",
       agent_name: "运营专家",
     };
-    render(<DesktopGrid apps={[...apps, otherExpert]} />);
+    renderGrid(<DesktopGrid apps={[...apps, otherExpert]} />);
     switchSpace("agent_1");
     openAppWindow("app_1");
     expect(screen.getByTestId("desktop-window")).toHaveAttribute(
@@ -696,7 +771,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens the files window for the current expert", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     switchSpace("agent_1");
 
     const surface = screen.getByTestId("desktop-dock-surface");
@@ -727,7 +802,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens a blank browser window and persists navigation", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     switchSpace("agent_1");
 
     fireEvent.click(screen.getByTestId("desktop-dock-browser"));
@@ -750,7 +825,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens an independent HTML window from the files window", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     switchSpace("agent_1");
 
     fireEvent.click(screen.getByTestId("desktop-dock-files"));
@@ -767,7 +842,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens HTML file cards in an independent window", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     switchSpace("agent_1");
 
     fireEvent.click(screen.getByTestId("desktop-pet"));
@@ -781,7 +856,7 @@ describe("DesktopGrid", () => {
   });
 
   it("treats relative chat file paths as workspace files", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     switchSpace("agent_1");
 
     fireEvent.click(screen.getByTestId("desktop-pet"));
@@ -799,7 +874,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens expert chat inside the desktop from the pet", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
 
     fireEvent.click(screen.getByTestId("desktop-pet"));
     fireEvent.click(screen.getByTestId("desktop-pet"));
@@ -823,7 +898,7 @@ describe("DesktopGrid", () => {
       agent_id: "agent_2",
       agent_name: "运营专家",
     };
-    render(<DesktopGrid apps={[...apps, otherExpert]} />);
+    renderGrid(<DesktopGrid apps={[...apps, otherExpert]} />);
 
     const trigger = screen.getByTestId("desktop-space-trigger");
     const initial = trigger.textContent;
@@ -833,7 +908,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens the command palette and launches an app", async () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
 
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     expect(
@@ -882,7 +957,7 @@ describe("DesktopGrid", () => {
     );
     localStorage.setItem("octop:apps-desktop-space:v1", "agent_1");
 
-    render(<DesktopGrid apps={[...apps, otherApp]} />);
+    renderGrid(<DesktopGrid apps={[...apps, otherApp]} />);
 
     expect(screen.queryByTestId("mini-app-frame")).not.toBeInTheDocument();
     expect(screen.getByTestId("desktop-window")).toHaveAttribute(
@@ -903,7 +978,7 @@ describe("DesktopGrid", () => {
   });
 
   it("restores open desktop windows after a reload", async () => {
-    const first = render(<DesktopGrid apps={apps} />);
+    const first = renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     await waitFor(() =>
@@ -913,7 +988,7 @@ describe("DesktopGrid", () => {
     );
     first.unmount();
 
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     expect(screen.getByTestId("desktop-window")).toHaveAttribute(
       "data-app-id",
       "app_1",
@@ -921,7 +996,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens MiniApp external links in an in-desktop web window", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     fireEvent.click(screen.getByTestId("mini-app-open-external"));
@@ -949,7 +1024,7 @@ describe("DesktopGrid", () => {
       agent_id: "agent_2",
       agent_name: "运营专家",
     };
-    render(<DesktopGrid apps={[...apps, otherExpert]} />);
+    renderGrid(<DesktopGrid apps={[...apps, otherExpert]} />);
 
     switchSpace("agent_2");
     fireEvent.click(screen.getByTestId("desktop-pet"));
@@ -961,7 +1036,7 @@ describe("DesktopGrid", () => {
   });
 
   it("seeds app-specific expert actions into the desktop chat window", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
 
     const icon = screen
       .getAllByTestId("desktop-icon")
@@ -979,7 +1054,7 @@ describe("DesktopGrid", () => {
   });
 
   it("passes the selected app into expert chat from the pet", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
 
     const icon = screen
       .getAllByTestId("desktop-icon")
@@ -993,7 +1068,7 @@ describe("DesktopGrid", () => {
   });
 
   it("opens Mission Control from the menu bar and F3", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     fireEvent.click(screen.getByTestId("desktop-mission-button"));
@@ -1020,7 +1095,7 @@ describe("DesktopGrid", () => {
   });
 
   it("shows chat, web and All Apps entries in Dock 2.0", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
     fireEvent.click(screen.getByTestId("desktop-pet"));
     fireEvent.click(screen.getByTestId("mini-app-open-external"));
@@ -1039,14 +1114,14 @@ describe("DesktopGrid", () => {
       app_id: `app_${index}`,
       name: `MiniApp ${index}`,
     }));
-    render(<DesktopGrid apps={many} />);
+    renderGrid(<DesktopGrid apps={many} />);
 
     expect(screen.getAllByTestId("desktop-dock-icon")).toHaveLength(10);
     expect(screen.getAllByTestId("desktop-icon")).toHaveLength(12);
   });
 
   it("closes a running window from the dock context menu", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     const dockIcon = screen
@@ -1060,7 +1135,7 @@ describe("DesktopGrid", () => {
   });
 
   it("summarizes experts and windows in the Agent Activity Center", () => {
-    render(<DesktopGrid apps={apps} />);
+    renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");
 
     expect(screen.getByTestId("desktop-activity-badge")).toHaveTextContent("1");

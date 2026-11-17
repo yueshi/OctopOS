@@ -14,7 +14,7 @@
 2. **推荐新增平台系统应用（System Apps）**：与 MiniApp 共用桌面窗口、沙箱 iframe、postMessage 桥和视觉语言；但不进入 `light_apps`，没有表/行、没有协作者、没有公开链接、Agent 不可编辑。数据由宿主桥按白名单**实时**代理现有 `/api`，权限仍由服务端判定。
 3. **首批 4 个独立应用**：**用量与预算**、**连接（通道 + 连接器）**、**能力（技能 + 工具/插件）**、**经营看板（指标 / 预算 / 待办）**。四者各自拥有独立桌面图标和窗口，不做「一个聚合应用 + 标签页」；正好覆盖用户举例的 Token 消耗、通道、技能、连接器，且以只读/状态为主，**不需要后端改造**。
 4. **二期优先做技能与任务**：**技能开关**（在「能力」应用内）、**任务应用 + 任务立即运行**。记忆统计可与任务同批，也可滑到 P3；通道启停、记忆候选审核留到 P3 再评估。
-5. **重配置留在原生控制台**：凭证、OAuth、扫码登录、模型密钥、安全策略、备份、存储、TLS 等。系统应用只做摘要与深链，不在沙箱里复制第二套高风险表单。
+5. **重配置使用桌面原生管理面板**：系统应用只做摘要；凭证、OAuth、扫码登录、通道编辑、任务编辑等通过 `openManager` 在桌面 React 树内打开 `DesktopManagerDrawer`，复用可嵌入的功能面板，不加载 Console SPA，也不在沙箱 iframe 内复制表单。模型密钥、安全策略、备份、存储、TLS 等全局设置仍留在原生控制台。
 6. 现有桌面空间是「按专家推导」的（`docs/miniapp-overview.md:302`），因此系统应用天然是**专家级视图**；账号级应用（全局用量、偏好、Bridge）建议放到三期的「我的桌面」空间，而不是塞进每个专家桌面。
 
 ---
@@ -47,8 +47,8 @@
 | 级别 | 含义 | 典型形态 |
 |---|---|---|
 | ★★★★★ | 只读聚合/列表，权限清晰，桌面高频 | 用量趋势、技能列表、运行状态 |
-| ★★★★ | 状态卡 + 简单开关 + 深链 | 通道状态、连接器状态、记忆统计 |
-| ★★★ | 只读摘要 + 深链，编辑复杂 | 专家参数、知识库索引状态 |
+| ★★★★ | 状态卡 + 简单开关 + 原生管理面板 | 通道状态、连接器状态、记忆统计 |
+| ★★★ | 只读摘要 + 原生管理面板，编辑复杂 | 专家参数、知识库索引状态 |
 | ★★ | 复杂表单/OAuth/凭证，或价值偏低 | 连接器新增、子代理、MBTI |
 | ★ | 密钥/安全/全局基础设施，不应进沙箱 | 模型供应商、安全策略、备份、TLS |
 
@@ -64,13 +64,13 @@
 | 数字员工经营（指标/预算/待办） | 无完整页面；`AgentCard` 只有 autonomy 开关（`dashboard/src/pages/Experts/components/AgentCard.tsx:259`） | `GET /api/agents/{id}/metrics`（`src/octop/api/routers/autonomy.py:294`）、`/inbox`（`:217`）、`/autonomy-policy` | 专家 owner | 中 | 只读 + 开关 | ★★★★★ |
 | 专家运行状态 | `GET /api/agents/{id}/status`（`src/octop/api/routers/agents.py:580`） | 状态、通道、Cron、记忆维护 | owner | 低 | 只读 | ★★★★ |
 | 专家参数（模型/温度/上下文/限额） | `/agent-config`（`dashboard/src/pages/Agent/Config/index.tsx`） | `GET/PATCH /api/agents/{id}` | owner | 中（含 Prompt） | 表单 | ★★★ 只读摘要 + 深链 |
-| 通道 | `/personalization/channels`（`ChannelsPanel`） | `GET/POST/PATCH/DELETE /api/agents/{id}/channels`（`src/octop/api/routers/channels.py:156`） | owner；需 `channels` 权限 | **高**（配置含凭证） | 表单/扫码/OAuth | ★★★★ 状态卡；编辑留在控制台 |
+| 通道 | `/personalization/channels`（`ChannelsPanel`） | `GET/POST/PATCH/DELETE /api/agents/{id}/channels`（`src/octop/api/routers/channels.py:156`） | owner；需 `channels` 权限 | **高**（配置含凭证） | 表单/扫码/OAuth | ★★★★ 状态卡 + 原生管理面板 |
 | 技能 | `/personalization/skills`（`SkillsTabs`） | `GET /api/agents/{id}/skills`（`src/octop/api/routers/skills.py:486`）、enable/disable、Hub 安装 | owner 写；共享者可读；需 `skills` | 低/中 | 列表 + 开关 + Hub | ★★★★★ |
-| 工具/插件 | `/personalization/tools`、`/personalization/plugins` | `GET/PUT/PATCH /api/agents/{id}/tool-settings`（`src/octop/api/routers/agent_tools.py:158`） | owner；需 `tools` | 中 | 开关/安装 | ★★★ 状态 + 开关（P3） |
-| 连接器 | `/connectors`（`dashboard/src/pages/Agent/Connectors/index.tsx`） | `GET /api/connector-instances`（`src/octop/api/routers/connectors.py:555`）、OAuth 端点 | 用户账号级；`connectors` | **高**（凭证） | 多步表单/OAuth | ★★★ 状态卡 + 深链 |
+| 工具/插件 | `/personalization/tools`、`/personalization/plugins` | `GET/PUT/PATCH /api/agents/{id}/tool-settings`（`src/octop/api/routers/agent_tools.py:158`） | owner；需 `tools` | 中 | 开关/安装 | ★★★ 状态 + 开关 + 原生管理面板 |
+| 连接器 | `/connectors`（`dashboard/src/pages/Agent/Connectors/index.tsx`） | `GET /api/connector-instances`（`src/octop/api/routers/connectors.py:555`）、OAuth 端点 | 用户账号级；`connectors` | **高**（凭证） | 多步表单/OAuth | ★★★ 状态卡 + 原生管理面板 |
 | 知识库 | `/knowledge-bases`；专家通过 `knowledge_base_ids` 绑定（`src/octop/api/routers/agents.py:183`） | `GET /api/knowledge-bases`（`src/octop/api/routers/knowledge_bases.py:525`） | 用户可见范围 | 中 | 上传/索引 | ★★★★ 绑定状态卡 |
 | 记忆 | `/personalization/memory`（`MemoryPanel`） | `GET /api/agents/{id}/memory/stats/*`（`src/octop/api/routers/memory.py:551`）、candidates | owner；`memory` | 中 | 列表 + 审核 | ★★★★ 统计（P2 可选）；审核（P3） |
-| 定时任务 | `/tasks`（`dashboard/src/pages/Control/CronJobs`） | `GET /api/agents/{id}/cron`（`src/octop/api/routers/cron.py:118`）、run-now | owner / 可管理者；`tasks` | 中 | 列表/表单 | ★★★★ 列表 + run-now（P2） |
+| 定时任务 | `/tasks`（`dashboard/src/pages/Control/CronJobs`） | `GET /api/agents/{id}/cron`（`src/octop/api/routers/cron.py:118`）、run-now | owner / 可管理者；`tasks` | 中 | 列表/表单 | ★★★★ 列表 + run-now + 原生管理面板 |
 | 主动关怀 | `MemoryPanel` 内 `ProactiveConfig` | `GET/PUT /api/agents/{id}/proactive-care` | owner | 中 | 表单 | ★★★ 状态 + 开关（P3） |
 | 工作区文件 | 桌面已有 Files 窗口（`DesktopFilesWindow`） | workspace API | owner | 高 | 文件管理 | ✅ 已是原生窗口，不做 MiniApp |
 | 子代理 / MBTI | `/personalization/subagents`、`/personalization/mbti` | subagents / MBTI API | owner | 中 | 表单 | ★★ 不做 |
@@ -113,9 +113,9 @@
 | 能力（技能 + 工具/插件） | 列表/计数/开关，数据量小；打开桌面即可确认「这个专家会什么」 |
 | 经营看板（指标/预算/待办） | `/metrics` + `/inbox` 已实现但无 UI；对数字员工定位价值最高（**已定：进 MVP**） |
 | 记忆 | 统计 + 最近条目（P2 可选，可滑到 P3）；候选审核是轻操作（P3） |
-| 任务 | 列表 + run-now；创建/编辑留在控制台（P2） |
+| 任务 | 列表 + run-now；创建/编辑进桌面原生管理面板（P2） |
 
-### 3.2 中适配（只做摘要/深链）
+### 3.2 中适配（摘要 + 原生管理面板）
 
 - 专家参数：只读展示模型、上下文、限额；编辑 Prompt/高级参数留在 `/agent-config`。
 - 知识库：展示「绑定了几本、文档数、索引是否可用」；上传/重建索引留在 `/knowledge-bases`。
@@ -180,12 +180,12 @@ AppsPage / DesktopGrid（按专家空间）
         └─ DesktopWindow(kind="system", systemKey, agentId, spaceId)
               └─ SystemAppFrame
                     ├─ buildWrapperDoc(buildSrcDoc(html, systemSdk, locale))
-                    ├─ attachBridge(capabilities=[system.read, system.openConsole])
+                    ├─ attachBridge(capabilities=[system.read, system.manage])
                     │     ├─ systemQuery(key, params)
                     │     │     └─ queries.ts（白名单 + 字段投影）
                     │     │           └─ request()  ── JWT ──► 现有 /api
                     │     ├─ systemAction(key, params)   （P2，二次确认）
-                    │     └─ openConsole(path)           （深链到原生控制台）
+                    │     └─ openManager(key)            （打开桌面原生管理面板）
                     └─ 页面内 HTML/CSS/JS（无网络、无 JWT）
 ```
 
@@ -195,17 +195,20 @@ AppsPage / DesktopGrid（按专家空间）
 |---|---|
 | `dashboard/src/pages/Apps/system/registry.ts` | 系统应用定义：`key`、标题、图标、scope、所需权限、窗口最小尺寸、HTML 加载器 |
 | `dashboard/src/pages/Apps/system/queries.ts` | `systemQuery` 白名单与字段投影（只返回安全字段） |
-| `dashboard/src/pages/Apps/system/SystemAppFrame.tsx` | 复用沙箱 wrapper/CSP；固定能力集；处理 `systemQuery` / `openConsole` |
+| `dashboard/src/pages/Apps/system/SystemAppFrame.tsx` | 复用沙箱 wrapper/CSP；固定能力集；处理 `systemQuery` / `systemAction` / `openManager` |
 | `dashboard/src/pages/Apps/system/apps/*.html` | 单文件 HTML（每个应用一份，懒加载） |
-| `dashboard/src/components/MiniAppFrame/bridge.ts` | 给 `attachBridge` 增加可选 `extraMethods`（仅 `SystemAppFrame` 传入 `systemQuery` / `systemAction` / `openConsole`）；**不把**系统方法加入全局 `KNOWN_METHODS` |
-| `dashboard/src/components/MiniAppFrame/capabilities.ts` | 新增 `system.read` / `system.act` / `system.openConsole` 的 `METHOD_CAPABILITY` 映射；**不加入** `ALL_CAPABILITIES` / 普通应用默认能力集 |
+| `dashboard/src/pages/Apps/desktopManager/DesktopManagerDrawer.tsx` | 原生管理抽屉：按 `openManager(key)` 渲染技能/工具/通道/连接器/任务面板，不加载 Console SPA |
+| `dashboard/src/pages/Apps/desktopManager/DesktopConnectorsPanel.tsx` | 桌面版连接器管理：实例、目录、自定义 MCP、配置抽屉 |
+| `dashboard/src/pages/Apps/desktopManager/DesktopTasksPanel.tsx` | 桌面版任务管理：列表、创建/编辑、启停、删除、立即运行 |
+| `dashboard/src/components/MiniAppFrame/bridge.ts` | 给 `attachBridge` 增加可选 `extraMethods`（仅 `SystemAppFrame` 传入 `systemQuery` / `systemAction` / `openManager`）；**不把**系统方法加入全局 `KNOWN_METHODS` |
+| `dashboard/src/components/MiniAppFrame/capabilities.ts` | 新增 `system.read` / `system.act` / `system.manage` 的 `METHOD_CAPABILITY` 映射；**不加入** `ALL_CAPABILITIES` / 普通应用默认能力集 |
 | `dashboard/src/components/MiniAppFrame/sdk.ts` | `buildSrcDoc` 增加可选 SDK/locale 参数，默认行为不变 |
 | `dashboard/src/pages/Apps/desktopWindows.ts` | `DesktopWindowKind` 增加 `"system"`；`WINDOW_REGISTRY` 增加 identity/尺寸/标题 |
 | `dashboard/src/pages/Apps/DesktopGrid.tsx` | 注入系统应用图标、Dock 项、窗口渲染分支；建议抽 `useDesktopSystemApps` 控制 diff |
 | `dashboard/src/pages/Apps/index.module.less` | 系统应用图标/角标样式 |
 | `dashboard/src/locales/{zh,en}.json` | `apps.system.*` 标签 |
 
-> 安全要点：`system.read` / `system.act` / `system.openConsole` **不要**加入前端 `ALL_CAPABILITIES`（`dashboard/src/components/MiniAppFrame/capabilities.ts:23`）或后端 `ALL_CAPABILITIES`（`src/octop/infra/apps/capabilities.py:32`）。前端 `effectiveCapabilities(undefined)` 会回退到 `ALL_CAPABILITIES`；只有把它们排除在外，`capabilities_json` 为空的旧版/普通应用才不会被默认放行。`SystemAppFrame` 必须**显式**传入固定的 `["system.read", "system.openConsole"]`。
+> 安全要点：`system.read` / `system.act` / `system.manage` **不要**加入前端 `ALL_CAPABILITIES`（`dashboard/src/components/MiniAppFrame/capabilities.ts:23`）或后端 `ALL_CAPABILITIES`（`src/octop/infra/apps/capabilities.py:32`）。前端 `effectiveCapabilities(undefined)` 会回退到 `ALL_CAPABILITIES`；只有把它们排除在外，`capabilities_json` 为空的旧版/普通应用才不会被默认放行。`SystemAppFrame` 必须**显式**传入固定的 `["system.read", "system.manage"]`（按应用声明追加 `system.act`）。
 
 ### 5.3 数据契约（P0/P1）
 
@@ -237,7 +240,7 @@ AppsPage / DesktopGrid（按专家空间）
 |---|---|---|
 | 专家 owner | ✅ | 专家可访问 + 对应模块权限 |
 | 被共享专家（非 owner） | ❌（MVP） | 配置是 owner-only；共享者继续用聊天/业务 MiniApp |
-| 管理员 | ✅ | `is_admin` 绕过模块权限；管理员模式可看任意专家桌面 |
+| 管理员 | ✅ | 与其他用户一致：只显示自建/共享专家；不提供跨账号浏览模式 |
 | 无对应模块权限 | ❌ | 例如无 `channels` 权限则不显示「连接」应用 |
 | 团队 host | ❌ | 团队配置有自己的页面；MVP 不显示专家级配置应用 |
 | 专家未启用/不可访问 | ❌ | 桌面空间本身不生成 |
@@ -258,12 +261,24 @@ AppsPage / DesktopGrid（按专家空间）
 - 服务端返回的标签（通道类型、工具名、错误消息）继续走现有 i18n（`Accept-Language`）。
 - 主题：沿用 MiniApp 宿主样式（透明背景、`--fn-*` 变量不可用，需在 HTML 内用 CSS 变量或 `prefers-color-scheme`）。P1 统一定义一套 `--sys-*` 颜色变量注入。
 
-### 5.7 深链与编辑
+### 5.7 原生管理与编辑
 
-- `openConsole(path)` 只允许白名单控制台路径（`/personalization/...`、`/connectors`、`/tasks`、`/token-usage`、`/knowledge-bases`、`/agent-config`）。
-- 打开前由宿主把当前专家设为 active agent（`AgentContext` 的 `setActiveAgent`，`dashboard/src/context/AgentContext.tsx:497`），再 `window.open(path, "_blank")`。
-- 不在桌面内嵌第二个控制台 SPA：`isDashboardConsoleUrl` 已明确这是最重的窗口（`dashboard/src/pages/Apps/desktopWindows.ts:111`、`DesktopConsoleNotice.tsx`）。
-- P2 的轻操作也走现有 API，并在宿主弹二次确认；不新增「配置写入」专用网关。
+- `openManager(key)` 只允许应用注册表声明的原生管理面（`skills` / `tools` / `channels` / `connectors` / `tasks`）。
+- 打开前由宿主把当前专家设为 active agent（`AgentContext` 的 `setActiveAgent`，`dashboard/src/context/AgentContext.tsx:497`），然后打开桌面原生管理抽屉。
+- 管理面在桌面 React 树内实现（`DesktopManagerDrawer`），复用可嵌入的功能面板（`SkillsTabs` / `ToolsTabs` / `ChannelsPanel`）以及桌面定制的连接器、任务面板；**不加载、也不内嵌** Console SPA 页面。
+- P2 的轻操作仍走现有 API，不新增「配置写入」专用网关。
+
+管理入口审计（2026-11-17）：
+
+| 系统应用 | 原控制台链接 | 现原生入口 |
+|---|---|---|
+| 能力 | `/personalization/skills` | `openManager("skills")` → `SkillsTabs` |
+| 能力 | `/personalization/tools` | `openManager("tools")` → `ToolsTabs` |
+| 连接 | `/personalization/channels` | `openManager("channels")` → `ChannelsPanel` |
+| 连接 | `/connectors` | `openManager("connectors")` → `DesktopConnectorsPanel` |
+| 任务 | `/tasks` | `openManager("tasks")` → `DesktopTasksPanel` |
+| 经营看板 | `/tasks` | `openManager("tasks")` → `DesktopTasksPanel` |
+| 用量与预算 | — | 无管理入口 |
 
 ### 5.8 窗口与 Dock
 
@@ -320,7 +335,7 @@ AppsPage / DesktopGrid（按专家空间）
 ```
 
 **规则**：只显示状态、名称、类型；不显示 AppSecret/Token/回调地址。未连接项按错误优先排序。
-**深链**：`/personalization/channels`、`/connectors`。
+**管理**：`openManager("channels")` / `openManager("connectors")`，在桌面原生管理抽屉中复用 `ChannelsPanel` 与连接器卡片/配置抽屉。
 
 ### 6.3 能力（P1）
 
@@ -358,7 +373,7 @@ AppsPage / DesktopGrid（按专家空间）
 ### 6.5 记忆 / 任务 / 知识（P2/P3）
 
 - **记忆**：counts + growth + atom kinds + 最近 journal（P2 可选，可滑到 P3）；candidates 审核列表 + 批准/拒绝留到 P3。
-- **任务**：cron 列表 + 下次运行 + 最近状态 + 「立即运行」（P2）；创建/编辑深链 `/tasks`。
+- **任务**：cron 列表 + 下次运行 + 最近状态 + 「立即运行」（P2）；创建/编辑通过 `openManager("tasks")` 打开桌面任务管理面板。
 - **知识**：绑定的 KB 列表 + doc_count/max_documents + 索引可用性（P3）；上传/重建深链 `/knowledge-bases`。
 - **专家参数**：模型/上下文/限额摘要（P3）；Prompt 编辑深链 `/agent-config`。
 
@@ -373,7 +388,7 @@ AppsPage / DesktopGrid（按专家空间）
 - [ ] `registry.ts` + 可见性纯函数（owner/shared/admin/permission）。
 - [ ] `SystemAppFrame`：复用 `buildWrapperDoc` / `buildSrcDoc`，注入受限 SDK；固定能力集。
 - [ ] 新增 `system` 窗口类型（identity/尺寸/标题/持久化/休眠）。
-- [ ] `systemQuery` 桥 + 白名单 + 字段投影；`openConsole` 深链。
+- [ ] `systemQuery` 桥 + 白名单 + 字段投影；`openManager` 原生管理面。
 - [ ] 一个试点应用：**用量**（只读，`usage.summary`）。
 - [ ] 单测：可见性矩阵、投影不含凭证、普通 MiniApp 调用 `systemQuery` 被拒、窗口恢复。
 
@@ -387,7 +402,7 @@ AppsPage / DesktopGrid（按专家空间）
 - [ ] 「连接」：通道 + 连接器状态，错误优先。
 - [ ] 「能力」：技能 + 工具/插件数量与禁用项。
 - [ ] 「经营看板」：`agent.metrics` + `agent.inbox` + `agent.status` + autonomy 状态。
-- [ ] 刷新/空态/错误态/深链；zh/en 文案。
+- [ ] 刷新/空态/错误态/原生管理入口；zh/en 文案。
 - [ ] Dock/命令面板接入；桌面最多 6 个系统应用。
 - [ ] 前端测试 + 手工权限矩阵。
 
@@ -401,9 +416,9 @@ AppsPage / DesktopGrid（按专家空间）
 - [ ] 「任务」应用：cron 列表 + 下次运行 + 最近状态 + 「立即运行」。
 - [ ] `systemAction` 桥：白名单 + 二次确认 + 错误提示 + 审计。
 - [ ] 「记忆」只读统计（counts / growth / atom kinds / 最近 journal；可滑到 P3）。
-- [ ] 操作后刷新对应应用，并保持与原生控制台一致。
+- [ ] 操作后刷新对应应用，并与原生管理面板数据一致。
 
-**验收**：每个操作都能在原生页面看到相同结果；失败路径有明确提示；无权限用户无法通过桥调用（服务端 403）；新增测试覆盖。
+**验收**：每个操作都能在原生管理面板看到相同结果；失败路径有明确提示；无权限用户无法通过桥调用（服务端 403）；新增测试覆盖。
 
 ### Phase 3 — 平台化（可选，约 6–10 人日）
 
@@ -467,7 +482,7 @@ make build-frontend
 - `bridge.test.ts`：普通 MiniApp 无 `system.read` 时 `systemQuery` 被拒；未知 key 被拒；key 只能读当前 `agentId`。
 - `desktopWindows.test.ts`：`system` kind 的 identity、恢复、标题、最小尺寸。
 - `DesktopGrid.system.test.tsx`：系统应用出现在正确专家空间；Dock 仅显示运行中的系统窗口。
-- `SystemAppFrame.test.tsx`：HTML 懒加载、错误态、`openConsole` 路径白名单。
+- `SystemAppFrame.test.tsx`：HTML 懒加载、错误态、`openManager` 注入；`registry.test.ts` 覆盖 manager 白名单。
 - `operations.test.ts`：经营看板的 metrics/inbox/budget 投影与空态/错误态。
 
 ### 8.2 手工矩阵
@@ -477,7 +492,7 @@ make build-frontend
 | 专家 owner | 看到有权限的系统应用；数据与控制台一致 |
 | 经营看板 | 指标/预算/待办与 `/agents/{id}/metrics`、`/inbox` 一致；预算耗尽或失败任务醒目 |
 | 共享专家（非 owner） | 不显示配置类系统应用 |
-| 管理员 | 可看任意专家桌面；管理员模式生效 |
+| 管理员 | 只能看到自己的和共享的专家桌面与小程序，与普通用户一致 |
 | 无 `channels` 权限 | 不显示「连接」应用 |
 | 无 `token_usage` 权限 | 不显示「用量」应用 |
 | 最小化/切空间 | 停止轮询；超过 30 分钟卸载 iframe（沿用现有休眠） |
@@ -489,11 +504,12 @@ make build-frontend
 ### 8.3 安全清单
 
 - [ ] 系统应用 HTML 随前端发布，用户/Agent 不可写。
-- [ ] `system.read` / `system.act` / `system.openConsole` 不在前端或后端 `ALL_CAPABILITIES`，普通/旧版 MiniApp 永远拿不到。
+- [ ] `system.read` / `system.act` / `system.manage` 不在前端或后端 `ALL_CAPABILITIES`，普通/旧版 MiniApp 永远拿不到。
 - [ ] `SystemAppFrame` 能力固定；不挂 `data.read`、`external.fetch`、`service`、`generate`。
 - [ ] 所有查询走现有 API + 现有权限校验；前端只做可见性过滤。
 - [ ] 字段投影白名单；凭证/Prompt 永不返回。
-- [ ] `openConsole` 路径白名单；只 `window.open`，不嵌入控制台 SPA。
+- [ ] `openManager` 目标白名单；打开桌面原生管理抽屉，不加载 Console SPA、不新开浏览器标签页。
+- [ ] 系统应用 HTML 不含 `<a href>` / `window.open` / 顶层 `location` 跳转；所有管理入口统一走 `octopSystem.openManager`。
 - [ ] 系统应用不在公开链接/看板/聊天/MiniApp 列表中暴露。
 - [ ] 轻操作（P2）二次确认 + 审计；不新增绕过现有权限的写接口。
 
@@ -502,7 +518,7 @@ make build-frontend
 | 指标 | 含义 | 期望 |
 |---|---|---|
 | 系统应用周打开次数 / 打开用户数 | 是否真的被用 | 上升 |
-| 从系统应用跳转控制台的转化 | 摘要是否驱动了配置动作 | 上升 |
+| 从系统应用打开原生管理面板的转化 | 摘要是否驱动了配置动作 | 上升 |
 | 通道/连接器异常被发现的时间 | 桌面状态卡是否提前暴露问题 | 下降 |
 | 预算超限次数 / 超限前的查看率 | 用量可见性是否有效 | 超限下降、查看率上升 |
 | 桌面打开到首屏的时间 | 系统应用是否拖慢桌面 | 不劣化（P95） |
@@ -516,7 +532,7 @@ make build-frontend
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 系统应用 HTML 复制了原生 UI，后续漂移 | 两套界面不一致 | 只读摘要 + 深链；编辑只保留原生 |
+| 系统应用 HTML 与原生管理面板重复 | 两套界面不一致 | 系统应用只做摘要；编辑统一走 `DesktopManagerDrawer` 复用原生面板 |
 | 权限判断漏项 | 越权读取 | 客户端隐藏 + 服务端校验 + 可见性/投影单测 |
 | 凭证误入投影 | 安全事故 | 白名单投影 + 测试断言 + Code Review 清单 |
 | DesktopGrid diff 过大 | 与上游冲突、回归 | 独立 registry/frame/hook；渲染分支集中；不改现有 MiniApp 路径 |
@@ -581,12 +597,16 @@ make build-frontend
 ### 已落地（P0 + P1 + P2 技能/任务）
 
 - **系统应用注册表**：`dashboard/src/pages/Apps/system/registry.ts`（5 个应用、owner/admin/权限可见性、每应用查询与写操作白名单）。
-- **沙箱宿主**：`dashboard/src/pages/Apps/system/SystemAppFrame.tsx` + `systemSdk.ts`；复用 MiniApp wrapper/CSP，按应用授予 `system.read` / `system.act` / `system.openConsole`，注入受限 SDK。
+- **沙箱宿主**：`dashboard/src/pages/Apps/system/SystemAppFrame.tsx` + `systemSdk.ts`；复用 MiniApp wrapper/CSP，按应用授予 `system.read` / `system.act` / `system.manage`，注入受限 SDK。
 - **桥安全**：系统能力不进入前端/后端 `ALL_CAPABILITIES`；普通/旧版 MiniApp 无法调用系统方法（`bridge.ts` 的 `extraMethods`）。写操作经 `Modal.confirm` 二次确认。
 - **窗口类型**：`desktopWindows.ts` 新增 `system` kind（identity、尺寸、持久化、标题）；`DesktopGrid` 接入桌面图标、Dock、命令面板、Mission Control。
 - **五个应用**：`usage.html`、`connections.html`、`capabilities.html`、`operations.html`、`tasks.html`；均通过宿主桥读取现有 API，不落 `light_apps`。
 - **P2 轻操作**：技能启停（`skills.toggle`）、任务立即运行（`cron.run`）已接入现有 POST 端点；通道启停、记忆审核仍未开放。
-- **数据投影**：`queries.ts` 只返回白名单字段；通道/连接器/技能/工具/指标/待办/定时任务均已接入；深链走 `openConsole` + 原生控制台。
+- **可见性收口**：普通用户与管理员一致，只显示自建/共享专家的桌面与其可用 MiniApp；服务端 `AppService.list_for_user` 同步收窄，管理员不再列出全部应用。
+- **桌面组织**：系统应用收进一个文件夹；新增「管理桌面」抽屉（按专家隐藏系统应用、隐藏用户 MiniApp、固定/取消固定 Dock、重置）；组织偏好存 `localStorage`（`octop:apps-desktop-org:v1`）。详见 [桌面小程序组织](./desktop-miniapp-organization.md)。
+- **桌面组织二期**：图标拖拽排序；自定义文件夹（创建、重命名、增删应用、删除，应用只能属于一个文件夹）；「全部应用」增加「全部 / 小程序 / 系统应用」筛选，系统应用按专家卡片深链打开对应桌面窗口。
+- **数据投影**：`queries.ts` 只返回白名单字段；通道/连接器/技能/工具/指标/待办/定时任务均已接入；深链走 `openManager` + 桌面原生管理抽屉，不加载原网页界面、不新开浏览器标签页。
+- **管理入口收口**：五个系统应用的全部管理入口（技能、工具、通道、连接器、任务）统一走 `octopSystem.openManager`，由 `DesktopManagerDrawer` 在桌面内渲染原生管理面板；HTML 内不存在 `<a href>`、`window.open` 或顶层 `location` 跳转，`apps.test.ts` 对此做静态回归检查。
 - **测试**：系统应用/桌面/桥相关 **98 项**通过（`SystemAppFrame`、`registry`、`queries`、`actions`、`desktopWindows`、`DesktopGrid.system`、`MiniAppFrame`）；五个 HTML 内联脚本 `node --check` 通过。
 - **生产构建**：`NODE_OPTIONS=--max-old-space-size=3072 npm run build` **通过**（本机约 27 分钟）；产物包含 `usage` / `connections` / `capabilities` / `operations` / `tasks` 五个异步 chunk 与 `SystemAppFrame`。
 

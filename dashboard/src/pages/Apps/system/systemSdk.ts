@@ -1,9 +1,9 @@
 /**
  * Restricted SDK injected into platform system apps.
  *
- * It deliberately exposes only `query` and `openConsole`: system apps have no
- * rows, no external fetch and no chat/game actions. Every call still goes
- * through the host bridge, so the iframe never sees a JWT.
+ * It deliberately exposes only `query`, `action` and `openManager`: system
+ * apps have no rows, no external fetch and no chat/game actions. Every call
+ * still goes through the host bridge, so the iframe never sees a JWT.
  */
 export const SYSTEM_APP_SDK = `(function () {
   var pending = new Map();
@@ -59,8 +59,8 @@ export const SYSTEM_APP_SDK = `(function () {
     action: function (key, params) {
       return call("systemAction", { name: key || "", args: params || {} });
     },
-    openConsole: function (path) {
-      return call("openConsole", { url: path || "" });
+    openManager: function (key) {
+      return call("openManager", { name: key || "" });
     }
   };
 })();`;

@@ -316,7 +316,7 @@ function isHostCliConnector(kind: string): boolean {
   ].includes(kind);
 }
 
-function ConnectorConfigDrawer({
+export function ConnectorConfigDrawer({
   open,
   entry,
   instance,

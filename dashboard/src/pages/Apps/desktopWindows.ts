@@ -97,12 +97,17 @@ const CONSOLE_ROUTE_PREFIXES = [
   "/setup",
   "/skills",
   "/knowledge",
+  "/knowledge-bases",
   "/cron",
+  "/tasks",
   "/connectors",
   "/models",
   "/plugins",
   "/users",
   "/teams",
+  "/personalization",
+  "/token-usage",
+  "/agent-config",
 ] as const;
 
 /**

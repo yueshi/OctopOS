@@ -517,7 +517,7 @@
           manage.className = "link";
           manage.textContent = text.manage;
           manage.addEventListener("click", function () {
-            if (window.octopSystem) window.octopSystem.openConsole("/tasks");
+            if (window.octopSystem) window.octopSystem.openManager("tasks");
           });
           head.appendChild(manage);
           card.appendChild(head);

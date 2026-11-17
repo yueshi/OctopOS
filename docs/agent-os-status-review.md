@@ -33,7 +33,7 @@ Related: `docs/agent-os-roadmap.md`（实施路线）、`docs/agent-os-overall-p
 | 隐藏窗口资源治理 | 最小化/跨空间暂停 5 秒 `data_version` 轮询；隐藏 30 分钟卸载 MiniApp/外链 iframe；专家会话窗口不卸载 |
 | MiniApp | R1 + R2.0–R2.3：数据/视图/发布/能力清单/事件收件箱/应用级调度 |
 | Agent/团队 | Agent 运行时、团队目标/任务/派发/审批/预算（token）、bounded-agentic 编排 |
-| 桌面 Shell | 窗口注册表、拖拽/缩放/层级、Dock、Mission Control、命令面板、通知中心、管理员模式 |
+| 桌面 Shell | 窗口注册表、拖拽/缩放/层级、Dock、Mission Control、命令面板、通知中心 |
 | 运维 | setup、TLS、backup、systemd、i18n、多 IM/连接器 |
 
 ### 1.2 内核五原语

@@ -11,18 +11,20 @@ import {
   getDesktopNotifications,
 } from "./desktopNotifications";
 
-const { mockList, mockCreate, mockUseChat, currentUser } = vi.hoisted(() => ({
-  mockList: vi.fn(),
-  mockCreate: vi.fn(),
-  mockUseChat: vi.fn(),
-  currentUser: {
-    value: { id: 1, username: "alice", role: "admin" } as {
-      id: number;
-      username: string;
-      role: string;
+const { mockList, mockCreate, mockUseChat, mockUsePluginToolUis, currentUser } =
+  vi.hoisted(() => ({
+    mockList: vi.fn(),
+    mockCreate: vi.fn(),
+    mockUseChat: vi.fn(),
+    mockUsePluginToolUis: vi.fn(),
+    currentUser: {
+      value: { id: 1, username: "alice", role: "admin" } as {
+        id: number;
+        username: string;
+        role: string;
+      },
     },
-  },
-}));
+  }));
 
 vi.mock("../../hooks/useCurrentUser", () => ({
   useCurrentUser: () => currentUser.value,
@@ -38,6 +40,13 @@ vi.mock("../../api/modules/octopThreads", () => ({
 vi.mock("../Chat/hooks/useChat", () => ({
   useChat: mockUseChat,
 }));
+
+vi.mock("../../plugins/toolRenderers", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../plugins/toolRenderers")
+  >();
+  return { ...actual, usePluginToolUis: mockUsePluginToolUis };
+});
 
 vi.mock("../Chat/components/MessageList", async () => {
   const { useChatFilePreview } = await import("../Chat/ChatFilePreviewContext");
@@ -259,6 +268,9 @@ describe("DesktopChatWindow", () => {
     expect(screen.getByTestId("message-list")).toHaveAttribute(
       "data-compact-process",
       "false",
+    );
+    expect(mockUsePluginToolUis).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "agent_1" }),
     );
   });
 

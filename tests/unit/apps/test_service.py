@@ -687,8 +687,10 @@ async def test_list_for_user_and_agent(world: World) -> None:
     shared = world.service.list_for_user(world.bob_id, is_admin=False)
     assert [(row.app_id, permission) for row, permission in shared] == [(first, "view")]
 
-    everything = world.service.list_for_user(world.bob_id, is_admin=True)
-    assert {row.app_id for row, _ in everything} == {first, second}
+    # Admin role does not widen the catalogue: it still lists only owned +
+    # explicitly shared apps, matching what the desktop shows.
+    as_admin = world.service.list_for_user(world.bob_id, is_admin=True)
+    assert [(row.app_id, permission) for row, permission in as_admin] == [(first, "view")]
 
     assert {row.app_id for row in world.service.list_for_agent(world.agent_id, world.alice_id)} == {
         first,

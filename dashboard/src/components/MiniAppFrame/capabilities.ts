@@ -31,13 +31,10 @@ export const ALL_CAPABILITIES: readonly string[] = Object.values(CAP);
 export const SYSTEM_CAP = {
   READ: "system.read",
   ACT: "system.act",
-  OPEN_CONSOLE: "system.openConsole",
+  MANAGE: "system.manage",
 } as const;
 
-export const SYSTEM_APP_CAPABILITIES: readonly string[] = [
-  SYSTEM_CAP.READ,
-  SYSTEM_CAP.OPEN_CONSOLE,
-];
+export const SYSTEM_APP_CAPABILITIES: readonly string[] = [SYSTEM_CAP.READ];
 
 const METHOD_CAPABILITY: Record<string, string> = {
   schema: CAP.DATA_READ,
@@ -58,7 +55,7 @@ const METHOD_CAPABILITY: Record<string, string> = {
   ackEvents: CAP.EVENTS_READ,
   systemQuery: SYSTEM_CAP.READ,
   systemAction: SYSTEM_CAP.ACT,
-  openConsole: SYSTEM_CAP.OPEN_CONSOLE,
+  openManager: SYSTEM_CAP.MANAGE,
 };
 
 export function effectiveCapabilities(

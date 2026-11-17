@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -82,6 +83,10 @@ import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { usePreviewImage } from "../../hooks/usePreviewImage";
 import { useAgent } from "../../context/AgentContext";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { visibleSystemApps } from "./system/registry";
+import type { SystemAppKey } from "./system/types";
+import type { SystemAppGalleryItem } from "./AllAppsGallery";
 import styles from "./index.module.less";
 
 const { Text } = Typography;
@@ -183,6 +188,7 @@ export default function AppsPage() {
   const timeZone = useServerTimezone();
   const isMobile = useIsMobile();
   const { agents } = useAgent();
+  const currentUser = useCurrentUser();
 
   const [apps, setApps] = useState<AppSummary[]>([]);
   const [appsLoading, setAppsLoading] = useState(true);
@@ -225,6 +231,35 @@ export default function AppsPage() {
   const pendingRef = useRef<BoardItem[] | null>(null);
   const savingRef = useRef(false);
   const bootedRef = useRef(false);
+
+  // System apps are per-expert; only owners see them, so the gallery lists the
+  // app under each expert desktop where it can actually open. Disabled experts
+  // still qualify when they already own a MiniApp (their desktop exists).
+  const systemGalleryItems = useMemo<SystemAppGalleryItem[]>(() => {
+    const appAgentIds = new Set(apps.map((app) => app.agent_id));
+    return agents.flatMap((agent) => {
+      if (agent.state !== "running" && !appAgentIds.has(agent.agent_id)) {
+        return [];
+      }
+      return visibleSystemApps({ agent, user: currentUser }).map(
+        (definition) => ({
+          agentId: agent.agent_id,
+          agentName: agent.name,
+          definition,
+        }),
+      );
+    });
+  }, [agents, apps, currentUser]);
+  const openSystemAppFromGallery = useCallback(
+    (agentId: string, key: SystemAppKey) => {
+      navigate(
+        `/apps/desktop?agent=${encodeURIComponent(
+          agentId,
+        )}&system=${encodeURIComponent(key)}`,
+      );
+    },
+    [navigate],
+  );
 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -928,7 +963,7 @@ export default function AppsPage() {
           <Spin />
         </div>
       ) : allAppsVisible ? (
-        apps.length === 0 ? (
+        apps.length === 0 && systemGalleryItems.length === 0 ? (
           <div className={styles.boardState}>
             <Empty
               image={<AppWindow size={48} strokeWidth={1.2} opacity={0.45} />}
@@ -940,7 +975,13 @@ export default function AppsPage() {
             </Empty>
           </div>
         ) : (
-          <AllAppsGallery apps={apps} timeZone={timeZone} onOpen={openApp} />
+          <AllAppsGallery
+            apps={apps}
+            systemApps={systemGalleryItems}
+            timeZone={timeZone}
+            onOpen={openApp}
+            onOpenSystemApp={openSystemAppFromGallery}
+          />
         )
       ) : desktopVisible ? (
         <DesktopGrid apps={apps} autoFullscreen />

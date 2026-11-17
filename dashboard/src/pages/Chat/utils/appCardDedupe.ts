@@ -67,42 +67,67 @@ function withUpdatedCard(kept: ChatMessage, latest: ChatMessage): ChatMessage {
  * preview availability) without adding a second card. A later turn may show
  * one fresh card.
  */
-export function dedupeAppCardMessages(
-  messages: readonly ChatMessage[],
-): ChatMessage[] {
+function dedupeTurn(turn: readonly ChatMessage[]): ChatMessage[] {
+  // A write-html card is normally just a shell edit; app_open is the explicit
+  // "show this app" action. But a turn that only creates/writes an app (no
+  // app_open afterwards) still needs one visible card, or the user sees "the
+  // tool ran" with no way to open the MiniApp from the conversation.
+  const infos = new Map<ChatMessage, AppCardInfo>();
+  let hasExplicitCard = false;
+  for (const message of turn) {
+    const info = appCardInfo(message);
+    if (!info) continue;
+    infos.set(message, info);
+    if (info.toolName !== APP_WRITE_TOOL) hasExplicitCard = true;
+  }
+
   const out: ChatMessage[] = [];
-  let turnHasCard = false;
   let keptIndex = -1;
   let keptAppId: string | null = null;
-
-  for (const message of messages) {
-    if (message.role === "user") {
-      turnHasCard = false;
-      keptIndex = -1;
-      keptAppId = null;
-      out.push(message);
-      continue;
-    }
-    const info = appCardInfo(message);
+  for (const message of turn) {
+    const info = infos.get(message);
     if (!info) {
       out.push(message);
       continue;
     }
-    if (info.toolName === APP_WRITE_TOOL) {
+    if (info.toolName === APP_WRITE_TOOL && hasExplicitCard) {
       out.push(withSilentCard(message));
       continue;
     }
-    if (!turnHasCard) {
-      turnHasCard = true;
+    if (keptIndex < 0) {
       keptIndex = out.length;
       keptAppId = info.appId;
       out.push(message);
       continue;
     }
-    if (keptIndex >= 0 && keptAppId === info.appId) {
+    if (keptAppId === info.appId) {
       out[keptIndex] = withUpdatedCard(out[keptIndex], message);
     }
     out.push(withSilentCard(message));
   }
+  return out;
+}
+
+export function dedupeAppCardMessages(
+  messages: readonly ChatMessage[],
+): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let turn: ChatMessage[] = [];
+  const flush = () => {
+    if (turn.length > 0) {
+      out.push(...dedupeTurn(turn));
+      turn = [];
+    }
+  };
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      flush();
+      out.push(message);
+      continue;
+    }
+    turn.push(message);
+  }
+  flush();
   return out;
 }

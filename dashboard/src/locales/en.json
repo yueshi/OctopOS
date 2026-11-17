@@ -1896,8 +1896,20 @@
       "noHtml": "This system app has no page.",
       "errorTitle": "Could not open app",
       "windowTitle": "System app",
-      "openConsoleTitle": "Open the full settings page?",
-      "openConsoleOk": "Open settings",
+      "manager": {
+        "skills": "Skills",
+        "tools": "Tools",
+        "channels": "Channels",
+        "connectors": "Connectors",
+        "tasks": "Tasks",
+        "connectorsSummary": "{{total}} connectors · {{configured}} with credentials",
+        "connectorsInstances": "Connected",
+        "connectorsAdd": "Add",
+        "connectorsCustom": "Custom MCP",
+        "connectorsEmpty": "No connectors yet.",
+        "connectorsCatalogEmpty": "No connector catalogue is available.",
+        "tasksSummary": "{{count}} scheduled tasks"
+      },
       "tasks": {
         "title": "Tasks",
         "description": "Scheduled jobs and run-now"
@@ -1995,8 +2007,6 @@
         "openBrowser": "Open in system browser",
         "loadAnyway": "Load here anyway"
       },
-      "adminMode": "Admin mode",
-      "adminModeHint": "Operate experts that are not shared (admin only)",
       "accessRequestTitle": "Access request",
       "accessResolvedTitle": "Access request result",
       "accessApproved": "Approved: {name}",
@@ -2137,6 +2147,24 @@
       "dock": {
         "open": "Open",
         "restore": "Show window"
+      },
+      "systemApps": "System apps",
+      "openFolder": "Open folder {{name}}",
+      "manage": {
+        "title": "Manage desktop",
+        "hint": "Choose what appears on {{name}}'s desktop and in the Dock.",
+        "actionHint": "Choose desktop icons and Dock pins",
+        "showOnDesktop": "Show on desktop",
+        "pinToDock": "Pin to Dock",
+        "folders": "Folders",
+        "noFolders": "Group apps into a folder to keep the desktop tidy.",
+        "folderCount": "{{count}} apps",
+        "editFolder": "Edit folder",
+        "deleteFolder": "Delete folder",
+        "newFolder": "New folder",
+        "folderNamePlaceholder": "Folder name",
+        "folderAppsPlaceholder": "Choose MiniApps",
+        "reset": "Reset desktop organization"
       }
     },
     "gallery": {
@@ -2202,7 +2230,14 @@
       "title": "Add existing MiniApps",
       "galleryTitle": "All MiniApps",
       "galleryHint": "Open any MiniApp to view or edit it.",
-      "count": "{{count}} MiniApps"
+      "count": "{{count}} MiniApps",
+      "filterAll": "All",
+      "filterApps": "MiniApps",
+      "filterSystem": "System apps",
+      "systemCount": "{{count}} system apps",
+      "countAll": "{{apps}} MiniApps · {{systems}} system apps",
+      "systemTag": "System",
+      "miniAppsSection": "MiniApps"
     },
     "empty": "No MiniApps yet. Ask an expert in chat to build one.",
     "emptyHint": "Try: \"Create a reading tracker with title, author and status\"",

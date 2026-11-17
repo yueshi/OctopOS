@@ -64,11 +64,7 @@ describe("bridge request checks", () => {
       false,
     );
     expect(
-      checkMethodAllowed(
-        "openConsole",
-        [SYSTEM_CAP.OPEN_CONSOLE],
-        ["openConsole"],
-      ),
+      checkMethodAllowed("openManager", [SYSTEM_CAP.MANAGE], ["openManager"]),
     ).toBe(true);
   });
 });

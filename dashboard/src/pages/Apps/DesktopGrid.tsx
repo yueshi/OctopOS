@@ -8,9 +8,11 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Switch, Tooltip, Typography } from "antd";
+import { Tooltip, Typography } from "antd";
+import { useSearchParams } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   AppWindow,
@@ -54,6 +56,7 @@ import {
   Receipt,
   Rocket,
   Search,
+  Settings2,
   ShoppingCart,
   Sparkles,
   StickyNote,
@@ -98,7 +101,6 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { appsApi, type AppSummary } from "../../api/modules/apps";
-import { request } from "../../api/request";
 import { isHostAbsolutePath } from "../../utils/workspaceIoPath";
 import { toWorkspaceRelativePath } from "../../utils/workspacePath";
 import {
@@ -161,13 +163,40 @@ import {
   windowSpaceId,
   type DesktopWindowState,
 } from "./desktopWindows";
-import { SYSTEM_APP_BY_KEY, visibleSystemApps } from "./system/registry";
-import type { SystemAppDefinition, SystemAppKey } from "./system/types";
+import DesktopAppFolder, {
+  type DesktopEntryDragProps,
+} from "./DesktopAppFolder";
+import DesktopManageDrawer from "./DesktopManageDrawer";
+import SystemAppsFolder from "./SystemAppsFolder";
+import {
+  appEntryId,
+  dockAppsFor,
+  folderEntryId,
+  layoutDesktopEntries,
+  loadDesktopOrg,
+  reorderDesktopEntries,
+  saveDesktopOrg,
+  visibleSystemAppsFor,
+  type DesktopOrgPrefs,
+} from "./desktopOrg";
+import {
+  SYSTEM_APP_BY_KEY,
+  isSystemAppKey,
+  visibleSystemApps,
+} from "./system/registry";
+import type {
+  SystemAppDefinition,
+  SystemAppKey,
+  SystemManagerKey,
+} from "./system/types";
 import styles from "./index.module.less";
 
 const DesktopFilesWindow = lazy(() => import("./DesktopFilesWindow"));
 const DesktopHtmlWindow = lazy(() => import("./DesktopHtmlWindow"));
 const DesktopBrowserWindow = lazy(() => import("./DesktopBrowserWindow"));
+const DesktopManagerDrawer = lazy(
+  () => import("./desktopManager/DesktopManagerDrawer"),
+);
 const SystemAppFrame = lazy(() => import("./system/SystemAppFrame"));
 
 const { Text } = Typography;
@@ -426,7 +455,6 @@ const SHARED_SPACE = "__shared__";
 const ALL_APPS_SPACE = "__all_apps__";
 const DOCK_APP_LIMIT = 10;
 const ACTIVE_SPACE_KEY = "octop:apps-desktop-space:v1";
-const ADMIN_MODE_KEY = "octop:apps-desktop-admin-mode:v1";
 const EMPTY_APPS: AppSummary[] = [];
 const EMPTY_SYSTEM_APPS: SystemAppDefinition[] = [];
 
@@ -528,11 +556,13 @@ function DesktopIcon({
   selected,
   onSelect,
   onOpen,
+  dragProps,
 }: {
   app: AppSummary;
   selected: boolean;
   onSelect: () => void;
   onOpen: () => void;
+  dragProps?: DesktopEntryDragProps;
 }) {
   const { t } = useTranslation();
   const label = t("apps.desktop.open", "Open");
@@ -547,6 +577,8 @@ function DesktopIcon({
         className={[
           styles.desktopIcon,
           selected ? styles.desktopIconSelected : "",
+          dragProps?.dragging ? styles.desktopIconDragging : "",
+          dragProps?.dropTarget ? styles.desktopIconDropTarget : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -566,69 +598,16 @@ function DesktopIcon({
             onOpen();
           }
         }}
+        draggable={dragProps?.draggable}
+        onDragStart={dragProps?.onDragStart}
+        onDragEnd={dragProps?.onDragEnd}
+        onDragOver={dragProps?.onDragOver}
+        onDragLeave={dragProps?.onDragLeave}
+        onDrop={dragProps?.onDrop}
       >
         <AppIcon app={app} size={72} badge />
         <Text ellipsis className={styles.desktopIconName}>
           {app.name}
-        </Text>
-      </button>
-    </Tooltip>
-  );
-}
-
-function SystemDesktopIcon({
-  definition,
-  selected,
-  onSelect,
-  onOpen,
-}: {
-  definition: SystemAppDefinition;
-  selected: boolean;
-  onSelect: () => void;
-  onOpen: () => void;
-}) {
-  const { t } = useTranslation();
-  const Icon = definition.icon;
-  const label = t(definition.titleKey, definition.key);
-
-  return (
-    <Tooltip title={t(definition.descriptionKey, label)} placement="right">
-      <button
-        type="button"
-        className={[
-          styles.desktopIcon,
-          selected ? styles.desktopIconSelected : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        data-testid="desktop-system-icon"
-        data-system-key={definition.key}
-        aria-label={t("apps.desktop.open", "Open") + " " + label}
-        aria-pressed={selected}
-        onClick={onSelect}
-        onDoubleClick={onOpen}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onOpen();
-          }
-        }}
-      >
-        <span
-          className={[styles.desktopIconArt, styles.desktopIconArtSystem].join(
-            " ",
-          )}
-          style={{ width: 72, height: 72, borderRadius: 18 }}
-        >
-          <Icon
-            size={31}
-            strokeWidth={1.9}
-            className={styles.desktopIconGlyph}
-          />
-          <span className={styles.desktopIconSystemTag}>SYS</span>
-        </span>
-        <Text ellipsis className={styles.desktopIconName}>
-          {label}
         </Text>
       </button>
     </Tooltip>
@@ -650,59 +629,7 @@ export default function DesktopGrid({
   const { t } = useTranslation();
   const { agents, setActiveAgent } = useAgent();
   const currentUser = useCurrentUser();
-  const isAdmin = currentUser?.role === "admin";
-  const [adminMode, setAdminMode] = useState(false);
-  const [allAgents, setAllAgents] = useState<OctopAgent[] | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!isAdmin) {
-      setAdminMode(false);
-      return;
-    }
-    try {
-      setAdminMode(localStorage.getItem(ADMIN_MODE_KEY) === "1");
-    } catch {
-      setAdminMode(false);
-    }
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
-    try {
-      localStorage.setItem(ADMIN_MODE_KEY, adminMode ? "1" : "0");
-    } catch {
-      // Private windows can disable storage; the toggle still works for now.
-    }
-  }, [adminMode, isAdmin]);
-
-  // `/agents` defaults to scope=mine (owned + shared). Admin mode needs the
-  // unshared experts too, so fetch them on demand instead of polluting the
-  // global agent context used by the chat sidebar.
-  useEffect(() => {
-    if (!isAdmin || !adminMode) {
-      setAllAgents(null);
-      return;
-    }
-    let alive = true;
-    request<OctopAgent[]>("/agents?scope=all")
-      .then((rows) => {
-        if (alive) setAllAgents(rows);
-      })
-      .catch(() => {
-        // Keep the owned/shared list when the elevated fetch fails.
-      });
-    return () => {
-      alive = false;
-    };
-  }, [adminMode, isAdmin]);
-
-  const effectiveAgents = useMemo(() => {
-    if (!allAgents) return agents;
-    const byId = new Map(agents.map((agent) => [agent.agent_id, agent]));
-    for (const agent of allAgents) byId.set(agent.agent_id, agent);
-    return [...byId.values()];
-  }, [agents, allAgents]);
   const dragRef = useRef<WindowDrag | null>(null);
   const zRef = useRef(20);
   const seedRef = useRef(0);
@@ -711,6 +638,16 @@ export default function DesktopGrid({
   const [booting, setBooting] = useState(Boolean(autoFullscreen));
   const [windows, setWindows] =
     useState<DesktopWindowState[]>(loadDesktopWindows);
+  const [orgPrefs, setOrgPrefs] = useState<DesktopOrgPrefs>(loadDesktopOrg);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [managerTarget, setManagerTarget] = useState<{
+    agentId: string;
+    key: SystemManagerKey;
+  } | null>(null);
+  const [dragEntryId, setDragEntryId] = useState("");
+  const [dropEntryId, setDropEntryId] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const systemDeepLinkRef = useRef("");
   const [spaceId, setSpaceId] = useState(
     () => localStorage.getItem(ACTIVE_SPACE_KEY) ?? "",
   );
@@ -786,6 +723,10 @@ export default function DesktopGrid({
   }, [windows]);
 
   useEffect(() => {
+    saveDesktopOrg(orgPrefs);
+  }, [orgPrefs]);
+
+  useEffect(() => {
     const onUnload = () => saveDesktopWindows(windowsRef.current);
     window.addEventListener("beforeunload", onUnload);
     return () => {
@@ -840,32 +781,24 @@ export default function DesktopGrid({
     });
   }, []);
 
-  // Admin mode is an explicit, opt-in elevation: when off, even admins only
-  // see experts they own or that another user shared.
-  const allowAllExperts = isAdmin && adminMode;
+  // Everyone, including admins, sees only their own and shared experts on the
+  // desktop. Admin-only tooling lives in the console, not in this shell.
   const accessibleAgents = useMemo(
-    () =>
-      effectiveAgents.filter(
-        (agent) => allowAllExperts || desktopExpertAccessible(agent),
-      ),
-    [effectiveAgents, allowAllExperts],
+    () => agents.filter((agent) => desktopExpertAccessible(agent)),
+    [agents],
   );
   const accessibleAgentIds = useMemo(
     () => new Set(accessibleAgents.map((agent) => agent.agent_id)),
     [accessibleAgents],
   );
   const knownAgentIds = useMemo(
-    () => new Set(effectiveAgents.map((agent) => agent.agent_id)),
-    [effectiveAgents],
+    () => new Set(agents.map((agent) => agent.agent_id)),
+    [agents],
   );
   const canBrowseAgentFiles = useCallback(
-    (id: string): boolean => {
-      if (isAdmin) return true;
-      return Boolean(
-        effectiveAgents.find((agent) => agent.agent_id === id)?.is_owner,
-      );
-    },
-    [effectiveAgents, isAdmin],
+    (id: string): boolean =>
+      Boolean(agents.find((agent) => agent.agent_id === id)?.is_owner),
+    [agents],
   );
   // Apps shared from an expert the viewer cannot open must not borrow that
   // expert's name: they gather in one "Shared with me" desktop instead. Own
@@ -874,13 +807,13 @@ export default function DesktopGrid({
     (app: AppSummary) => {
       const agentId = spaceIdForApp(app);
       if (agentId === UNASSIGNED_SPACE) return agentId;
-      if (!currentUser || isAdmin || accessibleAgentIds.has(agentId)) {
+      if (!currentUser || accessibleAgentIds.has(agentId)) {
         return agentId;
       }
       if (app.owner_user_id === currentUser.id) return agentId;
       return SHARED_SPACE;
     },
-    [accessibleAgentIds, currentUser, isAdmin],
+    [accessibleAgentIds, currentUser],
   );
   const visibleApps = useMemo(
     () =>
@@ -943,11 +876,7 @@ export default function DesktopGrid({
         unreadCount: agent?.unread_count ?? 0,
         apps: group,
         systemApps: agent
-          ? visibleSystemApps({
-              agent,
-              user: currentUser,
-              isAdmin,
-            })
+          ? visibleSystemApps({ agent, user: currentUser })
           : EMPTY_SYSTEM_APPS,
       };
     });
@@ -975,10 +904,69 @@ export default function DesktopGrid({
       systemApps: EMPTY_SYSTEM_APPS,
     });
     return result;
-  }, [accessibleAgents, currentUser, isAdmin, ordered, spaceIdForViewer, t]);
+  }, [accessibleAgents, currentUser, ordered, spaceIdForViewer, t]);
   const space = spaces.find((item) => item.id === spaceId) ?? spaces[0] ?? null;
   const currentApps = space?.apps ?? EMPTY_APPS;
   const currentSystemApps = space?.systemApps ?? EMPTY_SYSTEM_APPS;
+  const desktopEntries = useMemo(
+    () => layoutDesktopEntries(orgPrefs, currentApps),
+    [currentApps, orgPrefs],
+  );
+  const desktopEntryIds = useMemo(
+    () =>
+      desktopEntries.map((entry) =>
+        entry.kind === "app"
+          ? appEntryId(entry.app.app_id)
+          : folderEntryId(entry.folder.id),
+      ),
+    [desktopEntries],
+  );
+  const shownSystemApps = useMemo(
+    () => visibleSystemAppsFor(orgPrefs, space?.agentId, currentSystemApps),
+    [currentSystemApps, orgPrefs, space?.agentId],
+  );
+  const dragPropsFor = (entryId: string): DesktopEntryDragProps => ({
+    draggable: true,
+    dragging: dragEntryId === entryId,
+    dropTarget: dropEntryId === entryId,
+    onDragStart: (event: DragEvent<HTMLButtonElement>) => {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", entryId);
+      setDragEntryId(entryId);
+    },
+    onDragEnd: () => {
+      setDragEntryId("");
+      setDropEntryId("");
+    },
+    onDragOver: (event: DragEvent<HTMLButtonElement>) => {
+      if (!dragEntryId || dragEntryId === entryId) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setDropEntryId(entryId);
+    },
+    onDragLeave: () => {
+      setDropEntryId((current) => (current === entryId ? "" : current));
+    },
+    onDrop: (event: DragEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      const source = event.dataTransfer.getData("text/plain") || dragEntryId;
+      if (source && source !== entryId) {
+        setOrgPrefs(
+          reorderDesktopEntries(orgPrefs, source, entryId, desktopEntryIds),
+        );
+      }
+      setDragEntryId("");
+      setDropEntryId("");
+    },
+  });
+  const defaultPinnedIds = useMemo(
+    () => currentApps.slice(0, DOCK_APP_LIMIT).map((app) => app.app_id),
+    [currentApps],
+  );
+  const dockApps = useMemo(
+    () => dockAppsFor(orgPrefs, currentApps, DOCK_APP_LIMIT),
+    [currentApps, orgPrefs],
+  );
   const selectedApp =
     currentApps.find((app) => app.app_id === selectedAppId) ?? null;
   const appSpace = useMemo(
@@ -1676,18 +1664,16 @@ export default function DesktopGrid({
   useEffect(() => {
     setWindows((list) => {
       const next = list.filter((win) => {
-        if (win.kind === "chat") {
-          if (!win.agentId) return false;
-          // Unknown agents are kept: the agent list may still be loading and
-          // the API ACL remains the final authority.
+        if (win.kind === "chat" && !win.agentId) return false;
+        if (win.agentId) {
+          // Unknown agents are kept while the agent list is loading; once
+          // known, only own/shared experts may keep a window of any kind.
           if (!knownAgentIds.has(win.agentId)) return true;
           return accessibleAgentIds.has(win.agentId);
         }
         if (win.kind === "app") {
           return Boolean(win.appId) && byId.has(win.appId!);
         }
-        // Files / HTML / browser / system windows do not depend on the app
-        // catalog; their own validators decide whether they are usable.
         return true;
       });
       // Keep the previous array when nothing was pruned; otherwise a fresh
@@ -1870,22 +1856,27 @@ export default function DesktopGrid({
     const observer = new ResizeObserver(() => {
       const maxW = root.clientWidth;
       const maxH = root.clientHeight;
-      setWindows((list) =>
-        list.map((win) =>
-          win.maximized
-            ? {
-                ...win,
-                x: 0,
-                y: MENU_BAR_HEIGHT,
-                w: maxW,
-                h: Math.max(
-                  WINDOW_REGISTRY[win.kind].minHeight,
-                  maxH - MENU_BAR_HEIGHT,
-                ),
-              }
-            : win,
-        ),
-      );
+      setWindows((list) => {
+        let changed = false;
+        const next = list.map((win) => {
+          if (!win.maximized) return win;
+          const h = Math.max(
+            WINDOW_REGISTRY[win.kind].minHeight,
+            maxH - MENU_BAR_HEIGHT,
+          );
+          if (
+            win.x === 0 &&
+            win.y === MENU_BAR_HEIGHT &&
+            win.w === maxW &&
+            win.h === h
+          ) {
+            return win;
+          }
+          changed = true;
+          return { ...win, x: 0, y: MENU_BAR_HEIGHT, w: maxW, h };
+        });
+        return changed ? next : list;
+      });
     });
     observer.observe(root);
     return () => observer.disconnect();
@@ -1959,10 +1950,8 @@ export default function DesktopGrid({
     [accessibleAgentIds, appSpace, knownAgentIds, space?.kind],
   );
 
-  const openSystemApp = useCallback(
-    (definition: SystemAppDefinition) => {
-      const agentId = space?.agentId;
-      if (!agentId) return;
+  const openSystemAppFor = useCallback(
+    (agentId: string, spaceId: string, definition: SystemAppDefinition) => {
       const id = systemWindowId(agentId, definition.key);
       setWindows((list) => {
         const existing = list.find((win) => win.id === id);
@@ -1977,7 +1966,7 @@ export default function DesktopGrid({
           kind: "system",
           systemKey: definition.key,
           agentId,
-          spaceId: space?.id,
+          spaceId,
           title: t(definition.titleKey, definition.key),
           z: ++zRef.current,
           list,
@@ -1989,8 +1978,59 @@ export default function DesktopGrid({
         return win ? [...list, win] : list;
       });
     },
-    [appSpace, space?.agentId, space?.id, t],
+    [appSpace, t],
   );
+
+  const openSystemApp = useCallback(
+    (definition: SystemAppDefinition) => {
+      const agentId = space?.agentId;
+      if (!agentId || !space) return;
+      openSystemAppFor(agentId, space.id, definition);
+    },
+    [openSystemAppFor, space],
+  );
+
+  const openManager = useCallback(
+    (agentId: string, key: SystemManagerKey) => {
+      setActiveAgent(agentId);
+      setManagerTarget({ agentId, key });
+    },
+    [setActiveAgent],
+  );
+
+  // "All Apps" deep-links a system app as ?agent=<id>&system=<key>. Open the
+  // expert desktop and its system window, then strip the query so a refresh
+  // does not keep reopening it.
+  useEffect(() => {
+    const agentParam = searchParams.get("agent");
+    const systemParam = searchParams.get("system");
+    if (!agentParam || !systemParam) return;
+    if (!isSystemAppKey(systemParam)) return;
+    const linkKey = `${agentParam}:${systemParam}`;
+    if (systemDeepLinkRef.current === linkKey) return;
+    if (!spaces.some((item) => item.id === agentParam)) return;
+    const agent = accessibleAgents.find((item) => item.agent_id === agentParam);
+    if (!agent) return;
+    const definition = visibleSystemApps({
+      agent,
+      user: currentUser,
+    }).find((item) => item.key === systemParam);
+    if (!definition) return;
+    systemDeepLinkRef.current = linkKey;
+    setSpaceId(agentParam);
+    openSystemAppFor(agentParam, agentParam, definition);
+    const next = new URLSearchParams(searchParams);
+    next.delete("agent");
+    next.delete("system");
+    setSearchParams(next, { replace: true });
+  }, [
+    accessibleAgents,
+    currentUser,
+    openSystemAppFor,
+    searchParams,
+    setSearchParams,
+    spaces,
+  ]);
 
   const commandItems = useMemo<DesktopCommandItem[]>(() => {
     const items: DesktopCommandItem[] = [];
@@ -2108,6 +2148,18 @@ export default function DesktopGrid({
         run: () => openBrowserWindow(space.agentId!),
       });
     }
+
+    items.push({
+      id: "action:manage-desktop",
+      group: "actions",
+      label: tr("apps.desktop.manage.title", "Manage desktop"),
+      hint: tr(
+        "apps.desktop.manage.actionHint",
+        "Choose desktop icons and Dock pins",
+      ),
+      icon: <Settings2 size={16} />,
+      run: () => setManageOpen(true),
+    });
 
     items.push({
       id: "action:mission",
@@ -2415,27 +2467,25 @@ export default function DesktopGrid({
     })
     .sort((left, right) => left.spaceName.localeCompare(right.spaceName));
 
-  const dockItems: DesktopDockItem[] = currentApps
-    .slice(0, DOCK_APP_LIMIT)
-    .map((app) => {
-      const win = currentWindows.find(
-        (item) => item.kind === "app" && item.appId === app.app_id,
-      );
-      return {
-        id: `dock:app:${app.app_id}`,
-        kind: "app",
-        appId: app.app_id,
-        windowId: win?.id,
-        label: app.name,
-        icon: <AppIcon app={app} size={46} />,
-        running: Boolean(win),
-        minimized: win?.minimized,
-        active: Boolean(win && !win.minimized && win.z === topZ),
-        onActivate: () => openWindow(app),
-        onMinimize: win ? () => minimizeWindow(win.id) : undefined,
-        onClose: win ? () => closeWindow(win.id) : undefined,
-      };
-    });
+  const dockItems: DesktopDockItem[] = dockApps.map((app) => {
+    const win = currentWindows.find(
+      (item) => item.kind === "app" && item.appId === app.app_id,
+    );
+    return {
+      id: `dock:app:${app.app_id}`,
+      kind: "app",
+      appId: app.app_id,
+      windowId: win?.id,
+      label: app.name,
+      icon: <AppIcon app={app} size={46} />,
+      running: Boolean(win),
+      minimized: win?.minimized,
+      active: Boolean(win && !win.minimized && win.z === topZ),
+      onActivate: () => openWindow(app),
+      onMinimize: win ? () => minimizeWindow(win.id) : undefined,
+      onClose: win ? () => closeWindow(win.id) : undefined,
+    };
+  });
   const chatWindows = currentWindows.filter((win) => win.kind === "chat");
   for (const win of chatWindows) {
     const owner = ownerOf(win);
@@ -2615,6 +2665,7 @@ export default function DesktopGrid({
       ref={rootRef}
       className={styles.desktopRoot}
       data-testid="desktop-root"
+      data-fullscreen={fullscreen ? "true" : "false"}
       style={
         {
           "--desktop-accent": space?.accent ?? "#5865f2",
@@ -2682,25 +2733,21 @@ export default function DesktopGrid({
           </div>
         )}
         <div className={styles.desktopMenuActions}>
-          {isAdmin && (
-            <label
-              className={styles.desktopAdminMode}
-              data-on={adminMode ? "true" : "false"}
-              data-testid="desktop-admin-mode"
-              title={tr(
-                "apps.desktop.adminModeHint",
-                "Operate experts that are not shared (admin only)",
-              )}
-            >
-              <Switch
-                size="small"
-                checked={adminMode}
-                onChange={setAdminMode}
-                aria-label={tr("apps.desktop.adminMode", "Admin mode")}
-              />
-              <span>{tr("apps.desktop.adminMode", "Admin mode")}</span>
-            </label>
-          )}
+          <button
+            type="button"
+            className={styles.desktopMenuButton}
+            data-testid="desktop-manage-button"
+            aria-label={t("apps.desktop.manage.title", "Manage desktop")}
+            onClick={() => {
+              setCommandOpen(false);
+              setSpacesOpen(false);
+              setMissionOpen(false);
+              setManageOpen(true);
+            }}
+          >
+            <Settings2 size={13} />
+            <span>{t("apps.desktop.manage.title", "Manage desktop")}</span>
+          </button>
           <button
             type="button"
             className={styles.desktopMenuButton}
@@ -2816,29 +2863,39 @@ export default function DesktopGrid({
         </>
       )}
       <div className={styles.desktopIcons}>
-        {currentSystemApps.map((definition) => (
-          <SystemDesktopIcon
-            key={definition.key}
-            definition={definition}
-            selected={selectedAppId === `system:${definition.key}`}
-            onSelect={() => setSelectedAppId(`system:${definition.key}`)}
-            onOpen={() => openSystemApp(definition)}
-          />
-        ))}
-        {currentApps.map((app) => (
-          <DesktopIcon
-            key={app.app_id}
-            app={app}
-            selected={app.app_id === selectedAppId}
-            onSelect={() => setSelectedAppId(app.app_id)}
-            onOpen={() => openWindow(app)}
-          />
-        ))}
+        {shownSystemApps.length > 0 ? (
+          <SystemAppsFolder apps={shownSystemApps} onOpen={openSystemApp} />
+        ) : null}
+        {desktopEntries.map((entry) => {
+          const entryId =
+            entry.kind === "app"
+              ? appEntryId(entry.app.app_id)
+              : folderEntryId(entry.folder.id);
+          const dragProps = dragPropsFor(entryId);
+          return entry.kind === "folder" ? (
+            <DesktopAppFolder
+              key={entryId}
+              folder={entry.folder}
+              apps={entry.apps}
+              onOpen={openWindow}
+              {...dragProps}
+            />
+          ) : (
+            <DesktopIcon
+              key={entryId}
+              app={entry.app}
+              selected={entry.app.app_id === selectedAppId}
+              onSelect={() => setSelectedAppId(entry.app.app_id)}
+              onOpen={() => openWindow(entry.app)}
+              dragProps={dragProps}
+            />
+          );
+        })}
       </div>
       {space?.kind === "expert" &&
         space.agentId &&
-        currentApps.length === 0 &&
-        currentSystemApps.length === 0 && (
+        desktopEntries.length === 0 &&
+        shownSystemApps.length === 0 && (
           <div
             className={styles.desktopEmptySpace}
             data-testid="desktop-empty-space"
@@ -3080,10 +3137,7 @@ export default function DesktopGrid({
                         title={windowTitles.get(win.id)}
                         active={inSpace && !win.minimized}
                         foreground={focused && !win.minimized}
-                        onOpenConsole={(path) => {
-                          setActiveAgent(win.agentId!);
-                          window.open(path, "_blank", "noopener,noreferrer");
-                        }}
+                        onOpenManager={(key) => openManager(win.agentId!, key)}
                       />
                     </Suspense>
                   ) : win.kind === "external" && win.url ? (
@@ -3284,6 +3338,32 @@ export default function DesktopGrid({
         onPointerEnter={revealDock}
         onPointerLeave={scheduleDockHide}
       />
+      <DesktopManageDrawer
+        open={manageOpen}
+        onClose={() => setManageOpen(false)}
+        agentId={space?.agentId ?? null}
+        agentName={space?.name ?? ""}
+        userApps={currentApps}
+        systemApps={currentSystemApps}
+        prefs={orgPrefs}
+        defaultPinnedIds={defaultPinnedIds}
+        knownEntryIds={desktopEntryIds}
+        onChange={setOrgPrefs}
+      />
+      {managerTarget ? (
+        <Suspense fallback={null}>
+          <DesktopManagerDrawer
+            open
+            agentId={managerTarget.agentId}
+            agentName={
+              agents.find((agent) => agent.agent_id === managerTarget.agentId)
+                ?.name ?? managerTarget.agentId
+            }
+            managerKey={managerTarget.key}
+            onClose={() => setManagerTarget(null)}
+          />
+        </Suspense>
+      ) : null}
       <DesktopCommandPalette
         open={commandOpen}
         onClose={() => setCommandOpen(false)}

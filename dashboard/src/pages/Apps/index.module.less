@@ -251,6 +251,32 @@
   white-space: nowrap;
 }
 
+.boardGalleryHeaderTools {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.boardGallerySection {
+  min-width: 0;
+}
+
+.boardGallerySection + .boardGallerySection {
+  margin-top: 22px;
+}
+
+.boardGallerySectionTitle {
+  margin: 0 0 10px;
+  color: var(--fn-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .boardGalleryGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1545,20 +1571,6 @@
   color: #8ab4ff;
 }
 
-.desktopAdminMode {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 6px;
-  color: rgb(255 255 255 / 82%);
-  font-size: 11px;
-  white-space: nowrap;
-  cursor: pointer;
-
-  &[data-on="true"] {
-    color: #fbbf24;
-  }
-}
 
 .desktopMenuButton {
   display: inline-flex;
@@ -1587,6 +1599,19 @@
 .desktopRoot:fullscreen {
   width: 100vw;
   height: 100vh;
+}
+
+/* Fullscreen makes the always-visible glass surfaces span the whole viewport.
+   Re-blurring that much wallpaper on every composited frame is the main source
+   of the browser load spike, so keep the chrome opaque there. */
+.desktopRoot[data-fullscreen="true"] .desktopMenuBar {
+  background: rgb(8 10 18 / 84%);
+  backdrop-filter: none;
+}
+
+.desktopRoot[data-fullscreen="true"] .desktopDockInner {
+  background: rgb(18 20 30 / 90%);
+  backdrop-filter: none;
 }
 
 .desktopIcons {
@@ -1639,6 +1664,15 @@
 .desktopIconSelected {
   border-color: rgb(255 255 255 / 34%);
   background: rgb(255 255 255 / 20%);
+}
+
+.desktopIconDragging {
+  opacity: 0.55;
+}
+
+.desktopIconDropTarget {
+  border-color: rgb(255 255 255 / 55%);
+  background: rgb(255 255 255 / 22%);
 }
 
 .desktopIconArt {
@@ -1738,25 +1772,75 @@
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 30%));
 }
 
-.desktopIconArtSystem {
+.desktopIconArtFolder {
   --icon-angle: 145deg;
-  --icon-from: #0f766e;
-  --icon-to: #0e7490;
+  --icon-from: #334155;
+  --icon-to: #0f172a;
 }
 
-.desktopIconSystemTag {
-  position: absolute;
-  top: 5px;
-  left: 6px;
-  z-index: 2;
-  padding: 1px 4px;
-  border-radius: 4px;
-  background: rgb(15 23 42 / 42%);
-  color: rgb(255 255 255 / 88%);
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: 1.2;
+.desktopSystemFolderPanel {
+  width: 252px;
+  padding: 10px;
+}
+
+.desktopSystemFolderTitle {
+  padding: 2px 4px 8px;
+  color: var(--fn-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.desktopSystemFolderGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.desktopSystemFolderItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 2px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fn-text-primary);
+  cursor: pointer;
+  font: inherit;
+
+  &:hover {
+    background: var(--fn-bg-layout);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--fn-color-brand);
+    outline-offset: -2px;
+  }
+}
+
+.desktopSystemFolderItemArt {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #0f766e, #0e7490);
+  color: #fff;
+}
+
+.desktopSystemFolderItemLabel {
+  width: 100%;
+  overflow: hidden;
+  color: var(--fn-text-secondary);
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .desktopIconBadge {
@@ -2357,6 +2441,9 @@
     0 12px 22px rgb(0 0 0 / 38%);
   animation: desktopPetBob 3.6s ease-in-out infinite;
   transition: filter 0.16s ease;
+  /* Keep the idle bob on its own compositor layer; otherwise each transform
+     frame repaints the full-screen wallpaper (much worse in fullscreen). */
+  will-change: transform;
 }
 
 .desktopPet[data-open="true"] .desktopPetBody {
@@ -5762,4 +5849,83 @@
   margin-top: 4px;
   color: #94a3b8;
   font-size: 11px;
+}
+
+.desktopManageIntro {
+  margin-bottom: 4px;
+  line-height: 1.55;
+}
+
+.desktopManageList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.desktopManageRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--fn-border-secondary);
+}
+
+.desktopManageRow:last-child {
+  border-bottom: 0;
+}
+
+.desktopManageIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #0f766e, #0e7490);
+  color: #fff;
+}
+
+.desktopManageText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.desktopManageName {
+  overflow: hidden;
+  color: var(--fn-text-primary);
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopManageMeta {
+  overflow: hidden;
+  color: var(--fn-text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktopManageToggle {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  color: var(--fn-text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.desktopManageFolderNew {
+  margin-top: 8px;
+}
+
+.desktopManageFolderForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }

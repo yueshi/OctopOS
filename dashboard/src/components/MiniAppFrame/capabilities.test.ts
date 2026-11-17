@@ -46,9 +46,11 @@ describe("MiniApp capabilities", () => {
 
   it("never grants system capabilities to regular or legacy apps", () => {
     expect(ALL_CAPABILITIES).not.toContain(SYSTEM_CAP.READ);
-    expect(ALL_CAPABILITIES).not.toContain(SYSTEM_CAP.OPEN_CONSOLE);
+    expect(ALL_CAPABILITIES).not.toContain(SYSTEM_CAP.MANAGE);
     expect(effectiveCapabilities(undefined)).not.toContain(SYSTEM_CAP.READ);
     expect(isMethodAllowed("systemQuery", undefined)).toBe(false);
+    expect(isMethodAllowed("openManager", undefined)).toBe(false);
+    expect(isMethodAllowed("openManager", [SYSTEM_CAP.MANAGE])).toBe(true);
   });
 
   it("denies methods it does not know", () => {
