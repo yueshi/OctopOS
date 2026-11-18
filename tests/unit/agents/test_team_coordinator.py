@@ -44,6 +44,7 @@ def test_record_ensures_runtime_and_dedupes(db: SqlitePool, team_id: str) -> Non
     coord = _coordinator(db)
     event_id = coord.record(team_id, type="member.replied", dedupe_key="inbox:1", actor="member:m1")
     assert event_id is not None
+    assert len(event_id) >= 12
     runtime = TeamRuntimeRepo(db).get(team_id)
     assert runtime is not None and runtime.status == "idle"
     events = TeamEventRepo(db).list_after(team_id)

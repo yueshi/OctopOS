@@ -8,6 +8,7 @@ from octop.infra.agents.security.hitl_session import (
 )
 from octop.infra.agents.security.policy_store import (
     SecuritySettingsStore,
+    enforce_mandatory_filesystem_rule,
     tool_execution_may_pause,
 )
 from octop.infra.agents.security.tool_guard_rules import ToolGuardRulesStore
@@ -17,6 +18,7 @@ __all__ = [
     "HitlSessionPolicyStore",
     "SecuritySettingsStore",
     "ToolGuardRulesStore",
+    "enforce_mandatory_filesystem_rule",
     "tool_execution_may_pause",
     "apply_session_bypass",
     "parse_hitl_session_policy",

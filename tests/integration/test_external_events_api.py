@@ -136,6 +136,7 @@ async def test_webhook_to_app_import_and_dedupe(
     assert accepted["accepted"] is True
     assert accepted["duplicate"] is False
     assert accepted["deliveries"] == 1
+    assert accepted["rate_limited"] == 0
 
     await _drain_worker(srv)
 
@@ -156,6 +157,9 @@ async def test_webhook_to_app_import_and_dedupe(
     assert len(deliveries.json()) == 1
     assert deliveries.json()[0]["status"] == "delivered"
     assert deliveries.json()[0]["subscription_id"] == subscription_id
+    assert deliveries.json()[0]["result"]["mode"] == "app.import"
+    assert deliveries.json()[0]["result"]["imported"] == 1
+    assert deliveries.json()[0]["result"]["partial"] is False
 
     events = await client.get(f"/api/external/events?source_id={source_id}", headers=alice_auth)
     assert events.status_code == 200

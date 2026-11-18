@@ -80,20 +80,20 @@ class ExternalEventRepo:
         ``subscriptions`` is ``(subscription_id, target_type, target_id)``.
         Returns ``(row, duplicate, delivery_count)``.
         """
-        event_id = new_short_id()
+        event_id = new_short_id(16)
         ts = now_ts()
         with self._db.transaction() as conn:
-            seen = conn.execute(
-                "SELECT * FROM external_events WHERE dedupe_key = ?", (dedupe_key,)
-            ).fetchone()
-            if seen is not None:
-                return ExternalEventRow.from_row(seen), True, 0
-            conn.execute(
+            # INSERT ... ON CONFLICT rather than SELECT-then-INSERT: under
+            # PostgreSQL READ COMMITTED two concurrent deliveries of the same
+            # dedupe key both miss a preceding SELECT, and the loser got a
+            # unique violation instead of the deduped row.
+            inserted = conn.execute(
                 "INSERT INTO external_events("
                 "event_id, source_id, external_id, event_type, occurred_at, "
                 "received_at, summary, payload_json, payload_bytes, dedupe_key, "
                 "status, created_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'received', ?) "
+                "ON CONFLICT(dedupe_key) DO NOTHING",
                 (
                     event_id,
                     source_id,
@@ -108,6 +108,13 @@ class ExternalEventRepo:
                     ts,
                 ),
             )
+            if not inserted.rowcount:
+                seen = conn.execute(
+                    "SELECT * FROM external_events WHERE dedupe_key = ?", (dedupe_key,)
+                ).fetchone()
+                if seen is None:  # pragma: no cover - conflict without a row
+                    raise RuntimeError("external event conflict without a row")
+                return ExternalEventRow.from_row(seen), True, 0
             created = 0
             for subscription_id, target_type, target_id in subscriptions:
                 cur = conn.execute(
@@ -117,7 +124,7 @@ class ExternalEventRepo:
                     ") VALUES (?, ?, ?, ?, ?, 'pending', 0, ?) "
                     "ON CONFLICT(event_id, subscription_id) DO NOTHING",
                     (
-                        new_short_id(),
+                        new_short_id(16),
                         event_id,
                         subscription_id,
                         target_type,
@@ -150,6 +157,19 @@ class ExternalEventRepo:
             row = conn.execute(
                 "SELECT * FROM external_events WHERE dedupe_key = ?", (dedupe_key,)
             ).fetchone()
+        return ExternalEventRow.from_row(row) if row is not None else None
+
+    def get_by_external_id(
+        self, external_id: str, *, source_id: str | None = None
+    ) -> ExternalEventRow | None:
+        sql = "SELECT * FROM external_events WHERE external_id = ?"
+        params: list[object] = [external_id]
+        if source_id is not None:
+            sql += " AND source_id = ?"
+            params.append(source_id)
+        sql += " ORDER BY received_at DESC, id DESC LIMIT 1"
+        with self._db.connect() as conn:
+            row = conn.execute(sql, params).fetchone()
         return ExternalEventRow.from_row(row) if row is not None else None
 
     def list_for_owner(

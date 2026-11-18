@@ -70,22 +70,27 @@ class TeamEventRepo:
         The seq is allocated inside the same transaction as the insert so a
         restart cannot produce gaps.
         """
-        event_id = new_short_id()
+        event_id = new_short_id(16)
         ts = now_ts()
         with self._db.transaction() as conn:
-            seen = conn.execute(
-                "SELECT 1 FROM team_events WHERE dedupe_key = ?",
-                (dedupe_key,),
-            ).fetchone()
-            if seen:
-                return None
-            conn.execute(
+            if self._db.dialect == "postgresql":
+                # MAX(seq)+1 and the dedupe check are only safe when writers
+                # for the same team are serialized. SQLite already takes a
+                # write lock per transaction; PostgreSQL needs this per-team
+                # advisory lock or concurrent appends collide on
+                # UNIQUE(team_id, seq) and one event is silently dropped.
+                conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(?::text))",
+                    (f"team_events:{team_id}",),
+                )
+            inserted = conn.execute(
                 "INSERT INTO team_events("
                 "event_id, team_id, seq, type, actor, payload_json, dedupe_key, "
                 "decision_id, created_at"
                 ") VALUES (?, ?, "
                 "(SELECT COALESCE(MAX(seq), 0) + 1 FROM team_events WHERE team_id = ?), "
-                "?, ?, ?, ?, ?, ?)",
+                "?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(dedupe_key) DO NOTHING",
                 (
                     event_id,
                     team_id,
@@ -98,6 +103,8 @@ class TeamEventRepo:
                     ts,
                 ),
             )
+            if not inserted.rowcount:
+                return None
         return self.get(event_id)
 
     def get(self, event_id: str) -> TeamEventRow | None:

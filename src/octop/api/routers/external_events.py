@@ -21,7 +21,7 @@ from octop.infra.users.identity import User
 
 router = APIRouter()
 
-TargetType = Literal["expert", "team", "app"]
+TargetType = Literal["expert", "team", "app", "webhook"]
 TargetMode = Literal[
     "expert.turn",
     "expert.notify",
@@ -29,6 +29,7 @@ TargetMode = Literal[
     "team.notify",
     "app.refresh",
     "app.import",
+    "webhook.post",
 ]
 
 
@@ -161,6 +162,10 @@ class DeliveryOut(BaseModel):
     lease_until: int | None
     last_error: str
     delivered_at: int | None
+    result: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Import/inbox result summary; no row values are stored.",
+    )
     created_at: int
 
 
@@ -246,6 +251,7 @@ def _delivery_out(row: Any) -> DeliveryOut:
         lease_until=row.lease_until,
         last_error=row.last_error,
         delivered_at=row.delivered_at,
+        result=row.result,
         created_at=row.created_at,
     )
 

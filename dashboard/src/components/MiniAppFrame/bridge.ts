@@ -19,12 +19,20 @@ export interface BridgeParams {
   expectedVersion?: number;
   filters?: Record<string, string>;
   sort?: string;
+  expandRefs?: boolean;
+  groupBy?: string;
+  metric?: string;
+  agg?: string;
   url?: string;
   name?: string;
   tool?: string;
   args?: Record<string, unknown>;
   since?: number;
   event_ids?: string[];
+  event_type?: string;
+  payload?: Record<string, unknown>;
+  summary?: string;
+  client_event_id?: string;
   prompt?: string;
   system?: string;
   gameId?: string;
@@ -92,6 +100,7 @@ export const KNOWN_METHODS: ReadonlySet<string> = new Set([
   "schema",
   "tables",
   "rows",
+  "aggregate",
   "append",
   "update",
   "updateMany",
@@ -102,9 +111,11 @@ export const KNOWN_METHODS: ReadonlySet<string> = new Set([
   "openExternal",
   "asset",
   "service",
+  "serviceDetailed",
   "serviceImage",
   "events",
   "ackEvents",
+  "emitEvent",
 ]);
 
 /**

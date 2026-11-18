@@ -80,15 +80,26 @@ class AppEventRepo:
                     ts,
                 ),
             )
-        row = self.get(event_id)
+        row = self.get_for_app(app_id, event_id)
         if row is None:
             raise RuntimeError("event insert failed")
         return row
 
-    def get(self, event_id: str) -> AppEventRow | None:
+    def get_for_app(self, app_id: str, event_id: str) -> AppEventRow | None:
+        """One app's inbox row; event ids are only unique within an app."""
         with self._db.connect() as conn:
             row = conn.execute(
-                "SELECT * FROM light_app_events WHERE event_id = ?",
+                "SELECT * FROM light_app_events WHERE app_id = ? AND event_id = ?",
+                (app_id, event_id),
+            ).fetchone()
+        return AppEventRow.from_row(row) if row else None
+
+    def get(self, event_id: str, *, app_id: str | None = None) -> AppEventRow | None:
+        if app_id is not None:
+            return self.get_for_app(app_id, event_id)
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM light_app_events WHERE event_id = ? ORDER BY id LIMIT 1",
                 (event_id,),
             ).fetchone()
         return AppEventRow.from_row(row) if row else None

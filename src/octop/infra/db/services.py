@@ -10,8 +10,10 @@ from octop.infra.db.repos.agents import AgentRepo
 from octop.infra.db.repos.app_access import AppAccessRequestRepo
 from octop.infra.db.repos.app_bindings import LightAppBindingRepo
 from octop.infra.db.repos.app_events import AppEventRepo
+from octop.infra.db.repos.app_ingress import LightAppIngressRepo
 from octop.infra.db.repos.app_schedules import LightAppScheduleRepo
 from octop.infra.db.repos.app_services import LightAppServiceRepo
+from octop.infra.db.repos.app_webhooks import LightAppWebhookRepo
 from octop.infra.db.repos.apps import LightAppRepo
 from octop.infra.db.repos.audit import AuditRepo
 from octop.infra.db.repos.autonomy_policy import AutonomyPolicyRepo
@@ -89,6 +91,8 @@ class RepoBundle:
     app_binding_repo: LightAppBindingRepo
     app_service_repo: LightAppServiceRepo
     app_event_repo: AppEventRepo
+    app_ingress_repo: LightAppIngressRepo
+    app_webhook_repo: LightAppWebhookRepo
     app_schedule_repo: LightAppScheduleRepo
     voice_provider_repo: VoiceProviderRepo
     care_push_repo: CarePushRepo
@@ -142,6 +146,8 @@ class RepoBundle:
             app_binding_repo=LightAppBindingRepo(db),
             app_service_repo=LightAppServiceRepo(db),
             app_event_repo=AppEventRepo(db),
+            app_ingress_repo=LightAppIngressRepo(db),
+            app_webhook_repo=LightAppWebhookRepo(db),
             app_schedule_repo=LightAppScheduleRepo(db),
             voice_provider_repo=VoiceProviderRepo(db),
             care_push_repo=CarePushRepo(db),

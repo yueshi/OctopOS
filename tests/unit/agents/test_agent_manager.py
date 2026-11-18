@@ -925,6 +925,13 @@ def test_build_harness_config_includes_cronjob_tools_when_cron_manager_set(
         "app_import_rows",
         "app_save_asset",
         "app_set_preview",
+        "app_integration_list",
+        "app_integration_health",
+        "app_integration_trace",
+        "app_integration_create_ingress",
+        "app_integration_update_ingress",
+        "app_integration_delete_ingress",
+        "app_integration_test_ingress",
         "app_delete",
     }
 
@@ -962,6 +969,13 @@ def test_build_harness_config_includes_search_knowledge_without_cron(
         "app_import_rows",
         "app_save_asset",
         "app_set_preview",
+        "app_integration_list",
+        "app_integration_health",
+        "app_integration_trace",
+        "app_integration_create_ingress",
+        "app_integration_update_ingress",
+        "app_integration_delete_ingress",
+        "app_integration_test_ingress",
         "app_delete",
     }
     assert any(isinstance(item, KnowledgeSearchHintMiddleware) for item in (cfg.middleware or []))
@@ -1715,6 +1729,28 @@ def test_build_harness_config_keeps_fs_permissions_for_local_shell_guard(
     )
     assert cfg.permissions is not None
     assert not any(isinstance(item, FilesystemGuardMiddleware) for item in (cfg.middleware or []))
+
+
+def test_build_harness_config_denies_app_dir_writes(manager: AgentManager) -> None:
+    from octop_harness.middleware.filesystem_guard import filesystem_guard_block_reason
+
+    cfg = manager._build_harness_config(
+        _row(config_json=json.dumps({"backend": {"type": "local_shell", "virtual_mode": True}})),
+    )
+    assert cfg.permissions
+    assert filesystem_guard_block_reason(
+        cfg.permissions,
+        tool_name="write_file",
+        params={"file_path": "apps/app_abc123/app.html"},
+    )
+    assert (
+        filesystem_guard_block_reason(
+            cfg.permissions,
+            tool_name="read_file",
+            params={"file_path": "apps/app_abc123/app.html"},
+        )
+        is None
+    )
 
 
 def test_build_harness_config_without_default_model(manager: AgentManager) -> None:
@@ -3020,3 +3056,30 @@ async def test_delete_refuses_while_the_agent_owns_light_apps(manager: AgentMana
     # Forcing the delete goes through.
     await manager.delete(agent_id, force=True)
     assert manager.get_row(agent_id) is None
+
+
+def test_build_harness_config_applies_app_tool_risk_limit(
+    manager: AgentManager,
+) -> None:
+    from dataclasses import replace
+
+    from octop.infra.apps.tool_policy import APP_TOOL_RISKS, RISK_READ
+
+    agent_id = "AGT_READONLY_APPS"
+    ws = manager._paths.ensure_agent_workspace(agent_id)
+    (ws / ".bootstrapped").write_text("", encoding="utf-8")
+    row = replace(
+        _row(agent_id=agent_id),
+        config_json=json.dumps(
+            {
+                "backend": _fs_backend(ws),
+                "app_tool_max_risk": "read",
+            }
+        ),
+    )
+    cfg = manager._build_harness_config(row)
+    assert cfg.tools is not None
+    app_tools = [tool for tool in cfg.tools if tool.name in APP_TOOL_RISKS]
+    assert app_tools
+    assert all(APP_TOOL_RISKS[tool.name] == RISK_READ for tool in app_tools)
+    assert "app_append_row" not in {tool.name for tool in app_tools}

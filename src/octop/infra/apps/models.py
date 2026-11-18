@@ -46,7 +46,17 @@ MAX_ROW_READ = 500
 MAX_COLLABORATORS = 50
 
 COLUMN_TYPES = frozenset(
-    {"string", "text", "integer", "number", "boolean", "date", "datetime", "enum"}
+    {
+        "string",
+        "text",
+        "integer",
+        "number",
+        "boolean",
+        "date",
+        "datetime",
+        "enum",
+        "reference",
+    }
 )
 
 PII_KIND_RE = re.compile(r"^[a-z_]{1,40}$")
@@ -144,6 +154,10 @@ class Column:
     values: tuple[str, ...] = ()
     pii: str | None = None
     """Sensitive-data kind (id_card, bank_card, phone, address, salary)."""
+    ref_table: str | None = None
+    """Target table key for a ``reference`` column."""
+    ref_label: str | None = None
+    """Target column used as the display label; falls back to a text column."""
 
     def to_dict(self) -> dict[str, object]:
         data: dict[str, object] = {
@@ -156,6 +170,10 @@ class Column:
             data["values"] = list(self.values)
         if self.pii:
             data["pii"] = self.pii
+        if self.ref_table:
+            data["ref_table"] = self.ref_table
+        if self.ref_label:
+            data["ref_label"] = self.ref_label
         return data
 
 
@@ -190,7 +208,16 @@ def _parse_column(raw: object, *, index: int) -> Column:
             ErrorCode.APP_SCHEMA_INVALID,
             f"column #{index + 1} must be an object",
         )
-    unknown = set(raw) - {"name", "label", "type", "required", "values", "pii"}
+    unknown = set(raw) - {
+        "name",
+        "label",
+        "type",
+        "required",
+        "values",
+        "pii",
+        "ref_table",
+        "ref_label",
+    }
     if unknown:
         raise _invalid(
             ErrorCode.APP_SCHEMA_INVALID,
@@ -258,6 +285,29 @@ def _parse_column(raw: object, *, index: int) -> Column:
             ErrorCode.APP_SCHEMA_INVALID,
             f"column {name!r} only accepts values for enum columns",
         )
+    ref_table: str | None = None
+    ref_label: str | None = None
+    if col_type == "reference":
+        raw_ref = str(raw.get("ref_table") or "").strip()
+        if not raw_ref:
+            raise _invalid(
+                ErrorCode.APP_SCHEMA_INVALID,
+                f"reference column {name!r} requires ref_table",
+            )
+        ref_table = validate_table_key(raw_ref)
+        raw_label = str(raw.get("ref_label") or "").strip()
+        if raw_label:
+            if not COLUMN_NAME_RE.fullmatch(raw_label):
+                raise _invalid(
+                    ErrorCode.APP_SCHEMA_INVALID,
+                    f"column {name!r} has an invalid ref_label {raw_label!r}",
+                )
+            ref_label = raw_label
+    elif raw.get("ref_table") not in (None, "") or raw.get("ref_label") not in (None, ""):
+        raise _invalid(
+            ErrorCode.APP_SCHEMA_INVALID,
+            f"column {name!r} only accepts ref_table/ref_label for reference columns",
+        )
     pii: str | None = None
     raw_pii = raw.get("pii")
     if raw_pii not in (None, ""):
@@ -278,6 +328,8 @@ def _parse_column(raw: object, *, index: int) -> Column:
         required=required,
         values=values,
         pii=pii,
+        ref_table=ref_table,
+        ref_label=ref_label,
     )
 
 
@@ -424,6 +476,8 @@ def _normalize_value(col: Column, raw: object) -> str:
                 ErrorCode.APP_ROW_INVALID,
                 f"column {col.name!r} expects one of: {', '.join(col.values)}",
             )
+        return text
+    if col.type == "reference":
         return text
     raise _invalid(
         ErrorCode.APP_SCHEMA_INVALID,

@@ -22,6 +22,7 @@ SYSTEM_TEMPLATE_ROOT = Path(__file__).with_name("system_templates")
 MANIFEST_NAME = "manifest.json"
 SCHEMA_NAME = "schema.json"
 HTML_NAME = "app.html"
+SERVICES_NAME = "services.json"
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,16 @@ def read_system_template(template_id: str) -> tuple[str, str | None]:
     html_path = _safe_child(directory, html_rel)
     html_text = html_path.read_text(encoding="utf-8") if html_path.is_file() else None
     return schema_text, html_text
+
+
+def read_system_template_services(template_id: str) -> str | None:
+    """Return the optional ``services.json`` declaration for a system template."""
+    clean = clean_template_id(template_id)
+    directory = SYSTEM_TEMPLATE_ROOT / clean
+    if not (directory / MANIFEST_NAME).is_file():
+        raise OctopError(ErrorCode.APP_NOT_FOUND, f"unknown app template: {template_id!r}")
+    path = _safe_child(directory, SERVICES_NAME)
+    return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
 def agent_template_info(

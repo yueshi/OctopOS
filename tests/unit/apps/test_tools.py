@@ -125,6 +125,13 @@ def test_build_app_tools_names(world: World) -> None:
         "app_import_rows",
         "app_save_asset",
         "app_set_preview",
+        "app_integration_list",
+        "app_integration_health",
+        "app_integration_trace",
+        "app_integration_create_ingress",
+        "app_integration_update_ingress",
+        "app_integration_delete_ingress",
+        "app_integration_test_ingress",
         APP_DELETE_TOOL_NAME,
     }
     # The manager decides whether to inject the light-app prompt from this

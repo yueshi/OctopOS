@@ -381,7 +381,7 @@ Octop 能跑批、能推结果，但推出来的结论**没有落点、没有口
   图表 6 种、SDK 11 能力位（`dashboard/src/components/MiniAppFrame/sdk.ts:139`、
   `capabilities.ts:10-22`：`listRows/appendRow/updateRow/onDataChange/generate/launchGame/
   composeMessage/service().call`）。
-- ⚠️ 页面只能 `appendRow`，不能改行；过滤排序**完全未下推**（16ms/千行、2 万行 323ms）。
+- ⚠️ 页面行写已支持 `updateRow` / `updateRows` / `deleteRow`（2026-11-15）；当前剩余性能缺口是过滤排序**未下推**（16ms/千行、2 万行 323ms）。
 - ❌ 无「结论—数字—异常—待办」四段式模板。
 - ❌ 无"数据来源 · 同步时间"字段（`light_app_services` 无 last-synced / fetched_at）。
 - ❌ 无 cron 产物表 → 昨晚那份诊断无处可查（同 2A）。

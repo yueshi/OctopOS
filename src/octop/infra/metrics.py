@@ -21,6 +21,7 @@ class Metrics:
     team_event_judgment_total: int = 0
     external_event_received_total: int = 0
     external_event_duplicate_total: int = 0
+    external_event_rate_limited_total: int = 0
     external_delivery_delivered_total: int = 0
     external_delivery_failed_total: int = 0
     external_poll_total: int = 0
@@ -69,6 +70,7 @@ class Metrics:
                 "team_event_judgment_total": self.team_event_judgment_total,
                 "external_event_received_total": self.external_event_received_total,
                 "external_event_duplicate_total": self.external_event_duplicate_total,
+                "external_event_rate_limited_total": self.external_event_rate_limited_total,
                 "external_delivery_delivered_total": self.external_delivery_delivered_total,
                 "external_delivery_failed_total": self.external_delivery_failed_total,
                 "external_poll_total": self.external_poll_total,

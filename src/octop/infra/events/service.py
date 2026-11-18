@@ -28,12 +28,19 @@ from octop.infra.events.security import REPLAY_WINDOW_SECONDS, verify_signature
 
 SOURCE_KIND_WEBHOOK = "webhook"
 SOURCE_KIND_CONNECTOR_POLL = "connector_poll"
+SOURCE_KIND_APP_INGRESS = "app_ingress"
 SOURCE_KINDS = (SOURCE_KIND_WEBHOOK, SOURCE_KIND_CONNECTOR_POLL)
+"""Kinds a user may create through the global External Events API.
+
+``app_ingress`` is created by :class:`AppIngressService` only; it is not a
+public source kind.
+"""
 
 TARGET_EXPERT = "expert"
 TARGET_TEAM = "team"
 TARGET_APP = "app"
-TARGET_TYPES = (TARGET_EXPERT, TARGET_TEAM, TARGET_APP)
+TARGET_WEBHOOK = "webhook"
+TARGET_TYPES = (TARGET_EXPERT, TARGET_TEAM, TARGET_APP, TARGET_WEBHOOK)
 
 MODE_EXPERT_TURN = "expert.turn"
 MODE_EXPERT_NOTIFY = "expert.notify"
@@ -42,10 +49,12 @@ MODE_TEAM_NOTIFY = "team.notify"
 MODE_APP_REFRESH = "app.refresh"
 MODE_APP_IMPORT = "app.import"
 MODE_APP_INBOX = "app.inbox"
+MODE_WEBHOOK_POST = "webhook.post"
 TARGET_MODES = {
     TARGET_EXPERT: (MODE_EXPERT_TURN, MODE_EXPERT_NOTIFY),
     TARGET_TEAM: (MODE_TEAM_JUDGE, MODE_TEAM_NOTIFY),
     TARGET_APP: (MODE_APP_REFRESH, MODE_APP_IMPORT, MODE_APP_INBOX),
+    TARGET_WEBHOOK: (MODE_WEBHOOK_POST,),
 }
 
 MAX_NAME_CHARS = 120
@@ -59,6 +68,7 @@ class IngestResult:
     event: ExternalEventRow
     duplicate: bool
     delivery_count: int
+    rate_limited: int = 0
 
 
 def _invalid(code: ErrorCode, message: str) -> OctopError:
@@ -150,7 +160,7 @@ class ExternalEventService:
         self, *, user_id: int, is_admin: bool, source_id: str
     ) -> tuple[ExternalSourceRow, str]:
         source = self._source_for(user_id, is_admin, source_id)
-        if source.kind != SOURCE_KIND_WEBHOOK:
+        if source.kind not in {SOURCE_KIND_WEBHOOK, SOURCE_KIND_APP_INGRESS}:
             raise _invalid(
                 ErrorCode.EXTERNAL_SOURCE_INVALID, "secret is only used by webhook sources"
             )
@@ -443,6 +453,17 @@ class ExternalEventService:
                         "team.judge requires an autopilot team",
                     )
             return
+        if target_type == TARGET_WEBHOOK:
+            webhook = self._repos.app_webhook_repo.get(target_id)
+            if webhook is None or not webhook.enabled:
+                raise _invalid(ErrorCode.EXTERNAL_TARGET_INVALID, "webhook target not found")
+            source_app_id = _json_dict(source.config_json).get("app_id")
+            if source_app_id != webhook.app_id:
+                raise _invalid(
+                    ErrorCode.EXTERNAL_TARGET_INVALID,
+                    "webhook target does not belong to this MiniApp",
+                )
+            return
 
         app = self._repos.light_app_repo.get(target_id)
         if app is None:
@@ -485,7 +506,7 @@ class ExternalEventService:
         source = self._repos.external_source_repo.get(source_id)
         if (
             source is None
-            or source.kind != SOURCE_KIND_WEBHOOK
+            or source.kind not in {SOURCE_KIND_WEBHOOK, SOURCE_KIND_APP_INGRESS}
             or not source.enabled
             or source.secret_blob is None
         ):
@@ -538,6 +559,7 @@ class ExternalEventService:
             METRICS.inc("external_event_duplicate_total")
             return IngestResult(event=existing, duplicate=True, delivery_count=0)
         subscriptions = []
+        rate_limited = 0
         for item in self._repos.external_subscription_repo.list_for_source(
             source.source_id, enabled_only=True
         ):
@@ -546,8 +568,13 @@ class ExternalEventService:
             if item.max_per_minute and not self._limiter.allow(
                 f"subscription:{item.subscription_id}", limit=item.max_per_minute
             ):
+                rate_limited += 1
                 continue
             subscriptions.append(item)
+        if rate_limited:
+            from octop.infra.metrics import METRICS  # noqa: PLC0415
+
+            METRICS.inc("external_event_rate_limited_total", rate_limited)
         event, duplicate, delivery_count = self._repos.external_event_repo.ingest(
             source_id=source.source_id,
             event_type=clean_type,
@@ -566,7 +593,12 @@ class ExternalEventService:
         METRICS.inc(
             "external_event_duplicate_total" if duplicate else "external_event_received_total"
         )
-        return IngestResult(event=event, duplicate=duplicate, delivery_count=delivery_count)
+        return IngestResult(
+            event=event,
+            duplicate=duplicate,
+            delivery_count=delivery_count,
+            rate_limited=rate_limited,
+        )
 
     def list_events(
         self,

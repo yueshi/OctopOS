@@ -9,12 +9,12 @@
 | `app_inspect_file` | 检查工作区里的表格文件 | 只读；返回 sheet、表头、列统计、样本行；**不要自己读 xlsx** |
 | `app_list` | 列出本 agent 拥有的应用 | 只返回你自己的应用；每项带表清单 |
 | `app_list_bindings` | 列出应用的服务绑定 | 只读；包含内置数据集和外部/连接器绑定；不要尝试自行改绑定 |
-| `app_add_service` | 声明只读外部服务 | owner/admin；需已有 connector 实例；页面仍要 owner 开启 `external.fetch` |
+| `app_add_service` | 声明只读外部服务 | owner/admin；`provider="external"` 且 connector 留空时自动创建/复用 `http-extract`；需要站点默认头时传 `request_headers`（User-Agent/Referer/Accept/Accept-Language）；页面仍要 owner 开启 `external.fetch` |
 | `app_list_services` | 列出外部服务声明 | 只读 |
 | `app_remove_service` | 删除外部服务声明 | owner/admin；会清缓存和同名 binding |
 | `app_open` | 在对话中打开应用 | 返回 app_card；**首个完整可用版本完成后调用一次**；后续编辑/优化不要再调用 |
 | `app_create` | 建应用并定义字段 | 1-50 个字段；名称 ≤100 字；同时创建主表 `main`；可传低风险 `capabilities` 声明页面能力 |
-| `app_create_from_template` | 从模板建空应用 | 模板来自 agent 的 `app_templates/` 或系统模板（`source="system"`）；只带 schema+界面，不带数据 |
+| `app_create_from_template` | 从模板建空应用 | 模板来自 agent 的 `app_templates/` 或系统模板（`source="system"`）；带 schema+界面，可选 `services.json` 自动声明外部服务；不带数据/凭据 |
 | `app_add_table` | 给应用新增一张附加表 | key 应用内唯一；每个应用最多 12 张表；建了不能删；默认不公开 |
 | `app_update_schema` | 追加字段 | 只能加不能改；已有数据时不能加必填字段；可传 `table` |
 | `app_alter_schema` | 改名/删除/改类型/标 PII | 会迁移所有已有行；有行不符合新结构时整次拒绝；`pii` 可给已有列补标或清除；可传 `table` |
@@ -31,6 +31,10 @@
 | `app_delete` | 删除应用 | 仅 owner/admin；需要用户批准 |
 
 工具都返回 JSON 字符串：成功是结果对象，失败是 `{"error": "..."}`。出错先读 error 再改参数，别瞎试。
+
+**读书记录工作台（`reading-tracker`）**：模板自带 `services.json`，会声明 `douban` 服务（`search_books` / `get_book` / `get_cover`），并自动复用/创建 owner 的豆瓣 connector。创建后提醒用户在应用详情页开启 `external.fetch`；开启前页面会提示，但仍可手动录入。
+
+**公开 HTTP 取数**：`http-extract` 支持 `fetch_json` / `fetch_text` / `fetch_html`。公开站点若拒绝默认请求头，在服务声明里传 `request_headers`（仅上述四个），不要为每个站点写专用 adapter。`fetch_html` 返回原始 HTML，页面用 `DOMParser` 取文本，不要把它直接塞进 `innerHTML`。
 
 ## 页面能力
 
@@ -72,9 +76,10 @@
 
 - `name`：snake_case，字母或下划线开头，列内唯一。
 - `label`：给人看的名字，可以是中文。
-- `type`：`string` | `text` | `integer` | `number` | `boolean` | `date` | `datetime` | `enum`。
+- `type`：`string` | `text` | `integer` | `number` | `boolean` | `date` | `datetime` | `enum` | `reference`。
 - `required`：必填列在追加数据时不能为空。
 - `values`：只有 `enum` 用，列出全部可选项。
+- `ref_table` / `ref_label`：只有 `reference` 用；引用同一应用内另一张表的行，值是目标 `row_id`，`ref_label` 指定显示列（不填取目标表第一个非敏感文本列）。写入/导入时目标行必须已存在；被引用行不能直接删除，`replace` 同步也不能覆盖仍被引用的表。不做级联、不做多对多。
 
 字段定错了只能追加、不能改也不能删，所以先想清楚——宁可少而准。
 
@@ -108,7 +113,9 @@
 
 ### 第 3 步 · 用 SDK 取数
 
-宿主会在页面里注入 `window.octopApp`：
+宿主会在页面里注入 `window.octopApp`。**写操作不只有新增**：`appendRow` 新增、
+`updateRow` / `updateRows` 修改、`deleteRow` 删除；三者都走 `data.write`，
+`listRows()` 返回的 `row_meta` 里有 `row_id`，更新/删除要用它。
 
 ```js
 // 表清单 → { tables: [{ table_key, label, row_count, is_main }] }
@@ -122,11 +129,24 @@ const orderColumns = await octopApp.schema('orders');   // 指定表
 const { rows, total } = await octopApp.listRows({ limit: 200, offset: 0 });
 const orders = await octopApp.listRows({ table: 'orders', limit: 200 });
 
+// 引用列：expandRefs 让宿主补 label，refs[列名][row_id] = 显示文本
+// 引用值是 row_id；没有 label 时页面应回退显示 row_id
+const page = await octopApp.listRows({ table: 'orders', expandRefs: true });
+const customerName = page.refs?.customer?.[page.rows[0].customer] ?? page.rows[0].customer;
+
 // 筛选 + 排序（服务端做，filter 可重复；sort 加前缀 - 表示倒序）
 const pending = await octopApp.listRows({
   filters: { status: 'pending' },
   sort: '-created_at'
 });
+
+// 分组汇总（服务端聚合，不要拉全表自己算）
+// → { table, group_by, metric, agg, groups: [{ key, value, count }], matched_rows }
+const byStatus = await octopApp.aggregate({
+  groupBy: 'status', metric: 'amount', agg: 'sum',
+  filters: { status: 'done' }, limit: 20
+});
+const counts = await octopApp.aggregate({ groupBy: 'status', agg: 'count' });
 
 // 追加一行 → { row_index, row, table }
 const saved = await octopApp.appendRow({ title: '写周报', done: false });
@@ -155,13 +175,21 @@ const off = octopApp.onDataChange(function (detail) {
 // 页面卸载前调用 off() 取消订阅
 
 // 调用 owner 声明的只读外部服务（需要 external.fetch 能力）
-const book = await octopApp.service("douban").call("fetch_json", {
-  url: "https://api.example.com/books"
+// 读书记录用内置 douban adapter：search_books / get_book / get_cover
+const { results } = await octopApp.service("douban").call("search_books", {
+  keyword: "三体", limit: 5
+});
+const book = await octopApp.service("douban").call("get_book", {
+  subject_id: results[0].id
+});
+// 需要显示缓存状态时用 callDetailed；call() 仍只返回 value
+const detail = await octopApp.service("douban").callDetailed("get_book", {
+  isbn: "9787536692930"
 });
 
 // 拉取公开图片并转成 asset 名，再用 asset() 渲染
-const cover = await octopApp.service("douban").image("https://api.example.com/cover.png");
-document.querySelector("img").src = await octopApp.asset(cover);
+const cover = await octopApp.service("douban").image(book.cover);
+document.querySelector("img").src = (await octopApp.asset(cover)).data_url;
 
 // 读取事件收件箱（需要 events.read）；用 latest_id 作为下一次的 since
 let cursor = 0;
@@ -173,6 +201,15 @@ async function pollEvents() {
     renderEvents(page.events);
   }
 }
+
+// 出站事件（owner 先在应用详情页声明 Webhook，并开启 events.emit 能力）
+// 页面不能指定目标地址；投递至少一次，重试时复用 clientEventId 去重
+const delivered = await octopApp.emitEvent(
+  "order.approved",
+  { order_id: "A-1" },
+  { summary: "订单已审核", clientEventId: "req-20261117-001" }
+);
+// → { external_id, emitted, duplicates, deliveries, webhooks: [...] }
 ```
 
 要点：
@@ -189,6 +226,7 @@ async function pollEvents() {
 - `service(name)` 只能调用 owner 在服务声明里允许的只读工具；URL 必须落在声明的前缀内。页面拿不到 connector 凭据，也不要在 HTML 里写凭据。缓存/限流由宿主处理；调用失败要 catch 并给用户提示。
 - 公开链接不会 live 调用外部服务：只有 owner 开启 `public_live` 且缓存里已有命中时，公开页的 `service(name).call()` 才能读到数据。
 - 事件收件箱只在登录态页面可用；公开链接没有事件接口。`ackEvents()` 只标记已处理，不会删除事件。
+- 出站事件由 owner 在应用详情页声明 Webhook 地址和事件类型（精确名、`order.*` 或 `*`）；页面只负责 `emitEvent()`，不能指定 URL、也拿不到签名密钥。payload 上限 64KB；没有匹配的启用 Webhook 时会 reject。投递至少一次，接收方要按 `event_id` / 业务键做幂等。
 
 页面里要跳转到站外链接时，不要写 `<a href="https://…">`（会被当成外链拒绝），改用：
 

@@ -8,6 +8,7 @@ and permission checks do not need to touch every agent workspace.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -186,6 +187,51 @@ class LightAppDataRow:
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
         )
+
+
+@dataclass(frozen=True)
+class LightAppRowHistoryRow:
+    """One append-only row change record."""
+
+    history_id: int
+    app_id: str
+    table_key: str
+    row_id: str
+    version: int
+    action: str
+    actor: str
+    source: str
+    before: dict[str, str] | None
+    after: dict[str, str] | None
+    changed_at: int
+
+    @classmethod
+    def from_row(cls, r: DbRow) -> LightAppRowHistoryRow:
+        return cls(
+            history_id=int(r["id"]),
+            app_id=str(r["app_id"]),
+            table_key=str(r["table_key"]),
+            row_id=str(r["row_id"]),
+            version=int(r["version"] or 1),
+            action=str(r["action"]),
+            actor=str(r["actor"]),
+            source=str(r["source"] or ""),
+            before=_history_values(r["before_json"]),
+            after=_history_values(r["after_json"]),
+            changed_at=int(r["changed_at"]),
+        )
+
+
+def _history_values(raw: Any) -> dict[str, str] | None:
+    if raw is None:
+        return None
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(key): str(value) for key, value in parsed.items()}
 
 
 ASSISTANT_HISTORY_KEEP = 200
@@ -457,22 +503,28 @@ class LightAppRepo:
         *,
         source: str = "manual",
         created_by: int | None = None,
+        row_ids: Sequence[str] | None = None,
     ) -> int:
-        """Bulk-insert rows and update the table stats once."""
+        """Bulk-insert rows and update the table stats once.
+
+        ``row_ids`` preserves ids from a backup/restore; omit it for new rows.
+        """
         if not rows:
             return 0
+        if row_ids is not None and len(row_ids) != len(rows):
+            raise ValueError("row_ids must be parallel to rows")
         ts = now_ts()
         payloads = [json.dumps(values, ensure_ascii=False) for values in rows]
         total_bytes = sum(len(payload.encode("utf-8")) for payload in payloads)
         with self._db.transaction() as conn:
-            for payload in payloads:
+            for index, payload in enumerate(payloads):
                 conn.execute(
                     "INSERT INTO light_app_rows("
                     "row_id, app_id, table_key, values_json, version, source, "
                     "created_by, created_at, updated_at"
                     ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
                     (
-                        f"row_{new_short_id(12)}",
+                        row_ids[index] if row_ids is not None else f"row_{new_short_id(12)}",
                         app_id,
                         table_key,
                         payload,
@@ -524,6 +576,27 @@ class LightAppRepo:
             ).fetchall()
         return map_rows(rows, LightAppDataRow)
 
+    def list_data_rows_by_ids(
+        self, app_id: str, table_key: str, row_ids: Sequence[str]
+    ) -> list[LightAppDataRow]:
+        """Resolve reference targets without loading the whole table."""
+        ids = [str(item) for item in dict.fromkeys(row_ids) if item]
+        if not ids:
+            return []
+        rows: list[DbRow] = []
+        with self._db.connect() as conn:
+            for start in range(0, len(ids), 400):
+                chunk = ids[start : start + 400]
+                placeholders = ", ".join("?" for _ in chunk)
+                rows.extend(
+                    conn.execute(
+                        "SELECT * FROM light_app_rows WHERE app_id = ? AND table_key = ? "
+                        f"AND row_id IN ({placeholders}) ORDER BY id",
+                        (app_id, table_key, *chunk),
+                    ).fetchall()
+                )
+        return map_rows(rows, LightAppDataRow)
+
     def find_data_row_by_source(
         self,
         app_id: str,
@@ -555,6 +628,22 @@ class LightAppRepo:
             if r["client_request_id"] and str(r["client_request_id"]).startswith(needle)
         }
 
+    def list_data_rows_by_client_request_prefix(
+        self,
+        app_id: str,
+        prefix: str,
+        *,
+        limit: int = 50,
+    ) -> list[LightAppDataRow]:
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM light_app_rows WHERE app_id = ? "
+                "AND client_request_id LIKE ? ESCAPE '\\' ORDER BY id LIMIT ?",
+                (app_id, f"{escaped}%", max(1, min(int(limit), 200))),
+            ).fetchall()
+        return map_rows(rows, LightAppDataRow)
+
     def find_data_row_by_client_request_id(
         self,
         app_id: str,
@@ -582,8 +671,15 @@ class LightAppRepo:
         values: dict[str, str],
         *,
         expected_version: int | None = None,
+        history_actor: str | None = None,
+        history_source: str = "",
     ) -> LightAppDataRow | None:
-        """Update one row with an optional CAS check; None means stale/missing."""
+        """Update one row with an optional CAS check; None means stale/missing.
+
+        ``history_actor`` is the ``user:<id>``/``_system`` label recorded in
+        ``light_app_row_history``; omit it to skip history (migrations and
+        other non-user writes).
+        """
         ts = now_ts()
         payload = json.dumps(values, ensure_ascii=False)
         with self._db.transaction() as conn:
@@ -614,6 +710,20 @@ class LightAppRepo:
                 "SELECT * FROM light_app_rows WHERE app_id = ? AND row_id = ?",
                 (app_id, row_id),
             ).fetchone()
+            if history_actor is not None:
+                self._insert_row_history_conn(
+                    conn,
+                    app_id=app_id,
+                    table_key=str(existing["table_key"]),
+                    row_id=row_id,
+                    version=int(updated["version"]),
+                    action="update",
+                    actor=history_actor,
+                    source=history_source,
+                    before_json=str(existing["values_json"]),
+                    after_json=payload,
+                    changed_at=ts,
+                )
         return LightAppDataRow.from_row(updated)
 
     def delete_data_row(
@@ -622,6 +732,8 @@ class LightAppRepo:
         row_id: str,
         *,
         expected_version: int | None = None,
+        history_actor: str | None = None,
+        history_source: str = "",
     ) -> bool:
         """Delete one row with an optional CAS check."""
         with self._db.transaction() as conn:
@@ -646,6 +758,20 @@ class LightAppRepo:
                 row_delta=-1,
                 bytes_delta=-len(str(existing["values_json"])),
             )
+            if history_actor is not None:
+                self._insert_row_history_conn(
+                    conn,
+                    app_id=app_id,
+                    table_key=str(existing["table_key"]),
+                    row_id=row_id,
+                    version=int(existing["version"]),
+                    action="delete",
+                    actor=history_actor,
+                    source=history_source,
+                    before_json=str(existing["values_json"]),
+                    after_json=None,
+                    changed_at=now_ts(),
+                )
         return True
 
     def replace_data_rows(
@@ -656,12 +782,25 @@ class LightAppRepo:
         *,
         source: str = "manual",
         created_by: int | None = None,
+        history_actor: str | None = None,
     ) -> int:
-        """Replace every row of one table in a single transaction."""
+        """Replace every row of one table in a single transaction.
+
+        When ``history_actor`` is set, every overwritten row gets a
+        ``replace`` history entry with its old values. The new rows are not
+        recorded individually: their ids/created_at/source are in the table.
+        """
         ts = now_ts()
         payloads = [json.dumps(values, ensure_ascii=False) for values in rows]
         total_bytes = sum(len(payload.encode("utf-8")) for payload in payloads)
         with self._db.transaction() as conn:
+            previous: list[DbRow] = []
+            if history_actor is not None:
+                previous = conn.execute(
+                    "SELECT row_id, values_json, version FROM light_app_rows "
+                    "WHERE app_id = ? AND table_key = ?",
+                    (app_id, table_key),
+                ).fetchall()
             conn.execute(
                 "DELETE FROM light_app_rows WHERE app_id = ? AND table_key = ?",
                 (app_id, table_key),
@@ -683,6 +822,21 @@ class LightAppRepo:
                         ts,
                     ),
                 )
+            if history_actor is not None:
+                for old in previous:
+                    self._insert_row_history_conn(
+                        conn,
+                        app_id=app_id,
+                        table_key=table_key,
+                        row_id=str(old["row_id"]),
+                        version=int(old["version"]),
+                        action="replace",
+                        actor=history_actor,
+                        source=source,
+                        before_json=str(old["values_json"]),
+                        after_json=None,
+                        changed_at=ts,
+                    )
             conn.execute(
                 "UPDATE light_app_tables SET row_count = ?, data_bytes = ?, "
                 "data_version = data_version + 1, updated_at = ? "
@@ -733,6 +887,65 @@ class LightAppRepo:
         with self._db.connect() as conn:
             row = conn.execute(sql, tuple(params)).fetchone()
         return int(row["c"]) if row else 0
+
+    def list_row_history(
+        self,
+        app_id: str,
+        row_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[LightAppRowHistoryRow]:
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM light_app_row_history "
+                "WHERE app_id = ? AND row_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (app_id, row_id, limit, offset),
+            ).fetchall()
+        return map_rows(rows, LightAppRowHistoryRow)
+
+    def delete_row_history_before(self, cutoff_ts: int) -> int:
+        """Drop row-history entries older than *cutoff_ts*; returns the count."""
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM light_app_row_history WHERE changed_at < ?",
+                (cutoff_ts,),
+            )
+        return int(cursor.rowcount or 0)
+
+    @staticmethod
+    def _insert_row_history_conn(
+        conn: Any,
+        *,
+        app_id: str,
+        table_key: str,
+        row_id: str,
+        version: int,
+        action: str,
+        actor: str,
+        source: str,
+        before_json: str | None,
+        after_json: str | None,
+        changed_at: int,
+    ) -> None:
+        conn.execute(
+            "INSERT INTO light_app_row_history("
+            "app_id, table_key, row_id, version, action, actor, source, "
+            "before_json, after_json, changed_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                app_id,
+                table_key,
+                row_id,
+                version,
+                action,
+                actor,
+                source,
+                before_json,
+                after_json,
+                changed_at,
+            ),
+        )
 
     def set_storage_version(self, app_id: str, version: int) -> None:
         with self._db.transaction() as conn:
@@ -897,6 +1110,22 @@ class LightAppRepo:
 
     def delete(self, app_id: str) -> None:
         with self._db.transaction() as conn:
+            # An outbound webhook owns an internal event source. Deleting the
+            # app cascades its webhook rows, but the source would outlive them
+            # and linger in the external-events UI; deleting the source also
+            # cascades its subscription and the webhook row.
+            conn.execute(
+                "DELETE FROM external_sources WHERE kind = 'app_outbound' "
+                "AND source_id IN ("
+                "SELECT source_id FROM light_app_webhooks WHERE app_id = ?)",
+                (app_id,),
+            )
+            conn.execute(
+                "DELETE FROM external_sources WHERE kind = 'app_ingress' "
+                "AND source_id IN ("
+                "SELECT source_id FROM light_app_ingress WHERE app_id = ?)",
+                (app_id,),
+            )
             conn.execute("DELETE FROM light_apps WHERE app_id = ?", (app_id,))
 
     def list_collaborators(self, app_id: str) -> list[LightAppCollaboratorRow]:

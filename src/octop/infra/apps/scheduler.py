@@ -47,6 +47,9 @@ LEASE_SECONDS = 300
 
 HEARTBEAT_SECONDS = 60
 
+HOUSEKEEPING_SECONDS = 24 * 3600
+"""How often to trim old row-history entries."""
+
 DEFAULT_ACTION_TIMEOUT_SECONDS = 15 * 60
 """Hard ceiling for one run; a hung action must not hold its lease forever."""
 
@@ -73,6 +76,7 @@ class AppSourceScheduler:
         self._scan_seconds = scan_seconds
         self._clock = clock or time.time
         self._action_timeouts = dict(action_timeouts or ACTION_TIMEOUTS)
+        self._last_housekeeping = 0.0
         self._task: asyncio.Task[None] | None = None
 
     def replace_persistence(
@@ -111,6 +115,12 @@ class AppSourceScheduler:
     async def tick(self, *, now: int | None = None) -> int:
         """Run every due schedule once; returns how many jobs ran."""
         now = int(self._clock()) if now is None else now
+        if now - self._last_housekeeping >= HOUSEKEEPING_SECONDS:
+            self._last_housekeeping = now
+            try:
+                self._service.trim_row_history()
+            except Exception:
+                logger.warning("light app row-history trim failed", exc_info=True)
         due = self._schedule_repo.list_due(now)
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 

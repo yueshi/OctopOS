@@ -12,6 +12,8 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from octop.infra.apps.tool_policy import APP_HITL_TOOL_NAMES
+
 if TYPE_CHECKING:
     from octop.infra.db.repos.threads import ThreadRepo
 
@@ -19,7 +21,8 @@ HitlSessionMode = Literal["ask", "allow_all", "allow_tools"]
 
 _ASK_USER_TOOL_NAME = "ask_user_question"
 # Tools whose approval must never be skipped by a per-thread bypass.
-MANDATORY_HITL_TOOLS = frozenset({"app_delete"})
+MANDATORY_HITL_TOOLS = frozenset({"app_delete"}) | APP_HITL_TOOL_NAMES
+
 _MAX_TOOLS = 64
 _MAX_TOOL_NAME = 128
 _CURRENT_HITL_THREAD: ContextVar[str | None] = ContextVar(

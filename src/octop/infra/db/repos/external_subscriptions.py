@@ -73,7 +73,7 @@ class ExternalSubscriptionRepo:
         coalesce_seconds: int = 0,
         max_per_minute: int = 0,
     ) -> ExternalSubscriptionRow:
-        subscription_id = new_short_id()
+        subscription_id = new_short_id(16)
         ts = now_ts()
         with self._db.transaction() as conn:
             conn.execute(
@@ -123,6 +123,15 @@ class ExternalSubscriptionRepo:
         sql += " ORDER BY id"
         with self._db.connect() as conn:
             rows = conn.execute(sql, (source_id,)).fetchall()
+        return map_rows(rows, ExternalSubscriptionRow)
+
+    def list_for_target(self, target_type: str, target_id: str) -> list[ExternalSubscriptionRow]:
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM external_subscriptions "
+                "WHERE target_type = ? AND target_id = ? ORDER BY id",
+                (target_type, target_id),
+            ).fetchall()
         return map_rows(rows, ExternalSubscriptionRow)
 
     def list_for_owner(self, owner_user_id: int | None) -> list[ExternalSubscriptionRow]:

@@ -88,6 +88,7 @@ import AppInfoDrawer from "./detail/AppInfoDrawer";
 import AppInterfaceTab from "./detail/AppInterfaceTab";
 import AppPublishModal from "./detail/AppPublishModal";
 import AppShareModal from "./detail/AppShareModal";
+import RowHistoryDrawer from "./detail/RowHistoryDrawer";
 import { permissionLabel } from "./detail/shared";
 import type { ShareDraft } from "./detail/types";
 
@@ -209,7 +210,13 @@ export default function AppDetailPage() {
   const [dataTable, setDataTable] = useState("main");
   const [dataSearch, setDataSearch] = useState("");
   const [dataRows, setDataRows] = useState<Record<string, string>[]>([]);
+  const [dataRefs, setDataRefs] = useState<
+    Record<string, Record<string, string>>
+  >({});
   const [dataRowMeta, setDataRowMeta] = useState<AppRowMeta[]>([]);
+  const [refOptions, setRefOptions] = useState<
+    Record<string, { value: string; label: string }[]>
+  >({});
   const [dataTotal, setDataTotal] = useState(0);
   const [dataPage, setDataPage] = useState(1);
   const [dataLoading, setDataLoading] = useState(false);
@@ -219,6 +226,7 @@ export default function AppDetailPage() {
     version: number;
   } | null>(null);
   const [rowSaving, setRowSaving] = useState(false);
+  const [historyRowId, setHistoryRowId] = useState<string | null>(null);
   const [rowForm] = Form.useForm<Record<string, unknown>>();
   const dataPageSize = 50;
 
@@ -380,6 +388,7 @@ export default function AppDetailPage() {
               params.table || "main",
               params.filters,
               params.sort,
+              params.expandRefs === true,
             );
           }
           if (method === "append") {
@@ -553,11 +562,14 @@ export default function AppDetailPage() {
     detail?.tables.find((item) => item.table_key === dataTable)?.columns ??
     detail?.columns ??
     [];
+  const hasReferenceColumns = dataColumns.some(
+    (column) => column.type === "reference",
+  );
   const canEditRows = detail?.permission !== "view";
   const dataTableWidth =
     dataColumns.reduce((sum, column) => sum + dataColumnWidth(column.type), 0) +
     SOURCE_COLUMN_WIDTH +
-    (canEditRows ? ACTIONS_COLUMN_WIDTH : 0);
+    ACTIONS_COLUMN_WIDTH;
   const dataQuery = dataSearch.trim().toLowerCase();
   const visibleRows = dataRows
     .map((row, index) => ({ row, meta: dataRowMeta[index] }))
@@ -579,8 +591,12 @@ export default function AppDetailPage() {
           dataPageSize,
           (page - 1) * dataPageSize,
           dataTable,
+          undefined,
+          undefined,
+          hasReferenceColumns,
         );
         setDataRows(result.rows);
+        setDataRefs(result.refs ?? {});
         setDataRowMeta(result.row_meta);
         setDataTotal(result.total);
         setDataPage(page);
@@ -590,7 +606,7 @@ export default function AppDetailPage() {
         setDataLoading(false);
       }
     },
-    [appId, dataTable, t],
+    [appId, dataTable, hasReferenceColumns, t],
   );
 
   useEffect(() => {
@@ -611,10 +627,47 @@ export default function AppDetailPage() {
     if (activeView === "data") void loadData(dataPage);
   }, [dataVersion, activeView, dataPage, loadData]);
 
+  const loadReferenceOptions = async () => {
+    if (!appId) return;
+    const next: Record<string, { value: string; label: string }[]> = {};
+    await Promise.all(
+      dataColumns
+        .filter((column) => column.type === "reference" && column.ref_table)
+        .map(async (column) => {
+          try {
+            const result = await appsApi.rows(
+              appId,
+              500,
+              0,
+              column.ref_table as string,
+            );
+            const labelColumn =
+              column.ref_label ||
+              result.columns.find(
+                (item) => item.type === "string" || item.type === "text",
+              )?.name;
+            next[column.name] = result.rows
+              .map((row, index) => {
+                const rowId = result.row_meta[index]?.row_id ?? "";
+                return {
+                  value: rowId,
+                  label: (labelColumn && row[labelColumn]) || rowId,
+                };
+              })
+              .filter((item) => item.value);
+          } catch {
+            next[column.name] = [];
+          }
+        }),
+    );
+    setRefOptions(next);
+  };
+
   const openAddRow = () => {
     setRowEdit(null);
     rowForm.resetFields();
     setRowModalOpen(true);
+    void loadReferenceOptions();
   };
 
   const openEditRow = (
@@ -625,6 +678,7 @@ export default function AppDetailPage() {
     setRowEdit(meta);
     rowForm.setFieldsValue(values);
     setRowModalOpen(true);
+    void loadReferenceOptions();
   };
 
   const submitRow = async () => {
@@ -1450,6 +1504,7 @@ export default function AppDetailPage() {
                   canEditRows={canEditRows}
                   columns={dataColumns}
                   rows={visibleRows}
+                  refs={dataRefs}
                   loading={dataLoading}
                   page={dataPage}
                   pageSize={dataPageSize}
@@ -1463,6 +1518,9 @@ export default function AppDetailPage() {
                   onBackup={() => void backupApp()}
                   onEditRow={openEditRow}
                   onDeleteRow={(meta) => void removeRow(meta)}
+                  onViewHistory={(meta) =>
+                    meta?.row_id ? setHistoryRowId(meta.row_id) : undefined
+                  }
                 />
               ),
             },
@@ -1486,6 +1544,11 @@ export default function AppDetailPage() {
               key={column.name}
               name={column.name}
               label={column.label || column.name}
+              extra={
+                column.type === "reference"
+                  ? t("apps.referenceOptionsHint")
+                  : undefined
+              }
               rules={
                 column.required
                   ? [{ required: true, message: t("apps.requiredField") }]
@@ -1499,6 +1562,14 @@ export default function AppDetailPage() {
                     value,
                     label: value,
                   }))}
+                />
+              ) : column.type === "reference" ? (
+                <Select
+                  allowClear={!column.required}
+                  showSearch
+                  optionFilterProp="label"
+                  options={refOptions[column.name] ?? []}
+                  placeholder={t("apps.referenceSelect")}
                 />
               ) : (
                 <Input
@@ -1859,6 +1930,15 @@ export default function AppDetailPage() {
         onOpenSourceModal={openSourceModal}
         onRunSource={(source) => void runSourceNow(source)}
         onRemoveSource={(source) => void removeSource(source)}
+      />
+
+      <RowHistoryDrawer
+        open={historyRowId !== null}
+        onClose={() => setHistoryRowId(null)}
+        appId={appId}
+        rowId={historyRowId ?? ""}
+        columns={dataColumns}
+        canSeePii={detail?.permission !== "view"}
       />
 
       <AppAssistantDrawer

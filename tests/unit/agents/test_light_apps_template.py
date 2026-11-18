@@ -31,6 +31,30 @@ def test_manifest_declares_task_examples() -> None:
     assert len(parsed["zh"]) == len(parsed["en"]) == 3
 
 
+def test_reading_tracker_template_is_wired_to_douban() -> None:
+    from octop.infra.apps.models import validate_html
+
+    template = _DIR / "app_templates" / "reading-tracker"
+    schema = json.loads((template / "schema.json").read_text(encoding="utf-8"))
+    assert {"title", "author", "cover", "douban_id"} <= {
+        column["name"] for column in schema["columns"]
+    }
+
+    services = json.loads((template / "services.json").read_text(encoding="utf-8"))
+    assert services["services"][0]["name"] == "douban"
+    assert services["services"][0]["connector_kind"] == "douban"
+    assert {"search_books", "get_book", "get_cover"} <= set(
+        services["services"][0]["allowed_tools"]
+    )
+
+    html = (template / "app.html").read_text(encoding="utf-8")
+    validate_html(html)
+    assert 'service("douban")' in html
+    assert "search_books" in html
+    assert "get_book" in html
+    assert "external.fetch" in html
+
+
 def test_prompt_files_cover_the_hard_rules() -> None:
     agents_md = (_DIR / "AGENTS.md").read_text(encoding="utf-8")
     soul_md = (_DIR / "SOUL.md").read_text(encoding="utf-8")

@@ -6,7 +6,10 @@ leaves ``status='delivering'`` until :meth:`requeue_expired` puts it back.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos._base import DbRow, now_ts
@@ -26,10 +29,19 @@ class ExternalDeliveryRow:
     lease_until: int | None
     last_error: str
     delivered_at: int | None
+    result: dict[str, Any]
     created_at: int
 
     @classmethod
     def from_row(cls, r: DbRow) -> ExternalDeliveryRow:
+        try:
+            raw_result = r["result_json"]
+        except (KeyError, IndexError):
+            raw_result = "{}"
+        try:
+            result = json.loads(str(raw_result or "{}"))
+        except ValueError:
+            result = {}
         return cls(
             pk=int(r["id"]),
             delivery_id=str(r["delivery_id"]),
@@ -43,6 +55,7 @@ class ExternalDeliveryRow:
             lease_until=int(r["lease_until"]) if r["lease_until"] is not None else None,
             last_error=str(r["last_error"] or ""),
             delivered_at=int(r["delivered_at"]) if r["delivered_at"] is not None else None,
+            result=result if isinstance(result, dict) else {},
             created_at=int(r["created_at"]),
         )
 
@@ -63,6 +76,22 @@ class ExternalDeliveryRepo:
             rows = conn.execute(
                 "SELECT * FROM external_deliveries WHERE event_id = ? ORDER BY id",
                 (event_id,),
+            ).fetchall()
+        return [ExternalDeliveryRow.from_row(row) for row in rows]
+
+    def list_for_target(
+        self,
+        target_type: str,
+        target_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[ExternalDeliveryRow]:
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM external_deliveries "
+                "WHERE target_type = ? AND target_id = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (target_type, target_id, max(1, min(int(limit), 1000))),
             ).fetchall()
         return [ExternalDeliveryRow.from_row(row) for row in rows]
 
@@ -133,14 +162,24 @@ class ExternalDeliveryRepo:
         attempt: int,
         last_error: str = "",
         next_retry_at: int | None = None,
+        result: Mapping[str, Any] | None = None,
     ) -> None:
         delivered_at = now_ts() if status == "delivered" else None
+        result_json = json.dumps(dict(result or {}), ensure_ascii=False, sort_keys=True)
         with self._db.transaction() as conn:
             conn.execute(
                 "UPDATE external_deliveries SET status = ?, attempt = ?, "
-                "next_retry_at = ?, lease_until = NULL, last_error = ?, delivered_at = ? "
-                "WHERE delivery_id = ?",
-                (status, attempt, next_retry_at, last_error[:2000], delivered_at, delivery_id),
+                "next_retry_at = ?, lease_until = NULL, last_error = ?, delivered_at = ?, "
+                "result_json = ? WHERE delivery_id = ?",
+                (
+                    status,
+                    attempt,
+                    next_retry_at,
+                    last_error[:2000],
+                    delivered_at,
+                    result_json,
+                    delivery_id,
+                ),
             )
 
     def requeue_expired(self, now: int) -> int:
@@ -157,8 +196,8 @@ class ExternalDeliveryRepo:
         with self._db.transaction() as conn:
             cur = conn.execute(
                 "UPDATE external_deliveries SET status = 'pending', attempt = 0, "
-                "next_retry_at = ?, lease_until = NULL, last_error = '', delivered_at = NULL "
-                "WHERE delivery_id = ? AND status IN ('failed', 'dead')",
+                "next_retry_at = ?, lease_until = NULL, last_error = '', delivered_at = NULL, "
+                "result_json = '{}' WHERE delivery_id = ? AND status IN ('failed', 'dead')",
                 (now_ts(), delivery_id),
             )
         return bool(cur.rowcount)

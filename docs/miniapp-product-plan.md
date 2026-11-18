@@ -6,6 +6,11 @@
 > [MiniApp 平台路线图](./miniapp-platform-roadmap.md)；阶段执行细节见
 > [MiniApp 实施落地计划](./miniapp-implementation-plan.md)。本文只回答两个问题：
 > **这个产品为谁而做、不做什么；以及按什么顺序把它做完。**
+>
+> **现状更新（2026-11-18）：** 页面写能力已补齐：`updateRow` / `updateRows` / `deleteRow`
+> 已于 2026-11-15 落地（行级 CAS、批量逐行提交），行查询 `filter` / `sort` 与
+> `data_version` 轮询也已支持。本文 §2 中“当前缺口：页面只能新增”等段落是撰写时的
+> 历史快照，**不要作为当前能力依据**；当前口径以 overview 与代码为准。
 
 ---
 
@@ -53,7 +58,8 @@
 > 判据：**要「嵌到别处、免登录、单表或少表、读多写少」→ MiniApp；要「多页、要逐帧剪辑、要重交互」→ React；
 > 要「权威数据与编排」→ 原生表 + cron/events。**
 >
-> 「读多写少」是 MiniApp 的能力现状（页面只能新增），不是价值判断 —— §4 阶段 1 会把它补齐。
+> 「读多写少」是 MiniApp 的典型使用形态，不是能力限制；页面写能力
+> （`updateRow` / `updateRows` / `deleteRow`）已于 2026-11-15 补齐。
 
 ### 1.4 MCP Apps：分发面，不是地基
 
@@ -134,9 +140,10 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 - **谁**：业务同事、门店/班组负责人、运营助理。
 - **怎么做**：Excel 快速模式建表（确定性、不打 LLM）→ 配 `row_scope=user` → 配状态机规则 →
   页面做填报/筛选/汇总 → 按人可见。
-- **当前缺口**：页面只能新增不能修改（无 `updateRow`）；行查询无 filter/sort；
-  多浏览器不实时同步（`data_version` 未轮询）。
-- **判定**：**这是 MiniApp 最该吃下的场景**，且三个缺口都很便宜。
+- **原缺口（已补齐）**：页面写能力（`updateRow` / `updateRows` / `deleteRow`，2026-11-15）、
+  行查询 `filter` / `sort`、`data_version` 轮询（2026-11-15）均已落地；
+  当前按 `row_scope=user` + 状态机设计多人填报即可。
+- **判定**：**这是 MiniApp 最该吃下的场景**。
 
 ### 场景 B：轻看板与摘要卡（单人或小团队）
 
@@ -158,8 +165,8 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 - **谁**：审片人、质检、合规；以及需要「看内容 → 判断 → 留痕」的所有人。
 - **怎么做**：表 + 状态机规则（`state_field` + `transitions`）承载审核流转 → 页面做列表 +
   内容预览 + 通过/驳回 + 意见 → 导出审核记录 → 挂到工作台；Agent（质检 Agent）直接读写同一张表。
-- **当前缺口**：页面只有 `appendRow`（`dashboard/src/components/MiniAppFrame/sdk.ts:85-107`），
-  **改不了行** → 状态机跃迁无法驱动；行查询无 filter/sort；页面不能上传文件；
+- **当前状态**：页面写能力已补齐（`updateRow` / `updateRows` / `deleteRow`，2026-11-15），
+  状态机跃迁可由页面驱动；行查询已支持 `filter` / `sort`。剩余缺口是**页面不能上传文件**、
   **页面放不了视频**（CSP `media-src data: blob:`；写时扫描不拦相对 URL，
   `src/octop/infra/apps/models.py:620-625`，唯一关卡在运行时 CSP）。
 - **判定**：**数据模型天然契合**（状态机、行级范围、ACL、审计、导出、嵌入全部现成），
@@ -201,7 +208,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | 权限语义收口（`edit_schema` / `manage` 拆分） | 高 | 需一次 API 破坏性变更的决策 |
 | 访问申请：owner 分裂 + `pending` 唯一索引 | 已完成（2026-11-15，v35） | 双 owner 通知/两步批准；partial unique index |
 | R2.1 外部服务 `light_app_services` | 部分完成（v36） | 声明/调用/缓存/Agent 工具/图片资产/公开缓存已落地；promote 待做 |
-| R2.2 事件收件箱 / `events.emit` | 部分完成（v37） | 收件箱/游标/ack/SDK/触发器/app.import 幂等已落地；出站事件待做 |
+| R2.2 事件收件箱 / `events.emit` | 完成（v37 + v42） | 收件箱/游标/ack/SDK/触发器/app.import 幂等已落地；出站事件复用 `infra/events` outbox + HMAC webhook |
 | R2.3 应用级调度 `light_app_schedules` | 中 | 见 §4 阶段 4（只做两个动作） |
 | R2.3 最小 workflow runner | 低（建议不做） | 见 §6 取舍 3 |
 | R2.4 公开看板 | 中（可滑档） | 见 §4 阶段 5 |
@@ -212,9 +219,9 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | 行查询 `filter` / `sort` | **已完成（2026-11-15）** | `GET /rows?filter=&sort=`；未下推，见 §3.3 P0-4 |
 | 页面上传通道 | 中 | 见 §4 阶段 1、§3.3 P0-5；需 owner 授权 + 白名单 |
 | 同源媒体端点 + CSP `media-src` 放开 + 媒体令牌 | 中 | 见 §4 阶段 1.5 |
-| **行级变更历史** | **高（MVP 阻断）** | 审计里没有行写入；见 §3.3 P0-1 |
-| **引用列 / 跨表聚合** | **高（MVP 阻断）** | 无 relation 类型、无聚合端点；见 §3.3 P0-2 |
-| **存储与派生副本收口** | 高（MVP 阻断） | 见 §5、§3.3 P0-3：v2 工作区 CSV 空壳、计数副本三份、无单一写入点 |
+| 行级变更历史 | **已完成（2026-11-17，v40）** | `light_app_row_history` + update/delete/replace 写入 + `GET /api/apps/{id}/rows/{row_id}/history`；见 §3.3 P0-1 |
+| 引用列 / 跨表聚合 | **已完成（2026-11-18）** | `reference` 列（`ref_table` / `ref_label`）+ 写入校验 + 删除/替换守卫 + `expand_refs` label 展开 + 备份 v2 行 id 重映射；无多对多/级联；见 §3.3 P0-2 |
+| 存储与派生副本收口 | **已完成（2026-11-17）** | v2 不再写空 CSV；manifest 去掉 `row_count`；写后统一走 `_after_write`；见 §3.3 P0-3 / §5 |
 | 能力位版本化（`CAPABILITIES_VERSION`） | 中 | 页面契约演进依据；见 §3.3 P1-7 |
 | 按应用选择模型 | 低 | 目前用 owning agent 默认模型 |
 
@@ -224,24 +231,25 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 > 不用功能数量衡量，用"能不能撑住三类真实工作"衡量。路线图（§4）服务于这里的验收线；
 > 与验收线无关的阶段可以滑档。
 >
-> 进度快照（2026-11-15）：页面写、行查询 filter/sort、`data_version` 两段式轮询已落地；
-> 行级变更历史、引用完整性、存储收口、查询下推、上传通道仍未落地。
+> 进度快照（2026-11-18）：页面写、行查询 filter/sort、`data_version` 两段式轮询、
+> 行级变更历史（v40）、存储与派生副本收口、服务端分组聚合、引用列已落地；
+> 查询下推、上传通道仍未落地。
 
 #### 验收线
 
 | # | 验收场景 | 走通的标准 | 当前 |
 |---|---|---|---|
 | **V1 台账填报** | 多人往一张表里填 / 改 / 筛 | 新建 → 修改 → 按状态筛选 → 导出，全程页面内完成 | ✅ 基本达标 |
-| **V2 审核留痕** | 看内容 → 判定 → 留痕 → 可追溯 | 谁在何时把哪条从 A 改成 B，事后可查、可举证 | ❌ 缺行级历史 |
-| **V3 单主题报表** | 少量关联数据的汇总视图 | 不写后端，靠表内聚合 + 字典关联出数 | ❌ 缺引用列与聚合端点 |
+| **V2 审核留痕** | 看内容 → 判定 → 留痕 → 可追溯 | 谁在何时把哪条从 A 改成 B，事后可查、可举证 | ✅ 已达标（2026-11-17，v40） |
+| **V3 单主题报表** | 少量关联数据的汇总视图 | 不写后端，靠表内聚合 + 引用 label 出数 | ✅ 已达标（2026-11-18）：聚合 + 引用列 |
 
 #### P0 · 阻断验收
 
 | # | 缺口 | 现状与证据 | 最小形态 | 规模 | 验收条件 |
 |---|---|---|---|---|---|
-| **1** | **行级变更历史** | 审计动作只有管理层动作（`miniapp.quick_create`、`light_app.share`、`light_app.publication.*`、binding/service/rules、`admin_override`）；**行写入、schema 变更、HTML 写入全无审计**；`light_app_rows` 只有 `created_by` 与 `version` | `light_app_row_history(row_id, app_id, table_key, version, actor, changed_at, before_json, after_json, source)`；在 `update_row` / `delete_row` / `import_rows(replace)` 追加；`GET /api/apps/{id}/rows/{row_id}/history`；保留 N 天 | M | 改一行后能查到「谁 / 何时 / 从什么改成什么」；替换导入能定位被覆盖的行 |
-| **2** | **引用完整性最小集** | 列类型无 relation（`infra/apps/models.py:48-49`）；无聚合端点；助手 `app_query_rows` / `app_chart` 只有单表 `table` 参数 | ① `reference` 列类型：存目标表 key + `row_id`，写入时校验目标行存在，读取可带 `label`，**不做级联、不做多对多**；② `GET /api/apps/{id}/aggregate?table=&group_by=&agg=`，复用 `charts.py` 聚合 | ① 中 ② 小 | 引用不存在的目标行被拒；页面与助手都能拿到服务端分组聚合 |
-| **3** | **存储与副本收口** | v2 工作区 CSV 是空壳（实测 2 个应用与 DB 分叉）；计数三份（表级 / 应用级 / manifest）；7 处 `set_table_stats` + 3 处 `refresh_app_totals` + manifest 单独刷 | 删 v2 CSV 空壳 + manifest 去掉 `row_count` + 单一写入钩子 `_after_write` 统一算计数 / 版本 / manifest（详见 §5） | M | 工作区不再存在误导性数据文件；任一写路径后计数与 manifest 一致 |
+| **1** | ~~**行级变更历史**~~ **已完成（2026-11-17，v40）** | `light_app_row_history` 记录 `update` / `delete` / `replace` 的 before/after、actor、source；`import_rows` 的 upsert 也写入；`GET /api/apps/{id}/rows/{row_id}/history` 按视图脱敏 PII；行历史由应用调度器按 90 天清理；调度数据源的 replace/upsert 同步不写历史，避免 O(rows)/次放大 | 已交付 | 已完成 | 改一行后能查到「谁 / 何时 / 从什么改成什么」；替换导入能定位被覆盖的行 |
+| **2** | ~~**引用完整性最小集**~~ **已完成（2026-11-18）** | `reference` 列（`ref_table` / `ref_label`）存目标 `row_id`；写入/导入校验目标行存在；被引用行删除与 replace 同步被拒（`APP_ROW_IN_USE`）；`GET /rows?expand_refs=true` 返回 label；备份 v2 用 `row_ids.json` 保留关系并在恢复时重映射；聚合此前已交付 | 已交付：**不做级联、不做多对多** | 已完成 | 引用不存在的目标行被拒；删除被引用行返回明确错误；页面/Agent 能拿到 label；备份恢复后引用仍有效 |
+| **3** | ~~**存储与副本收口**~~ **已完成（2026-11-17）** | v2 create/create_table 不再写空 `data.csv`；manifest 去掉 `row_count`；所有写后 manifest 刷新收敛到 `_after_write`；计数/`data_version` 仍由 repo 在同一事务内维护 | 已交付 | 已完成 | 工作区不再存在误导性数据文件；任一写路径后计数与 manifest 一致 |
 | **4** | **查询下推 A′** | 过滤 / 排序全表取回后 Python 处理；实测 **16 ms/千行，2 万行 323 ms** | 过滤 / 排序生成 SQL 表达式（`json_extract`），跨库对齐三条语义（大小写不敏感、数值 CAST、排序稳定性）；**物化索引列（B）留作后手** | M | 2 万行筛选 ≤ 50 ms；两库同一组用例行为一致 |
 | **5** | **页面附件上传** | SDK 无上传方法；`connect-src 'none'`；素材只收图片 | `octopApp.upload(file)` → 父页面走 `POST /api/apps/{id}/upload`；owner 授权 + 大小上限 + 文件名白名单 | S | 页面能上传图片 / PDF 并在数据行里引用 |
 | **6** | ~~**`data_version` 消费端**~~ **已完成（2026-11-15）** | `GET /api/apps/{id}/data-version`（轻量）+ 5 秒两段式轮询 + `data-changed` 事件；仅在页面可见时轮询（`useMiniAppDataVersion.ts`） | — | 已完成 | 两个浏览器 5 秒内看到对方改动，且轮询不触发全表读 |
@@ -272,7 +280,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 
 | 里程碑 | 内容 | 达成后 |
 |---|---|---|
-| **MVP-1「可信」** | P0-1 行级变更历史 + P0-3 存储收口（P0-6 已完成） | **V2 审核场景成立**；数据可追溯、副本不再漂移 |
+| **MVP-1「可信」** | ~~P0-1 行级变更历史 + P0-3 存储收口~~ **已完成（2026-11-17）** | **V2 审核场景成立**；数据可追溯、副本不再漂移 |
 | **MVP-2「够快」** | P0-4 查询下推 A′ + P0-5 上传通道 | 万级台账不卡；审核能带附件 |
 | **MVP-3「能关联」** | P0-2 reference 列 + aggregate 端点 | **V3 报表场景成立** |
 | 之后 | P1 各项 + R2.1 外部服务 | 从「地基」到「平台」 |
@@ -312,10 +320,9 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 
 - **目标**：不改架构，补齐「差一口气」的读写能力，让填报、看板与审核真正可用。
 - **交付**：
-  1. **页面写能力补齐**：SDK 增加 `updateRow`（+ 批量写）——目前页面只能新增
-     （`dashboard/src/components/MiniAppFrame/sdk.ts:85-107`），状态机跃迁校验发生在行更新时
-     （`infra/apps/service.py:3236/3372`），不补这一项，审核类应用无法推进状态。
-     行级 CAS（`expected_version` → 409）服务端已有，页面补上调用即生效。
+  1. **页面写能力补齐**：SDK 增加 `updateRow`（+ 批量写）——**已于 2026-11-15 完成**
+     （`updateRow` / `updateRows` / `deleteRow`）；状态机跃迁校验发生在行更新时
+     （`infra/apps/service.py:3236/3372`），行级 CAS（`expected_version` → 409）已生效。
   2. **行查询加 filter / sort**：`GET /api/apps/{id}/rows` 支持按列等值过滤与排序，
      服务端聚合复用 `charts.py` 的 `build_chart_spec`；解决几百条以上审核队列翻不动的问题。
   3. **`data_version` 实时刷新**：前端轮询 + `data-changed` 事件，两个浏览器不再互相看不见。
@@ -374,7 +381,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 ### 阶段 3：R2.2 事件（瘦身版）
 
 > 进度（2026-11-15）：schema v37、`light_app_events`、`app.inbox` 投递、游标读取/ack、
-> 页面 SDK `events()` / `ackEvents()`、`on_create`/`on_update` 触发器、`app.import` 幂等 append 已落地；出站事件与 iframe 主动推送待做。
+> 页面 SDK `events()` / `ackEvents()`、`on_create`/`on_update` 触发器、`app.import` 幂等 append 已落地；出站 `emitEvent()` + owner 声明的 Webhook 已落地（v42）；iframe 主动推送待做。
 > 已知缺口：`light_app_events` 的幂等键尚未按 app 作用域、`ImportResult` 未写入 delivery、
 > `app_event` WS 帧还没有 dashboard 消费者。见 [event-model.md](./event-model.md) §5。
 

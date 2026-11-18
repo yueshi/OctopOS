@@ -164,7 +164,7 @@ webhook（HMAC）+ connector_poll（30 秒扫描）；订阅支持过滤/模板/
 （dashboard / ledger / board，自包含 HTML）、生成（模板 / 无 LLM 快速模式 / LLM）、
 数据源（CSV 导入 + MCP 快照同步）、只读发布链接（token hash + 发布快照）、
 应用内只读问答助手（含图表）、外部游戏接入、个人多 Board、能力清单与双层沙箱、
-24 个 `app_*` agent 工具。
+31 个 `app_*` agent 工具（3 个只读 + 4 个 HITL 入站运维工具）。
 
 **定位见 §7；完整功能、架构与实现缺口见 [MiniApp 功能与架构现状](./miniapp-overview.md)。**
 
@@ -298,7 +298,7 @@ MiniApp 不是一个平级模块，而是一条**穿透三层**的纵向链路�
 
 | 层 | 触点 |
 |---|---|
-| 执行层 | 24 个 `app_*` agent 工具 |
+| 执行层 | 31 个 `app_*` agent 工具 |
 | 数据层 | `light_apps` / `light_app_rows` / `light_app_tables` / `light_app_sources` / `light_app_publications` / `miniapp_boards` |
 | 交互层 | iframe `srcDoc` 渲染 + publication 只读公开链接 + 个人工作台看板 |
 

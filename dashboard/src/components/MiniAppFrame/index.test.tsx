@@ -179,6 +179,7 @@ describe("MiniAppFrame write bridge", () => {
         "main",
         { status: "pending" },
         "-qty",
+        false,
       ),
     );
   });

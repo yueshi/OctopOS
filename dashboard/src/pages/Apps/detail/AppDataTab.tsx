@@ -9,7 +9,12 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { Download, Plus, Upload as UploadIcon } from "lucide-react";
+import {
+  Download,
+  History as HistoryIcon,
+  Plus,
+  Upload as UploadIcon,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type {
@@ -21,7 +26,7 @@ import type {
 const { Text } = Typography;
 
 export const SOURCE_COLUMN_WIDTH = 90;
-export const ACTIONS_COLUMN_WIDTH = 150;
+export const ACTIONS_COLUMN_WIDTH = 210;
 
 /** Fixed width for a data column, by its schema type. */
 export function dataColumnWidth(type: string): number {
@@ -39,6 +44,8 @@ export function dataColumnWidth(type: string): number {
       return 140;
     case "text":
       return 260;
+    case "reference":
+      return 200;
     default:
       return 180;
   }
@@ -56,6 +63,7 @@ interface Props {
   canEditRows: boolean;
   columns: AppColumn[];
   rows: DataRowView[];
+  refs?: Record<string, Record<string, string>>;
   loading: boolean;
   page: number;
   pageSize: number;
@@ -72,6 +80,7 @@ interface Props {
     row: Record<string, string>,
   ) => void;
   onDeleteRow: (meta: AppRowMeta | undefined) => void;
+  onViewHistory: (meta: AppRowMeta | undefined) => void;
 }
 
 export default function AppDataTab({
@@ -81,6 +90,7 @@ export default function AppDataTab({
   canEditRows,
   columns,
   rows,
+  refs = {},
   loading,
   page,
   pageSize,
@@ -94,6 +104,7 @@ export default function AppDataTab({
   onBackup,
   onEditRow,
   onDeleteRow,
+  onViewHistory,
 }: Props) {
   const { t } = useTranslation();
 
@@ -180,6 +191,13 @@ export default function AppDataTab({
             key: column.name,
             width: dataColumnWidth(column.type),
             ellipsis: true,
+            render:
+              column.type === "reference"
+                ? (value: unknown) => {
+                    const rowId = String(value ?? "");
+                    return refs[column.name]?.[rowId] || rowId;
+                  }
+                : undefined,
           })),
           {
             title: t("apps.source"),
@@ -188,45 +206,54 @@ export default function AppDataTab({
             render: (_: unknown, __: unknown, index: number) =>
               rows[index]?.meta?.source || "manual",
           },
-          ...(canEditRows
-            ? [
-                {
-                  title: t("apps.actions"),
-                  key: "__actions",
-                  width: ACTIONS_COLUMN_WIDTH,
-                  render: (_: unknown, __: unknown, index: number) => (
-                    <Space size={4}>
+          {
+            title: t("apps.actions"),
+            key: "__actions",
+            width: ACTIONS_COLUMN_WIDTH,
+            render: (_: unknown, __: unknown, index: number) => (
+              <Space size={4}>
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<HistoryIcon size={14} />}
+                  disabled={!rows[index]?.meta?.row_id}
+                  onClick={() => onViewHistory(rows[index]?.meta)}
+                >
+                  {t("apps.history")}
+                </Button>
+                {canEditRows && (
+                  <>
+                    <Button
+                      size="small"
+                      type="link"
+                      disabled={!rows[index]?.meta?.row_id}
+                      onClick={() =>
+                        onEditRow(rows[index]?.meta, rows[index]?.row ?? {})
+                      }
+                    >
+                      {t("apps.editRow")}
+                    </Button>
+                    <Popconfirm
+                      title={t("apps.rowDeleteConfirm")}
+                      okText={t("apps.delete")}
+                      cancelText={t("common.cancel")}
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => onDeleteRow(rows[index]?.meta)}
+                    >
                       <Button
                         size="small"
                         type="link"
+                        danger
                         disabled={!rows[index]?.meta?.row_id}
-                        onClick={() =>
-                          onEditRow(rows[index]?.meta, rows[index]?.row ?? {})
-                        }
                       >
-                        {t("apps.editRow")}
+                        {t("apps.deleteRow")}
                       </Button>
-                      <Popconfirm
-                        title={t("apps.rowDeleteConfirm")}
-                        okText={t("apps.delete")}
-                        cancelText={t("common.cancel")}
-                        okButtonProps={{ danger: true }}
-                        onConfirm={() => onDeleteRow(rows[index]?.meta)}
-                      >
-                        <Button
-                          size="small"
-                          type="link"
-                          danger
-                          disabled={!rows[index]?.meta?.row_id}
-                        >
-                          {t("apps.deleteRow")}
-                        </Button>
-                      </Popconfirm>
-                    </Space>
-                  ),
-                },
-              ]
-            : []),
+                    </Popconfirm>
+                  </>
+                )}
+              </Space>
+            ),
+          },
         ]}
       />
     </div>

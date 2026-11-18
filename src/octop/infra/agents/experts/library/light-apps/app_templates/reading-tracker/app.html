@@ -3,64 +3,262 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>读书清单</title>
+<title>读书记录工作台</title>
 <style>
-  body { font-family: system-ui, -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 16px; color: #1f2937; }
-  h1 { font-size: 18px; margin: 0 0 12px; }
-  form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  input, select { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; }
-  button { padding: 6px 12px; border: 0; border-radius: 6px; background: #0ea5e9; color: #fff; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
-  .muted { color: #6b7280; font-size: 12px; }
+  :root { color-scheme: light; }
+  body { font-family: system-ui, -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 16px; color: #1f2937; background: #f8fafc; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 18px 0 8px; color: #374151; }
+  .muted { color: #6b7280; font-size: 12px; line-height: 1.6; }
+  .banner { margin: 8px 0 12px; padding: 8px 10px; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; color: #92400e; font-size: 12px; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  input, select, textarea { padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 7px; font: inherit; background: #fff; }
+  textarea { min-height: 54px; resize: vertical; }
+  button { padding: 7px 12px; border: 0; border-radius: 7px; background: #0f766e; color: #fff; font: inherit; cursor: pointer; }
+  button.secondary { background: #e2e8f0; color: #0f172a; }
+  .results { display: grid; gap: 8px; }
+  .result { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid #e2e8f0; border-radius: 9px; background: #fff; }
+  .result .meta { flex: 1; min-width: 0; }
+  .result .title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .result .sub { font-size: 12px; color: #6b7280; }
+  .editor { display: grid; grid-template-columns: minmax(0, 1fr) 88px; gap: 10px; align-items: start; }
+  .cover { width: 88px; height: 124px; border-radius: 6px; object-fit: cover; background: #e5e7eb; display: none; }
+  .cover[src] { display: block; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 9px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eef2f7; font-size: 13px; vertical-align: top; }
+  th { background: #f1f5f9; color: #475569; font-weight: 600; }
+  @media (max-width: 520px) { .editor { grid-template-columns: 1fr; } .cover { width: 72px; height: 102px; } }
 </style>
 </head>
 <body>
-<h1>读书清单</h1>
-<form id="add">
-  <input name="title" placeholder="书名" required>
-  <input name="author" placeholder="作者">
-  <select name="status">
-    <option value="想读">想读</option>
-    <option value="在读">在读</option>
-    <option value="读完">读完</option>
-  </select>
-  <input name="rating" placeholder="评分 1-5" inputmode="numeric">
-  <button type="submit">添加</button>
+<h1>读书记录工作台</h1>
+<p class="muted">搜豆瓣把书名、作者、封面带进来；也可以直接手填。数据存在这个应用自己的表里。</p>
+<div class="banner" id="serviceBanner" hidden></div>
+
+<h2>从豆瓣找书</h2>
+<form id="search">
+  <input name="keyword" placeholder="书名 / 作者 / ISBN" required style="flex:1;min-width:180px">
+  <button type="submit">搜索</button>
 </form>
-<p class="muted" id="empty">还没有书，先加一本吧。</p>
-<table id="list"><thead><tr><th>书名</th><th>作者</th><th>状态</th><th>评分</th></tr></thead><tbody></tbody></table>
+<p class="muted" id="searchState"></p>
+<div class="results" id="results"></div>
+
+<h2>藏书信息</h2>
+<div class="editor">
+  <form id="add">
+    <input name="title" placeholder="书名" required style="width:100%">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <input name="author" placeholder="作者" style="flex:1;min-width:120px">
+      <select name="status">
+        <option value="想读">想读</option>
+        <option value="在读">在读</option>
+        <option value="读完">读完</option>
+      </select>
+      <input name="rating" placeholder="评分 1-5" inputmode="numeric" style="width:96px">
+    </div>
+    <textarea name="note" placeholder="备注 / 摘录" style="width:100%;margin-top:8px"></textarea>
+    <input type="hidden" name="douban_id">
+    <input type="hidden" name="cover">
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button type="submit">加入书架</button>
+      <button type="button" class="secondary" id="resetForm">清空</button>
+    </div>
+  </form>
+  <img class="cover" id="coverPreview" alt="封面预览">
+</div>
+
+<h2>书架</h2>
+<p class="muted" id="empty">还没有书，先搜一本或手填一本吧。</p>
+<table id="list">
+  <thead><tr><th>书名</th><th>作者</th><th>状态</th><th>评分</th><th>备注</th></tr></thead>
+  <tbody></tbody>
+</table>
+
 <script>
+(function () {
+  var serviceReady = false;
+  var columns = null;
+  var state = { results: [] };
+
+  function $(selector) { return document.querySelector(selector); }
+
+  function setBanner(text) {
+    var el = $("#serviceBanner");
+    el.textContent = text || "";
+    el.hidden = !text;
+  }
+
+  function setSearchState(text) {
+    $("#searchState").textContent = text || "";
+  }
+
+  async function checkService() {
+    try {
+      var me = await octopApp.me();
+      var capabilities = me && me.capabilities ? me.capabilities : [];
+      serviceReady = capabilities.indexOf("external.fetch") !== -1;
+      if (!serviceReady) {
+        setBanner("豆瓣查询需要 external.fetch 能力：请在应用详情页开启；开启前仍可手动录入。");
+      }
+    } catch (err) {
+      setBanner("无法读取页面能力：" + err.message + "；仍可手动录入。");
+    }
+  }
+
+  function renderResults() {
+    var box = $("#results");
+    box.textContent = "";
+    state.results.forEach(function (item) {
+      var row = document.createElement("div");
+      row.className = "result";
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      var title = document.createElement("div");
+      title.className = "title";
+      title.textContent = item.title || "未命名";
+      var sub = document.createElement("div");
+      sub.className = "sub";
+      sub.textContent = [].concat(item.authors || [], item.year ? [item.year] : []).join(" · ");
+      meta.appendChild(title);
+      meta.appendChild(sub);
+      var pick = document.createElement("button");
+      pick.type = "button";
+      pick.textContent = "选用";
+      pick.addEventListener("click", function () { void pickBook(item); });
+      row.appendChild(meta);
+      row.appendChild(pick);
+      box.appendChild(row);
+    });
+  }
+
+  async function search(keyword) {
+    if (!serviceReady) {
+      setSearchState("豆瓣查询未开启，请先在应用详情页开启 external.fetch。");
+      return;
+    }
+    setSearchState("搜索中…");
+    try {
+      var payload = await octopApp.service("douban").call("search_books", {
+        keyword: keyword, limit: 8
+      });
+      state.results = payload && payload.results ? payload.results : [];
+      renderResults();
+      setSearchState(state.results.length ? "点「选用」把书填进下面的表单。" : "没有找到，可以换个关键词或手动录入。");
+    } catch (err) {
+      setSearchState("搜索失败：" + err.message);
+    }
+  }
+
+  async function pickBook(item) {
+    setSearchState("读取详情中…");
+    try {
+      var book = await octopApp.service("douban").call("get_book", {
+        subject_id: item.id
+      });
+      var form = $("#add");
+      form.elements.title.value = book.title || item.title || "";
+      form.elements.author.value = (book.authors || []).join(" / ") || (item.authors || []).join(" / ");
+      form.elements.douban_id.value = book.id || item.id || "";
+      form.elements.cover.value = book.cover || item.cover || "";
+      await previewCover(book.cover || item.cover);
+      setSearchState("已填入《" + (book.title || item.title) + "》，确认后加入书架。");
+    } catch (err) {
+      setSearchState("读取详情失败：" + err.message + "；可直接用搜索结果手填。");
+      var fallback = $("#add");
+      fallback.elements.title.value = item.title || "";
+      fallback.elements.author.value = (item.authors || []).join(" / ");
+      fallback.elements.douban_id.value = item.id || "";
+      fallback.elements.cover.value = item.cover || "";
+      await previewCover(item.cover);
+    }
+  }
+
+  async function previewCover(url) {
+    var image = $("#coverPreview");
+    image.removeAttribute("src");
+    if (!url || !serviceReady) return;
+    try {
+      var asset = await octopApp.service("douban").image(url);
+      var data = await octopApp.asset(asset);
+      image.src = data.data_url;
+    } catch (err) {
+      console.error("cover preview failed", err);
+    }
+  }
+
+  async function loadSchema() {
+    try {
+      var payload = await octopApp.schema();
+      columns = new Set((payload.columns || []).map(function (column) { return column.name; }));
+    } catch (err) {
+      columns = null;
+      console.error("schema load failed", err);
+    }
+  }
+
   async function refresh() {
-    const { rows } = await octopApp.listRows({ limit: 500 });
-    const body = document.querySelector("#list tbody");
-    body.innerHTML = "";
-    for (const row of rows) {
-      const tr = document.createElement("tr");
-      for (const key of ["title", "author", "status", "rating"]) {
-        const td = document.createElement("td");
+    var result = await octopApp.listRows({ limit: 500 });
+    var rows = result.rows || [];
+    var body = $("#list tbody");
+    body.textContent = "";
+    rows.forEach(function (row) {
+      var tr = document.createElement("tr");
+      ["title", "author", "status", "rating", "note"].forEach(function (key) {
+        var td = document.createElement("td");
         td.textContent = row[key] || "";
         tr.appendChild(td);
-      }
+      });
       body.appendChild(tr);
-    }
-    document.querySelector("#empty").style.display = rows.length ? "none" : "block";
-  }
-  document.querySelector("#add").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(event.target);
-    await octopApp.appendRow({
-      title: data.get("title"),
-      author: data.get("author"),
-      status: data.get("status"),
-      rating: data.get("rating") || "",
     });
-    event.target.reset();
-    await refresh();
+    $("#empty").style.display = rows.length ? "none" : "block";
+  }
+
+  $("#search").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var keyword = String(new FormData(event.target).get("keyword") || "").trim();
+    if (keyword) void search(keyword);
   });
-  refresh().catch((err) => {
-    document.querySelector("#empty").textContent = "加载失败：" + err.message;
+
+  $("#add").addEventListener("submit", async function (event) {
+    event.preventDefault();
+    var form = event.target;
+    var data = new FormData(form);
+    try {
+      var row = {
+        title: data.get("title"),
+        author: data.get("author"),
+        status: data.get("status") || "想读",
+        rating: data.get("rating") || "",
+        note: data.get("note")
+      };
+      // Older reading-tracker apps may not have the Douban columns yet.
+      if (columns && columns.has("douban_id")) row.douban_id = data.get("douban_id");
+      if (columns && columns.has("cover")) row.cover = data.get("cover");
+      await octopApp.appendRow(row);
+      form.reset();
+      form.elements.status.value = "想读";
+      $("#coverPreview").removeAttribute("src");
+      state.results = [];
+      renderResults();
+      setSearchState("");
+      await refresh();
+    } catch (err) {
+      setSearchState("加入书架失败：" + err.message);
+    }
   });
+
+  $("#resetForm").addEventListener("click", function () {
+    var form = $("#add");
+    form.reset();
+    form.elements.status.value = "想读";
+    $("#coverPreview").removeAttribute("src");
+  });
+
+  void checkService();
+  loadSchema().then(refresh).catch(function (err) {
+    $("#empty").textContent = "加载失败：" + err.message;
+  });
+})();
 </script>
 </body>
 </html>

@@ -5,10 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DesktopGrid from "./DesktopGrid";
 
-function renderGrid(ui: ReactElement, initialEntries = ["/"]) {
-  return render(
-    <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>,
-  );
+function renderGrid(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 
 vi.mock("react-i18next", () => ({
@@ -159,16 +157,6 @@ describe("DesktopGrid system apps", () => {
     expect(manager).toHaveAttribute("data-agent-id", "agent_1");
     expect(open).not.toHaveBeenCalled();
     open.mockRestore();
-  });
-
-  it("opens a deep-linked system app on its expert desktop", async () => {
-    renderGrid(<DesktopGrid apps={[]} />, [
-      "/apps/desktop?agent=agent_1&system=tasks",
-    ]);
-
-    const frame = await screen.findByTestId("system-app-frame");
-    expect(frame).toHaveAttribute("data-system-key", "tasks");
-    expect(frame).toHaveAttribute("data-agent-id", "agent_1");
   });
 
   it("restores a system window from localStorage", async () => {

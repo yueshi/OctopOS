@@ -193,7 +193,24 @@ export default function MiniAppFrame({
               params.table || "main",
               params.filters,
               params.sort,
+              params.expandRefs === true,
             );
+          }
+          if (method === "aggregate") {
+            return await appsApi.aggregate(appId, {
+              table: params.table || "main",
+              groupBy: params.groupBy,
+              metric: params.metric,
+              agg: params.agg as
+                | "sum"
+                | "avg"
+                | "count"
+                | "min"
+                | "max"
+                | undefined,
+              filters: params.filters,
+              limit: params.limit,
+            });
           }
           if (method === "append") {
             return await appsApi.appendRow(
@@ -306,7 +323,18 @@ export default function MiniAppFrame({
           if (method === "ackEvents") {
             return appsApi.ackEvents(appId, params.event_ids || []);
           }
-          if (method === "service") {
+          if (method === "emitEvent") {
+            return await appsApi.emitEvent(
+              appId,
+              String(params.event_type ?? ""),
+              params.payload ?? {},
+              {
+                summary: String(params.summary ?? ""),
+                clientEventId: String(params.client_event_id ?? ""),
+              },
+            );
+          }
+          if (method === "service" || method === "serviceDetailed") {
             const name = String(params.name ?? "").trim();
             const tool = String(params.tool ?? "").trim();
             const args =
@@ -316,7 +344,7 @@ export default function MiniAppFrame({
                 ? params.args
                 : {};
             const result = await appsApi.callService(appId, name, tool, args);
-            return result.value;
+            return method === "serviceDetailed" ? result : result.value;
           }
           if (method === "serviceImage") {
             const name = String(params.name ?? "").trim();

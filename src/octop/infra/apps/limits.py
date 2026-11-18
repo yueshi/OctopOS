@@ -22,6 +22,8 @@ PUBLIC_CONCURRENCY = 20
 PUBLIC_PER_MINUTE = 120
 CSP_VIOLATION_CONCURRENCY = 5
 MAX_CSP_VIOLATIONS_PER_MINUTE = 30
+EVENT_EMIT_CONCURRENCY = 4
+EVENT_EMIT_PER_MINUTE = 60
 WINDOW_SECONDS = 60.0
 
 
@@ -40,6 +42,7 @@ _APP_WINDOWS: dict[str, _Window] = {}
 _PUBLIC_WINDOWS: dict[str, _Window] = {}
 _CSP_WINDOWS: dict[str, _Window] = {}
 _SERVICE_WINDOWS: dict[str, _Window] = {}
+_EVENT_WINDOWS: dict[str, _Window] = {}
 
 
 def _enter(window: _Window, *, concurrency: int, per_minute: int, metric: str) -> None:
@@ -125,6 +128,22 @@ async def service_slot(
 
 
 @asynccontextmanager
+async def event_emit_slot(app_id: str) -> AsyncIterator[None]:
+    """Limit page-originated outbound events per app."""
+    window = _EVENT_WINDOWS.setdefault(app_id, _Window())
+    _enter(
+        window,
+        concurrency=EVENT_EMIT_CONCURRENCY,
+        per_minute=EVENT_EMIT_PER_MINUTE,
+        metric="light_app_event_emit_rejected_total",
+    )
+    try:
+        yield
+    finally:
+        _leave(window)
+
+
+@asynccontextmanager
 async def csp_violation_slot(key: str) -> AsyncIterator[None]:
     """Hold a slot for one app/user's CSP violation reports.
 
@@ -148,10 +167,13 @@ def reset_for_tests() -> None:
     _APP_WINDOWS.clear()
     _PUBLIC_WINDOWS.clear()
     _CSP_WINDOWS.clear()
+    _EVENT_WINDOWS.clear()
 
 
 __all__ = [
     "CSP_VIOLATION_CONCURRENCY",
+    "EVENT_EMIT_CONCURRENCY",
+    "EVENT_EMIT_PER_MINUTE",
     "MAX_CONCURRENT_LLM",
     "MAX_CSP_VIOLATIONS_PER_MINUTE",
     "MAX_LLM_PER_MINUTE",
@@ -160,6 +182,7 @@ __all__ = [
     "acquire_app_llm",
     "app_llm_slot",
     "csp_violation_slot",
+    "event_emit_slot",
     "public_slot",
     "release_app_llm",
     "reset_for_tests",

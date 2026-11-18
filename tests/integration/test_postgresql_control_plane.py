@@ -340,3 +340,62 @@ def test_pg_knowledge_base_max_documents_schema_and_crud() -> None:
         assert fetched.max_documents == 200
     finally:
         pool.close()
+
+
+@requires_postgresql
+@pytest.mark.postgresql
+def test_pg_concurrent_ingest_and_team_seq_are_conflict_safe() -> None:
+    """Two writers must not turn a dedupe/seq race into an error or a lost row."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from octop.infra.db.migrate import run_migrations
+    from octop.infra.db.pool import PostgresPool
+    from octop.infra.db.repos.agents import AgentRepo
+    from octop.infra.db.repos.team_events import TeamEventRepo
+    from octop.infra.db.repos.users import UserRepo
+    from octop.infra.db.services import RepoBundle
+    from octop.infra.events.service import ExternalEventService
+    from octop.infra.utils.ulid import new_ulid
+
+    pool = PostgresPool(_conninfo())
+    try:
+        _reset_public_schema(pool)
+        run_migrations(pool)
+        user_id = UserRepo(pool).create(
+            username=f"u_{uuid.uuid4().hex[:8]}", password_hash="h", role="admin"
+        )
+        team_id = new_ulid()
+        AgentRepo(pool).create(agent_id=team_id, user_id=user_id, name="crew", kind="team")
+
+        repos = RepoBundle.from_pool(pool)
+        service = ExternalEventService(repos=repos, secret_repo=repos.secret_repo)
+        source, _secret = service.create_source(owner_user_id=user_id, name="Orders")
+
+        def ingest(index: int):
+            return service.ingest(
+                source=source,
+                event_type="order.created",
+                external_id="same-event",
+                occurred_at=None,
+                payload={"summary": f"event {index}"},
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            results = list(workers.map(ingest, range(8)))
+
+        assert len({item.event.event_id for item in results}) == 1
+        assert sum(1 for item in results if not item.duplicate) == 1
+
+        repo = TeamEventRepo(pool)
+
+        def append(index: int):
+            return repo.append(team_id, type="test.event", dedupe_key=f"k:{index}")
+
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            rows = list(workers.map(append, range(20)))
+
+        assert all(row is not None for row in rows)
+        events = repo.list_after(team_id)
+        assert [event.seq for event in events] == list(range(1, 21))
+    finally:
+        pool.close()

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
@@ -48,6 +49,44 @@ function suppressViteDisconnectReload(): Plugin {
       }
       if (next === code) return;
       return { code: next, map: null };
+    },
+  };
+}
+
+/**
+ * Vite's `server.fs.strict` rejects root-relative `?raw` module URLs such as
+ * `/src/pages/Apps/system/apps/usage.html?import&raw` (the system-app iframe
+ * HTML). Serve those bundled HTML files as JS strings in dev; production
+ * already inlines them through Rollup. Scoped to the five bundled pages so the
+ * dev server's filesystem allow-list stays strict.
+ */
+function serveSystemAppHtmlRaw(): Plugin {
+  const prefix = "/src/pages/Apps/system/apps/";
+  return {
+    name: "octop-system-app-html-raw",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ?? "";
+        if (!/[?&]raw(?:&|$)/.test(url)) return next();
+        const pathname = url.split("?")[0];
+        if (!pathname.startsWith(prefix) || !pathname.endsWith(".html")) {
+          return next();
+        }
+        const name = path.posix.basename(pathname);
+        const file = path.join(
+          server.config.root,
+          "src/pages/Apps/system/apps",
+          name,
+        );
+        void readFile(file, "utf8")
+          .then((source) => {
+            res.setHeader("Content-Type", "text/javascript; charset=utf-8");
+            res.setHeader("Cache-Control", "no-cache");
+            res.end(`export default ${JSON.stringify(source)};`);
+          })
+          .catch(next);
+      });
     },
   };
 }
@@ -170,6 +209,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       suppressViteDisconnectReload(),
+      serveSystemAppHtmlRaw(),
       react(),
       VitePWA({
         // prompt: new SW stays in waiting until the user accepts via

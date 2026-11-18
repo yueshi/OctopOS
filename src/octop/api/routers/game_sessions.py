@@ -176,6 +176,8 @@ async def write_game_results(
                             values,
                             table=operation.table,
                             viewer_user_id=user_id,
+                            actor_user_id=user_id,
+                            source="agent",
                         )
                         updated += 1
                 except OctopError as exc:

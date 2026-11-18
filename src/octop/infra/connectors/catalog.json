@@ -121,6 +121,25 @@
       }
     },
     {
+      "kind": "douban",
+      "name": { "en": "Douban Books", "zh": "豆瓣读书" },
+      "description": {
+        "en": "Search public book metadata and covers for reading logs",
+        "zh": "查询公开图书元数据与封面，用于读书记录"
+      },
+      "auth_kind": "none",
+      "doc_url": "https://book.douban.com/",
+      "icon": "openalex",
+      "color": "#2e963d",
+      "phase": "available",
+      "mcp_mode": "gateway",
+      "category": "media",
+      "auth_hint": {
+        "en": "No credentials: public Douban book pages only.",
+        "zh": "无需凭证：仅访问豆瓣公开图书页面。"
+      }
+    },
+    {
       "kind": "tencent-lexiang",
       "name": { "en": "Tencent Lexiang", "zh": "腾讯乐享" },
       "description": {

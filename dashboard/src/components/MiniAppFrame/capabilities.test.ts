@@ -24,6 +24,8 @@ describe("MiniApp capabilities", () => {
     expect(isMethodAllowed("composeMessage", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("service", [CAP.EXTERNAL_FETCH])).toBe(true);
     expect(isMethodAllowed("service", [CAP.DATA_READ])).toBe(false);
+    expect(isMethodAllowed("serviceDetailed", [CAP.EXTERNAL_FETCH])).toBe(true);
+    expect(isMethodAllowed("serviceDetailed", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("serviceImage", [CAP.EXTERNAL_FETCH])).toBe(true);
     expect(isMethodAllowed("serviceImage", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("events", [CAP.EVENTS_READ])).toBe(true);

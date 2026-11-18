@@ -10,12 +10,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import hashlib
+import hmac
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import httpx
+from octop_harness.security.ssrf import validate_agent_fetch_url
+
+from octop.infra.connectors.crypto import decrypt_credentials
 from octop.infra.db.repos._base import now_ts
 from octop.infra.db.repos.apps import PERMISSION_EDIT_DATA, PERMISSION_RANK
 from octop.infra.db.repos.external_deliveries import ExternalDeliveryRow
@@ -32,6 +38,8 @@ from octop.infra.events.service import (
     MODE_EXPERT_TURN,
     MODE_TEAM_JUDGE,
     MODE_TEAM_NOTIFY,
+    MODE_WEBHOOK_POST,
+    TARGET_WEBHOOK,
 )
 from octop.infra.events.templating import render_template
 
@@ -92,6 +100,30 @@ def _records(payload: dict[str, Any], path: object) -> list[dict[str, Any]] | No
     if value and isinstance(value, list) and all(isinstance(item, dict) for item in value):
         return [dict(item) for item in value]
     return None
+
+
+def _import_result_payload(result: Any, *, mode: str) -> dict[str, Any]:
+    """Delivery-safe summary of an ImportResult; never stores row values."""
+    errors = list(getattr(result, "errors", []) or [])
+    warnings = list(getattr(result, "warnings", []) or [])
+    blocked_pii = [str(item) for item in (getattr(result, "blocked_pii", []) or [])]
+    pii_columns = [str(item) for item in (getattr(result, "pii_columns", []) or [])]
+    failed_rows = list(getattr(result, "failed_rows", []) or [])
+    skipped = int(getattr(result, "skipped", 0) or 0)
+    return {
+        "mode": mode,
+        "imported": int(getattr(result, "imported", 0) or 0),
+        "updated": int(getattr(result, "updated", 0) or 0),
+        "skipped": skipped,
+        "would_import": int(getattr(result, "would_import", 0) or 0),
+        "dry_run": bool(getattr(result, "dry_run", False)),
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "failed_count": len(failed_rows),
+        "pii_columns": pii_columns,
+        "blocked_pii": blocked_pii,
+        "partial": skipped > 0 or bool(errors) or bool(blocked_pii),
+    }
 
 
 class ExternalEventWorker:
@@ -337,7 +369,7 @@ class ExternalEventWorker:
             self._queue_expert(delivery, subscription.coalesce_seconds)
             return
         try:
-            await self._dispatch(delivery, event, subscription, attempt)
+            result = await self._dispatch(delivery, event, subscription, attempt)
         except DeliveryError as exc:
             self._fail(delivery, attempt, str(exc), retryable=exc.retryable)
         except asyncio.CancelledError:
@@ -349,7 +381,10 @@ class ExternalEventWorker:
             self._fail(delivery, attempt, str(exc), retryable=True)
         else:
             self._repos.external_delivery_repo.finish(
-                delivery.delivery_id, status="delivered", attempt=attempt
+                delivery.delivery_id,
+                status="delivered",
+                attempt=attempt,
+                result=result,
             )
             from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -384,19 +419,20 @@ class ExternalEventWorker:
         event: ExternalEventRow,
         subscription: ExternalSubscriptionRow,
         attempt: int,
-    ) -> None:
+    ) -> dict[str, Any]:
         if delivery.target_type == "expert":
             async with self._expert_sem(subscription.target_id):
                 await self._deliver_expert(event, subscription, attempt)
-            return
+            return {}
         if delivery.target_type == "team":
             async with self._team_sem:
                 await self._deliver_team(event, subscription)
-            return
+            return {}
         if delivery.target_type == "app":
             async with self._app_sem:
-                await self._deliver_app(event, subscription)
-            return
+                return await self._deliver_app(event, subscription)
+        if delivery.target_type == TARGET_WEBHOOK:
+            return await self._deliver_webhook(event, subscription)
         raise DeliveryError(f"unsupported target type: {delivery.target_type!r}", retryable=False)
 
     def _expert_sem(self, agent_id: str) -> asyncio.Semaphore:
@@ -583,9 +619,81 @@ class ExternalEventWorker:
             },
         )
 
+    async def _deliver_webhook(
+        self, event: ExternalEventRow, subscription: ExternalSubscriptionRow
+    ) -> dict[str, Any]:
+        hook = self._repos.app_webhook_repo.get(subscription.target_id)
+        if hook is None or not hook.enabled:
+            raise DeliveryError("webhook target not found or disabled", retryable=False)
+        if hook.secret_blob is None:
+            raise DeliveryError("webhook secret is missing", retryable=False)
+        try:
+            secret = str(
+                decrypt_credentials(self._repos.secret_repo, hook.secret_blob).get("secret") or ""
+            )
+        except Exception as exc:  # noqa: BLE001 - bad ciphertext is data, not a crash
+            raise DeliveryError("webhook secret is unreadable", retryable=False) from exc
+        if not secret:
+            raise DeliveryError("webhook secret is empty", retryable=False)
+        envelope = {
+            "event_id": event.event_id,
+            "event_type": event.event_type,
+            "occurred_at": event.occurred_at,
+            "received_at": event.received_at,
+            "source_id": event.source_id,
+            "app_id": hook.app_id,
+            "summary": event.summary,
+            "payload": event.payload,
+        }
+        body = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+        timestamp = str(int(time.time()))
+        signature = hmac.new(
+            secret.encode("utf-8"),
+            f"{timestamp}.{body}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Octop-Webhook/1",
+            "X-Octop-Event-Id": event.event_id,
+            "X-Octop-Timestamp": timestamp,
+            "X-Octop-Signature": f"sha256={signature}",
+        }
+        try:
+            await asyncio.to_thread(validate_agent_fetch_url, hook.url)
+        except Exception as exc:  # noqa: BLE001 - SSRF guard is a validation failure
+            raise DeliveryError(f"webhook URL rejected: {exc}", retryable=False) from exc
+        try:
+            async with (
+                httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client,
+                client.stream(
+                    "POST", hook.url, content=body.encode("utf-8"), headers=headers
+                ) as response,
+            ):
+                response_bytes = 0
+                async for chunk in response.aiter_bytes():
+                    response_bytes += len(chunk)
+                    if response_bytes >= 64 * 1024:
+                        break
+                status = response.status_code
+        except httpx.HTTPError as exc:
+            raise DeliveryError(f"webhook request failed: {exc}", retryable=True) from exc
+        result = {
+            "mode": MODE_WEBHOOK_POST,
+            "status_code": status,
+            "response_bytes": response_bytes,
+        }
+        if 200 <= status < 300:
+            return result
+        retryable = status in (408, 425, 429) or status >= 500
+        raise DeliveryError(
+            f"webhook returned HTTP {status}",
+            retryable=retryable,
+        )
+
     async def _deliver_app(
         self, event: ExternalEventRow, subscription: ExternalSubscriptionRow
-    ) -> None:
+    ) -> dict[str, Any]:
         service = self._app_service
         source = self._repos.external_source_repo.get(event.source_id)
         if service is None or source is None:
@@ -613,10 +721,10 @@ class ExternalEventWorker:
             if not isinstance(app_source_id, str) or not app_source_id:
                 raise DeliveryError("app.refresh requires mapping.source_id", retryable=False)
             try:
-                await service.run_source(app, app_source_id)
+                imported = await service.run_source(app, app_source_id)
             except OctopError as exc:
                 raise DeliveryError(exc.message, retryable=True) from exc
-            return
+            return _import_result_payload(imported, mode=MODE_APP_REFRESH)
         if subscription.mode == MODE_APP_INBOX:
             try:
                 view = service.append_event(
@@ -640,7 +748,11 @@ class ExternalEventWorker:
                         "summary": view.summary,
                     },
                 )
-            return
+            return {
+                "mode": MODE_APP_INBOX,
+                "event_id": view.event_id,
+                "event_type": view.event_type,
+            }
         if subscription.mode == MODE_APP_IMPORT:
             records = _records(event.payload, mapping.get("records_path"))
             if records is None:
@@ -658,7 +770,7 @@ class ExternalEventWorker:
                 else None
             )
             try:
-                await service.import_rows(
+                imported = await service.import_rows(
                     app,
                     records,
                     table=table,
@@ -667,10 +779,11 @@ class ExternalEventWorker:
                     upsert_key=upsert_key,
                     source=f"external:{event.source_id}",
                     client_request_id_prefix=f"evt:{event.event_id}",
+                    record_history=False,
                 )
             except OctopError as exc:
                 raise DeliveryError(exc.message, retryable=False) from exc
-            return
+            return _import_result_payload(imported, mode=MODE_APP_IMPORT)
         raise DeliveryError(f"unsupported app mode: {subscription.mode!r}", retryable=False)
 
 

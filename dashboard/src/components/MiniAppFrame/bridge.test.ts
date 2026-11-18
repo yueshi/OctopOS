@@ -20,8 +20,20 @@ describe("bridge request checks", () => {
 
   it("denies a method the app did not declare", () => {
     expect(checkMethodAllowed("rows", [CAP.DATA_READ])).toBe(true);
+    expect(checkMethodAllowed("aggregate", [CAP.DATA_READ])).toBe(true);
+    expect(checkMethodAllowed("aggregate", [])).toBe(false);
     expect(checkMethodAllowed("append", [CAP.DATA_READ])).toBe(false);
     expect(checkMethodAllowed("generate", [CAP.DATA_READ])).toBe(false);
+    expect(checkMethodAllowed("serviceDetailed", [CAP.EXTERNAL_FETCH])).toBe(
+      true,
+    );
+    expect(checkMethodAllowed("serviceDetailed", [CAP.DATA_READ])).toBe(false);
+  });
+
+  it("requires events.emit to emit outbound events", () => {
+    expect(checkMethodAllowed("emitEvent", [CAP.EVENTS_EMIT])).toBe(true);
+    expect(checkMethodAllowed("emitEvent", [CAP.EVENTS_READ])).toBe(false);
+    expect(checkMethodAllowed("emitEvent", [CAP.DATA_WRITE])).toBe(false);
   });
 
   it("allows the row write methods only with data.write", () => {

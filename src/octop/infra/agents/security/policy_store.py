@@ -15,6 +15,50 @@ logger = logging.getLogger(__name__)
 
 _SETTINGS_KEY = "security_policy"
 
+# MiniApp workspace files are service-owned. ``app_*`` tools write through
+# AppService, not through the generic filesystem tools, so denying writes here
+# cannot break app creation/editing. Reads stay allowed: agents still inspect
+# HTML/schema files with read_file when debugging.
+MANDATORY_APP_DIR_DENY: dict[str, object] = {
+    "operations": ["write"],
+    "paths": ["/apps/app_*/**"],
+    "mode": "deny",
+}
+
+
+def _with_mandatory_filesystem_rule(data: dict[str, Any]) -> dict[str, Any]:
+    """Force the app-directory write deny rule to be first-match.
+
+    Admin policy may add its own rules; the app-directory rule must stay
+    ahead of them so ``write_file``/``edit_file``/``delete`` cannot rewrite
+    ``apps/app_*`` files behind AppService's validation and audit.
+    """
+    filesystem = data.get("filesystem")
+    if not isinstance(filesystem, dict):
+        filesystem = {}
+    raw_rules = filesystem.get("rules")
+    rules: list[object] = list(raw_rules) if isinstance(raw_rules, list) else []
+    rules = [
+        rule
+        for rule in rules
+        if not (
+            isinstance(rule, dict)
+            and rule.get("paths") == MANDATORY_APP_DIR_DENY["paths"]
+            and rule.get("operations") == MANDATORY_APP_DIR_DENY["operations"]
+            and rule.get("mode") == MANDATORY_APP_DIR_DENY["mode"]
+        )
+    ]
+    rules.insert(0, dict(MANDATORY_APP_DIR_DENY))
+    filesystem["enabled"] = True
+    filesystem["rules"] = rules
+    data["filesystem"] = filesystem
+    return data
+
+
+def enforce_mandatory_filesystem_rule(policy: SecurityPolicy) -> SecurityPolicy:
+    """Re-apply mandatory filesystem rules after agent-level policy merging."""
+    return SecurityPolicy.from_dict(_with_mandatory_filesystem_rule(policy.to_dict()))
+
 
 def _default_policy() -> SecurityPolicy:
     """Octop defaults when no ``security_policy`` row exists in settings."""
@@ -61,18 +105,17 @@ class SecuritySettingsStore:
         re-application even when admin HITL is off.
         """
         policy = self.load()
-        resolved = policy.resolve_interrupt_on() or {}
+        data = _with_mandatory_filesystem_rule(policy.to_dict())
+        resolved = SecurityPolicy.from_dict(data).resolve_interrupt_on() or {}
         missing = MANDATORY_HITL_TOOLS - resolved.keys()
-        if not missing:
-            return policy
-        data = policy.to_dict()
-        data["hitl"] = {
-            **data["hitl"],
-            "enabled": True,
-            # Materialize the effective tool list: "default" is expanded inside
-            # resolve_interrupt_on, which would otherwise drop the extra tools.
-            "tools": sorted({*resolved, *missing}),
-        }
+        if missing:
+            data["hitl"] = {
+                **data["hitl"],
+                "enabled": True,
+                # Materialize the effective tool list: "default" is expanded inside
+                # resolve_interrupt_on, which would otherwise drop the extra tools.
+                "tools": sorted({*resolved, *missing}),
+            }
         return SecurityPolicy.from_dict(data)
 
 

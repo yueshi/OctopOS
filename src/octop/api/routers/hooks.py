@@ -34,6 +34,10 @@ class WebhookAccepted(BaseModel):
     accepted: bool = Field(description="Always true once the event is durably stored.")
     duplicate: bool = Field(description="True when the dedupe key was already seen.")
     deliveries: int = Field(description="Number of subscriptions fanned out.")
+    rate_limited: int = Field(
+        default=0,
+        description="Subscriptions skipped because their per-minute limit was hit.",
+    )
 
 
 def _service(server: OctopServer) -> ExternalEventService:
@@ -144,4 +148,5 @@ async def receive_webhook(
         accepted=True,
         duplicate=result.duplicate,
         deliveries=result.delivery_count,
+        rate_limited=result.rate_limited,
     )

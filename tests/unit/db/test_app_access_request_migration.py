@@ -58,7 +58,7 @@ def test_v35_splits_owners_and_dedupes_pending(tmp_path: Path) -> None:
         migrate._discover = real_discover
 
     migrate.run_migrations(db)
-    assert _version(db) == 39
+    assert _version(db) == 44
 
     with db.connect() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(app_access_requests)")}
@@ -103,7 +103,7 @@ def test_v35_recreates_a_missing_table(tmp_path: Path) -> None:
         migrate._discover = real_discover
 
     migrate.run_migrations(db)
-    assert _version(db) == 39
+    assert _version(db) == 44
     with db.connect() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(app_access_requests)")}
     assert {"app_owner_user_id", "agent_owner_user_id"} <= columns

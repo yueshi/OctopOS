@@ -69,7 +69,7 @@ class ExternalSourceRepo:
         config_json: str = "{}",
         secret_blob: bytes | None = None,
     ) -> ExternalSourceRow:
-        source_id = new_short_id()
+        source_id = new_short_id(16)
         ts = now_ts()
         with self._db.transaction() as conn:
             conn.execute(

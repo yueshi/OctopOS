@@ -75,6 +75,7 @@ class FakeAppService:
         self.row = SimpleNamespace(app_id="app-1", owner_user_id=1)
         self.calls: list[tuple[Any, ...]] = []
         self.fail_first = fail_first
+        self.import_result: Any | None = None
 
     def get(self, app_id: str) -> Any:
         return self.row
@@ -93,6 +94,7 @@ class FakeAppService:
         upsert_key: Any = None,
         source: str = "import",
         client_request_id_prefix: str | None = None,
+        record_history: bool = True,
     ) -> Any:
         self.calls.append(
             (
@@ -104,12 +106,26 @@ class FakeAppService:
                 upsert_key,
                 source,
                 client_request_id_prefix,
+                record_history,
             )
         )
         if self.fail_first:
             self.fail_first = False
             raise RuntimeError("transient upstream")
-        return SimpleNamespace(imported=len(records), skipped=0, errors=[])
+        if self.import_result is not None:
+            return self.import_result
+        return SimpleNamespace(
+            imported=len(records),
+            updated=0,
+            skipped=0,
+            errors=[],
+            warnings=[],
+            would_import=0,
+            dry_run=False,
+            pii_columns=[],
+            blocked_pii=[],
+            failed_rows=[],
+        )
 
     async def run_source(self, row: Any, source_id: str) -> Any:
         self.calls.append(("refresh", source_id))
@@ -210,11 +226,15 @@ async def test_app_import_delivery(repos: RepoBundle, service: ExternalEventServ
             None,
             f"external:{source.source_id}",
             f"evt:{ingested.event.event_id}",
+            False,
         )
     ]
     delivery = repos.external_delivery_repo.list_for_owner(1)[0]
     assert delivery.status == "delivered"
     assert delivery.attempt == 1
+    assert delivery.result["mode"] == "app.import"
+    assert delivery.result["imported"] == 1
+    assert delivery.result["partial"] is False
 
 
 async def test_app_inbox_delivery(repos: RepoBundle, service: ExternalEventService) -> None:
@@ -533,3 +553,212 @@ async def test_expired_lease_is_requeued(repos: RepoBundle, service: ExternalEve
     assert row is not None
     assert row.status == "failed"
     assert row.next_retry_at == 111
+
+
+async def test_app_import_delivery_records_partial_result(
+    repos: RepoBundle, service: ExternalEventService
+) -> None:
+    source = _source(service)
+    _subscription(
+        repos,
+        source_id=source.source_id,
+        target_type="app",
+        target_id="app-1",
+        mode="app.import",
+        mapping={"table": "main", "columns": {"name": "title"}},
+    )
+    _ingest(service, source, {"records": [{"name": "A"}, {"name": "B"}]})
+    app = FakeAppService()
+    app.import_result = SimpleNamespace(
+        imported=1,
+        updated=0,
+        skipped=1,
+        errors=["row 2: bad"],
+        warnings=["column phone is sensitive"],
+        would_import=0,
+        dry_run=False,
+        pii_columns=["phone"],
+        blocked_pii=["phone"],
+        failed_rows=[{"row": 2}],
+    )
+    worker = _worker(repos, app_service=app)
+
+    assert await worker.tick() == 1
+    await worker.drain()
+
+    delivery = repos.external_delivery_repo.list_for_owner(1)[0]
+    assert delivery.status == "delivered"
+    assert delivery.result == {
+        "mode": "app.import",
+        "imported": 1,
+        "updated": 0,
+        "skipped": 1,
+        "would_import": 0,
+        "dry_run": False,
+        "error_count": 1,
+        "warning_count": 1,
+        "failed_count": 1,
+        "pii_columns": ["phone"],
+        "blocked_pii": ["phone"],
+        "partial": True,
+    }
+
+
+# ----- outbound webhook delivery -------------------------------------------
+
+
+class _FakeStreamResponse:
+    def __init__(self, status: int) -> None:
+        self.status_code = status
+
+    async def aiter_bytes(self):
+        yield b'{"ok":true}'
+
+
+class _FakeStream:
+    def __init__(self, status: int) -> None:
+        self._status = status
+
+    async def __aenter__(self) -> _FakeStreamResponse:
+        return _FakeStreamResponse(self._status)
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeHttpxClient:
+    status = 200
+    calls: list[dict[str, Any]] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    async def __aenter__(self) -> _FakeHttpxClient:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        content: bytes,
+        headers: dict[str, str],
+    ) -> _FakeStream:
+        type(self).calls.append(
+            {"method": method, "url": url, "content": content, "headers": headers}
+        )
+        return _FakeStream(type(self).status)
+
+
+def _webhook(
+    repos: RepoBundle,
+    service: ExternalEventService,
+    *,
+    secret: str = "s3cret",
+    enabled: bool = True,
+    url: str = "https://93.184.216.34/hook",
+):
+    from octop.infra.connectors.crypto import encrypt_credentials
+    from octop.infra.db.repos.apps import LightAppRepo
+
+    app = LightAppRepo(repos.db).create(agent_id="expert-1", owner_user_id=1, name="Tracker")
+    source = repos.external_source_repo.create(
+        owner_user_id=1,
+        name="outbound",
+        kind="app_outbound",
+        config_json=json.dumps({"app_id": app.app_id}),
+    )
+    subscription = repos.external_subscription_repo.create(
+        source_id=source.source_id,
+        target_type="webhook",
+        target_id="wh_test",
+        mode="webhook.post",
+        created_by=1,
+    )
+    repos.app_webhook_repo.create(
+        webhook_id="wh_test",
+        app_id=app.app_id,
+        name="ERP",
+        url=url,
+        event_types=["order.*"],
+        source_id=source.source_id,
+        subscription_id=subscription.subscription_id,
+        secret_blob=encrypt_credentials(repos.secret_repo, {"secret": secret}),
+        created_by=1,
+        enabled=enabled,
+    )
+    return source, service
+
+
+async def test_webhook_delivery_signs_and_records_result(
+    repos: RepoBundle,
+    service: ExternalEventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    import hmac
+
+    from octop.infra.events import worker as worker_module
+
+    _FakeHttpxClient.calls = []
+    monkeypatch.setattr(worker_module.httpx, "AsyncClient", _FakeHttpxClient)
+    source, service = _webhook(repos, service)
+    _ingest(service, source, {"summary": "approved", "order_id": "A-1"})
+    worker = _worker(repos)
+
+    assert await worker.tick() == 1
+    await worker.drain()
+
+    assert len(_FakeHttpxClient.calls) == 1
+    call = _FakeHttpxClient.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://93.184.216.34/hook"
+    body = call["content"].decode("utf-8")
+    timestamp = call["headers"]["X-Octop-Timestamp"]
+    expected = hmac.new(b"s3cret", f"{timestamp}.{body}".encode(), hashlib.sha256).hexdigest()
+    assert call["headers"]["X-Octop-Signature"] == f"sha256={expected}"
+    envelope = json.loads(body)
+    assert envelope["event_type"] == "order.created"
+    assert envelope["app_id"]
+    assert envelope["payload"]["order_id"] == "A-1"
+    assert call["headers"]["X-Octop-Event-Id"] == envelope["event_id"]
+
+    delivery = repos.external_delivery_repo.list_for_owner(1)[0]
+    assert delivery.status == "delivered"
+    assert delivery.result == {
+        "mode": "webhook.post",
+        "status_code": 200,
+        "response_bytes": 11,
+    }
+
+
+async def test_webhook_5xx_retries_and_4xx_dead_letters(
+    repos: RepoBundle,
+    service: ExternalEventService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from octop.infra.events import worker as worker_module
+
+    _FakeHttpxClient.calls = []
+    monkeypatch.setattr(worker_module.httpx, "AsyncClient", _FakeHttpxClient)
+    monkeypatch.setattr(_FakeHttpxClient, "status", 503)
+    source, service = _webhook(repos, service)
+    _ingest(service, source, {"summary": "approved"})
+    worker = _worker(repos)
+    assert await worker.tick() == 1
+    await worker.drain()
+    delivery = repos.external_delivery_repo.list_for_owner(1)[0]
+    assert delivery.status == "failed"
+    assert delivery.attempt == 1
+    assert delivery.next_retry_at is not None
+    assert "HTTP 503" in delivery.last_error
+
+    monkeypatch.setattr(_FakeHttpxClient, "status", 400)
+    assert await worker.tick(now=delivery.next_retry_at) == 1
+    await worker.drain()
+    delivery = repos.external_delivery_repo.list_for_owner(1)[0]
+    assert delivery.status == "dead"
+    assert "HTTP 400" in delivery.last_error

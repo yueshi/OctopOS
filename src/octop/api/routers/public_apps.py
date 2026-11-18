@@ -20,7 +20,7 @@ from octop.api.common.client_ip import resolve_client_ip
 from octop.api.deps import get_server
 from octop.api.routers.apps import _columns, _service
 from octop.infra.apps.limits import public_slot
-from octop.infra.apps.models import MAIN_TABLE_KEY, PII_MASK
+from octop.infra.apps.models import MAIN_TABLE_KEY, PII_MASK, validate_html
 from octop.infra.apps.sandbox import APP_CSP, build_app_doc, build_wrapper_doc
 from octop.infra.errors import ErrorCode, OctopError
 
@@ -91,7 +91,12 @@ async def _public_payload(service: Any, row: Any) -> tuple[str, list[dict[str, A
     snapshot = service.public_snapshot(row)
     if snapshot is not None:
         frozen_html, frozen_tables = snapshot
-        return str(frozen_html), list(frozen_tables)
+        html = str(frozen_html)
+        if html:
+            # Snapshots created before serve-time validation may predate the
+            # scan; never serve them unchecked.
+            validate_html(html)
+        return html, list(frozen_tables)
     tables: list[dict[str, Any]] = []
     for table in service.list_tables(row):
         if not table.public_visible or table.row_scope == "user":
@@ -106,7 +111,7 @@ async def _public_payload(service: Any, row: Any) -> tuple[str, list[dict[str, A
                 "columns": [column.model_dump() for column in _columns(schema)],
             }
         )
-    return await service.read_html(row) or "", tables
+    return await service.read_html(row, validate=True) or "", tables
 
 
 @router.get("/{token}", response_model=PublicAppOut, summary="Get a public app")

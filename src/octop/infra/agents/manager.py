@@ -28,7 +28,11 @@ from octop.infra.agents.memory.backend import memory_backend_from_agent_config
 from octop.infra.agents.memory.slim import MemorySlimCoordinator
 from octop.infra.agents.providers import ProviderStore, sync_providers_to_harness
 from octop.infra.agents.providers.health import ModelHealthRegistry
-from octop.infra.agents.security import SecuritySettingsStore, ToolGuardRulesStore
+from octop.infra.agents.security import (
+    SecuritySettingsStore,
+    ToolGuardRulesStore,
+    enforce_mandatory_filesystem_rule,
+)
 from octop.infra.agents.security.hitl_session import (
     HitlSessionPolicyStore,
     apply_session_bypass,
@@ -3871,21 +3875,28 @@ class AgentManager:
         app_tools: list[Any] = []
         light_app_tools_enabled = False
         if not team_host:
-            from octop.infra.apps.tools import APP_TOOL_NAMES, build_app_tools  # noqa: PLC0415
+            from octop.infra.apps.tool_policy import filter_app_tools  # noqa: PLC0415
+            from octop.infra.apps.tools import build_app_tools  # noqa: PLC0415
             from octop.infra.apps.wiring import build_app_service  # noqa: PLC0415
 
             public_base_url = self._config.public_base_url
             if not public_base_url and self._config.tls.enabled and self._config.tls.domains:
                 public_base_url = f"https://{self._config.tls.domains[0]}"
-            app_tools = build_app_tools(
-                build_app_service(repos=self._repos, workspaces=self),
-                public_base_url=public_base_url,
+            app_tools = filter_app_tools(
+                build_app_tools(
+                    build_app_service(repos=self._repos, workspaces=self),
+                    public_base_url=public_base_url,
+                    repos=self._repos,
+                ),
+                cfg,
             )
             # The app tools are only reachable when the user kept them on for
             # this agent; the prompt rules follow the tools, not the catalog.
             # One disabled tool does not hide the rest, so the rules stay as
             # long as a single app tool is still callable.
-            light_app_tools_enabled = bool(set(APP_TOOL_NAMES) - tools_disabled_set(cfg))
+            light_app_tools_enabled = bool(
+                {tool.name for tool in app_tools} - tools_disabled_set(cfg)
+            )
 
         team_board_tools: list[Any] = []
         if team_host or autonomous:
@@ -4006,6 +4017,8 @@ class AgentManager:
         global_policy = self._security.harness_policy()
         agent_override = cfg.get("security") if isinstance(cfg.get("security"), dict) else None
         policy = SecurityPolicy.merge(global_policy, agent_override)
+        # Agent-level overrides must not remove the app-directory write deny.
+        policy = enforce_mandatory_filesystem_rule(policy)
 
         from octop.infra.agents.middleware.binary_read_guard import BinaryReadGuardMiddleware
         from octop.infra.agents.middleware.browser_profile import BrowserProfileMiddleware
@@ -4014,6 +4027,7 @@ class AgentManager:
         from octop.infra.agents.middleware.reasoning import ReasoningRequestMiddleware
         from octop.infra.agents.middleware.thread_artifacts import ThreadArtifactsMiddleware
         from octop.infra.agents.middleware.token_quota import TokenQuotaMiddleware
+        from octop.infra.agents.middleware.tool_audit import ToolAuditMiddleware
         from octop.infra.agents.middleware.workspace_image import (
             WorkspaceImageMaterializeMiddleware,
         )
@@ -4037,6 +4051,10 @@ class AgentManager:
             KnowledgeSearchHintMiddleware(),
             BrowserProfileMiddleware(),
             BinaryReadGuardMiddleware(),
+            ToolAuditMiddleware(
+                audit_repo=self._repos.audit_repo,
+                agent_id=row.agent_id,
+            ),
             WorkspaceImageMaterializeMiddleware(workspace=ws),
             ThreadArtifactsMiddleware(
                 thread_repo=self._repos.thread_repo,

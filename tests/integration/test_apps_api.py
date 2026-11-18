@@ -67,14 +67,13 @@ async def test_owner_app_flow(
     assert apps[0]["owner_username"] == "alice"
     assert apps[0]["has_html"] is False
     assert apps[0]["html_bytes"] == 0
-    assert apps[0]["data_bytes"] > 0
+    assert apps[0]["data_bytes"] == 0
 
     r = await client.get(f"/api/apps/{app_id}/files", headers=alice_auth)
     assert r.status_code == 200
     files = {item["name"]: item for item in r.json()["files"]}
-    assert set(files) == {"app.html", "data.csv", "schema.json", "manifest.json"}
-    assert files["data.csv"]["size"] > 0
-    assert files["data.csv"]["path"] == f"apps/{app_id}/data.csv"
+    assert set(files) == {"app.html", "schema.json", "manifest.json"}
+    assert "data.csv" not in files
 
     r = await client.get(f"/api/apps/{app_id}", headers=alice_auth)
     assert r.status_code == 200
@@ -3298,6 +3297,68 @@ async def test_service_declaration_crud(
     assert [item["binding_id"] for item in r.json()["bindings"]] == ["dataset"]
 
 
+async def test_service_declaration_auto_provisions_public_http(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    assert srv.services is not None
+
+    body = {
+        "provider": "external",
+        "allowed_tools": ["fetch_json"],
+        "allowed_url_prefixes": ["https://api.example.com"],
+        "cache_ttl_seconds": 60,
+        "max_calls_per_minute": 5,
+        "enabled": True,
+    }
+    r = await client.put(
+        f"/api/apps/{app_id}/services/weather",
+        headers=alice_auth,
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+    first = r.json()
+    instance = srv.services.repos.connector_repo.get(first["connector_instance_id"])
+    assert instance is not None
+    assert instance.kind == "http-extract"
+
+    r = await client.put(
+        f"/api/apps/{app_id}/services/rates",
+        headers=alice_auth,
+        json={**body, "allowed_tools": ["fetch_text"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["connector_instance_id"] == first["connector_instance_id"]
+
+
+async def test_service_declaration_stores_request_headers(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    body = {
+        "provider": "external",
+        "allowed_tools": ["fetch_html"],
+        "allowed_url_prefixes": ["https://book.douban.com"],
+        "request_headers": {"user-agent": "Mozilla/5.0"},
+        "cache_ttl_seconds": 60,
+        "max_calls_per_minute": 5,
+        "enabled": True,
+    }
+    r = await client.put(
+        f"/api/apps/{app_id}/services/books",
+        headers=alice_auth,
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["request_headers"] == {"User-Agent": "Mozilla/5.0"}
+
+    r = await client.get(f"/api/apps/{app_id}/services", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["services"][0]["request_headers"] == {"User-Agent": "Mozilla/5.0"}
+
+
 async def test_service_call_api(
     env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
     monkeypatch: pytest.MonkeyPatch,
@@ -3567,3 +3628,460 @@ async def test_app_event_inbox_api(
 
     r = await client.get(f"/api/apps/{app_id}/events", headers=bob_auth)
     assert r.status_code == 403
+
+
+async def test_row_history_endpoint(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    assert srv.services is not None
+    alice = srv.services.user_repo.get_by_username("alice")
+    assert alice is not None
+
+    r = await client.post(
+        f"/api/apps/{app_id}/rows",
+        headers=alice_auth,
+        json={"row": {"title": "A", "status": "new"}},
+    )
+    assert r.status_code == 200, r.text
+    row_id = r.json()["row_id"]
+
+    r = await client.patch(
+        f"/api/apps/{app_id}/rows/{row_id}",
+        headers=alice_auth,
+        json={"row": {"title": "B", "status": "done"}, "expected_version": 1},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(
+        f"/api/apps/{app_id}/rows/{row_id}/history",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    entries = r.json()["entries"]
+    assert len(entries) == 1
+    assert entries[0]["action"] == "update"
+    assert entries[0]["actor"] == f"user:{alice.id}"
+    assert entries[0]["source"] == "manual"
+    assert entries[0]["before"]["title"] == "A"
+    assert entries[0]["after"]["title"] == "B"
+
+    r = await client.delete(
+        f"/api/apps/{app_id}/rows/{row_id}?expected_version=2",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(
+        f"/api/apps/{app_id}/rows/{row_id}/history",
+        headers=alice_auth,
+    )
+    entries = r.json()["entries"]
+    assert [entry["action"] for entry in entries] == ["delete", "update"]
+    assert entries[0]["after"] is None
+
+    # A collaborator must be granted view before reading the ledger.
+    r = await client.get(
+        f"/api/apps/{app_id}/rows/{row_id}/history",
+        headers=bob_auth,
+    )
+    assert r.status_code == 403
+
+    r = await client.put(
+        f"/api/apps/{app_id}/shares",
+        headers=alice_auth,
+        json={"shares": [{"username": "bob", "permission": "view"}]},
+    )
+    assert r.status_code == 200
+    r = await client.get(
+        f"/api/apps/{app_id}/rows/{row_id}/history",
+        headers=bob_auth,
+    )
+    assert r.status_code == 200
+    assert len(r.json()["entries"]) == 2
+
+
+async def test_row_history_masks_pii_for_viewers(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        columns=[
+            {"name": "title", "type": "string"},
+            {"name": "phone", "type": "string", "pii": "phone"},
+        ],
+    )
+    r = await client.post(
+        f"/api/apps/{app_id}/rows",
+        headers=alice_auth,
+        json={"row": {"title": "A", "phone": "13800138000"}},
+    )
+    assert r.status_code == 200, r.text
+    row_id = r.json()["row_id"]
+    r = await client.patch(
+        f"/api/apps/{app_id}/rows/{row_id}",
+        headers=alice_auth,
+        json={"row": {"title": "B", "phone": "13900139000"}, "expected_version": 1},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.put(
+        f"/api/apps/{app_id}/shares",
+        headers=alice_auth,
+        json={"shares": [{"username": "bob", "permission": "view"}]},
+    )
+    assert r.status_code == 200
+
+    r = await client.get(
+        f"/api/apps/{app_id}/rows/{row_id}/history",
+        headers=alice_auth,
+    )
+    assert r.json()["entries"][0]["after"]["phone"] == "13900139000"
+    r = await client.get(
+        f"/api/apps/{app_id}/rows/{row_id}/history",
+        headers=_bob_auth,
+    )
+    assert r.json()["entries"][0]["before"]["phone"] == "••••"
+    assert r.json()["entries"][0]["after"]["phone"] == "••••"
+
+
+async def test_aggregate_endpoint_groups_and_filters(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        columns=[
+            {"name": "title", "type": "string", "required": True},
+            {"name": "status", "type": "enum", "values": ["new", "done"]},
+            {"name": "amount", "type": "number"},
+        ],
+    )
+    for title, status, amount in (("A", "new", "10"), ("B", "done", "20"), ("C", "done", "30")):
+        r = await client.post(
+            f"/api/apps/{app_id}/rows",
+            headers=alice_auth,
+            json={"row": {"title": title, "status": status, "amount": amount}},
+        )
+        assert r.status_code == 200, r.text
+
+    r = await client.get(
+        f"/api/apps/{app_id}/aggregate?table=main&group_by=status&metric=amount&agg=sum",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["matched_rows"] == 3
+    assert body["groups"] == [
+        {"key": "done", "value": 50.0, "count": 2},
+        {"key": "new", "value": 10.0, "count": 1},
+    ]
+
+    r = await client.get(
+        f"/api/apps/{app_id}/aggregate?group_by=status&agg=count&filter=status=done",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["matched_rows"] == 2
+    assert r.json()["groups"] == [{"key": "done", "value": 2.0, "count": 2}]
+
+    r = await client.get(
+        f"/api/apps/{app_id}/aggregate?group_by=status&agg=count",
+        headers=bob_auth,
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_FORBIDDEN"
+
+
+async def test_outbound_webhook_crud_and_emit(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        capabilities=list(app_capabilities.ALL_CAPABILITIES),
+    )
+    assert srv.app_runtime is not None
+    worker = srv.app_runtime.external_event_worker
+    assert worker is not None
+
+    async def fake_deliver(event, subscription):
+        return {"mode": "webhook.post", "status_code": 200, "response_bytes": 2}
+
+    monkeypatch.setattr(worker, "_deliver_webhook", fake_deliver)
+
+    r = await client.post(
+        f"/api/apps/{app_id}/webhooks",
+        headers=alice_auth,
+        json={
+            "name": "ERP",
+            "url": "https://93.184.216.34/hook",
+            "event_types": ["order.*"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    webhook_id = created["webhook_id"]
+    assert created["name"] == "ERP"
+    assert created["event_types"] == ["order.*"]
+    assert created["secret"]
+
+    r = await client.get(f"/api/apps/{app_id}/webhooks", headers=alice_auth)
+    assert r.status_code == 200
+    listed = r.json()
+    assert [item["webhook_id"] for item in listed] == [webhook_id]
+    assert "secret" not in listed[0]
+
+    r = await client.post(
+        f"/api/apps/{app_id}/webhooks",
+        headers=alice_auth,
+        json={
+            "name": "Internal",
+            "url": "https://127.0.0.1/hook",
+            "event_types": ["*"],
+        },
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "EXTERNAL_EVENT_INVALID"
+
+    r = await client.post(
+        f"/api/apps/{app_id}/webhooks",
+        headers=bob_auth,
+        json={"name": "Bob", "url": "https://93.184.216.34/x", "event_types": ["*"]},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_FORBIDDEN"
+
+    r = await client.patch(
+        f"/api/apps/{app_id}/webhooks/{webhook_id}",
+        headers=alice_auth,
+        json={"name": "ERP v2", "rotate_secret": True},
+    )
+    assert r.status_code == 200, r.text
+    rotated = r.json()
+    assert rotated["name"] == "ERP v2"
+    assert rotated["secret"] and rotated["secret"] != created["secret"]
+    secret = rotated["secret"]
+
+    r = await client.post(
+        f"/api/apps/{app_id}/events/emit",
+        headers=alice_auth,
+        json={
+            "event_type": "order.approved",
+            "payload": {"order_id": "A-1"},
+            "summary": "approved",
+            "client_event_id": "req-1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    emitted = r.json()
+    assert emitted["external_id"] == "req-1"
+    assert emitted["emitted"] == 1
+    assert emitted["duplicates"] == 0
+    assert emitted["deliveries"] == 1
+    assert emitted["rate_limited"] == 0
+    assert emitted["webhooks"][0]["webhook_id"] == webhook_id
+    assert emitted["webhooks"][0]["duplicate"] is False
+
+    r = await client.post(
+        f"/api/apps/{app_id}/events/emit",
+        headers=alice_auth,
+        json={
+            "event_type": "order.approved",
+            "payload": {"order_id": "A-1"},
+            "client_event_id": "req-1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["duplicates"] == 1
+    assert r.json()["deliveries"] == 0
+
+    r = await client.post(
+        f"/api/apps/{app_id}/events/emit",
+        headers=alice_auth,
+        json={"event_type": "invoice.paid"},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "EXTERNAL_EVENT_INVALID"
+
+    r = await client.delete(f"/api/apps/{app_id}/webhooks/{webhook_id}", headers=alice_auth)
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+    r = await client.get(f"/api/apps/{app_id}/webhooks", headers=alice_auth)
+    assert r.json() == []
+
+    # The secret is only ever used server-side.
+    assert secret
+
+
+async def test_emit_requires_the_events_emit_capability(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+
+    r = await client.post(
+        f"/api/apps/{app_id}/webhooks",
+        headers=alice_auth,
+        json={"name": "ERP", "url": "https://93.184.216.34/hook", "event_types": ["*"]},
+    )
+    assert r.status_code == 201, r.text
+
+    r = await client.post(
+        f"/api/apps/{app_id}/events/emit",
+        headers=alice_auth,
+        json={"event_type": "order.approved"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_CAPABILITY_DENIED"
+
+
+async def test_reference_columns_expand_and_guard_deletes(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        columns=[
+            {"name": "order_no", "type": "string", "required": True},
+            {
+                "name": "customer",
+                "type": "reference",
+                "ref_table": "customers",
+                "ref_label": "name",
+            },
+        ],
+    )
+    service = _service(srv)
+    app = service.get(app_id)
+    await service.create_table(
+        app,
+        table_key="customers",
+        label="Customers",
+        columns=[{"name": "name", "type": "string", "required": True}],
+    )
+
+    r = await client.post(
+        f"/api/apps/{app_id}/rows",
+        headers=alice_auth,
+        json={"row": {"name": "Acme"}, "table": "customers"},
+    )
+    assert r.status_code == 200, r.text
+    customer_id = r.json()["row_id"]
+
+    r = await client.post(
+        f"/api/apps/{app_id}/rows",
+        headers=alice_auth,
+        json={"row": {"order_no": "A-1", "customer": customer_id}},
+    )
+    assert r.status_code == 200, r.text
+    order_id = r.json()["row_id"]
+
+    r = await client.get(f"/api/apps/{app_id}/rows?expand_refs=true", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["refs"] == {"customer": {customer_id: "Acme"}}
+
+    r = await client.post(
+        f"/api/apps/{app_id}/rows",
+        headers=alice_auth,
+        json={"row": {"order_no": "A-2", "customer": "row_missing"}},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "APP_ROW_INVALID"
+
+    r = await client.delete(f"/api/apps/{app_id}/rows/{customer_id}", headers=alice_auth)
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "APP_ROW_IN_USE"
+    assert r.json()["error"]["details"]["table"] == "main"
+
+    r = await client.delete(f"/api/apps/{app_id}/rows/{order_id}", headers=alice_auth)
+    assert r.status_code == 200
+    r = await client.delete(f"/api/apps/{app_id}/rows/{customer_id}", headers=alice_auth)
+    assert r.status_code == 200
+
+
+async def test_app_owned_ingress_crud_and_test_event(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+
+    r = await client.post(
+        f"/api/apps/{app_id}/ingress",
+        headers=alice_auth,
+        json={"name": "Orders", "mode": "app.inbox", "event_type": "order.created"},
+    )
+    assert r.status_code == 201, r.text
+    created = r.json()
+    ingress_id = created["ingress_id"]
+    assert created["hook_url"].endswith(f"/api/hooks/{created['source_id']}")
+    assert created["secret"]
+
+    r = await client.get(f"/api/apps/{app_id}/ingress", headers=alice_auth)
+    assert r.status_code == 200
+    assert [item["ingress_id"] for item in r.json()] == [ingress_id]
+    assert "secret" not in r.json()[0]
+
+    r = await client.post(
+        f"/api/apps/{app_id}/ingress",
+        headers=bob_auth,
+        json={"name": "Nope", "mode": "app.inbox"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_FORBIDDEN"
+
+    r = await client.patch(
+        f"/api/apps/{app_id}/ingress/{ingress_id}",
+        headers=alice_auth,
+        json={"name": "Orders v2", "enabled": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Orders v2"
+    assert r.json()["enabled"] is False
+
+    r = await client.post(
+        f"/api/apps/{app_id}/ingress/{ingress_id}/test",
+        headers=alice_auth,
+        json={},
+    )
+    assert r.status_code == 400
+
+    r = await client.patch(
+        f"/api/apps/{app_id}/ingress/{ingress_id}",
+        headers=alice_auth,
+        json={"enabled": True},
+    )
+    assert r.status_code == 200
+
+    r = await client.post(
+        f"/api/apps/{app_id}/ingress/{ingress_id}/test",
+        headers=alice_auth,
+        json={},
+    )
+    assert r.status_code == 200, r.text
+    tested = r.json()
+    assert tested["event_type"] == "order.created"
+    assert tested["deliveries"] == 1
+
+    r = await client.post(
+        f"/api/apps/{app_id}/ingress/{ingress_id}/rotate-secret",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200
+    rotated = r.json()
+    assert rotated["secret"] and rotated["secret"] != created["secret"]
+
+    r = await client.delete(f"/api/apps/{app_id}/ingress/{ingress_id}", headers=alice_auth)
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True
+    r = await client.get(f"/api/apps/{app_id}/ingress", headers=alice_auth)
+    assert r.json() == []

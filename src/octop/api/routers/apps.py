@@ -28,6 +28,7 @@ from octop.infra.apps.assistant import AppAssistant
 from octop.infra.apps.dataset import BuiltinDatasetService
 from octop.infra.apps.game_sessions import create_game_token
 from octop.infra.apps.generation import AppGenerator
+from octop.infra.apps.ingress import AppIngressService, IngressView
 from octop.infra.apps.limits import (
     acquire_app_llm,
     app_llm_slot,
@@ -52,7 +53,12 @@ from octop.infra.apps.service import (
 )
 from octop.infra.apps.session import app_card_ids
 from octop.infra.apps.sources import GatewayToolRunner
-from octop.infra.apps.wiring import build_app_service
+from octop.infra.apps.webhooks import AppWebhookService
+from octop.infra.apps.wiring import (
+    build_app_service,
+    build_ingress_service,
+    build_webhook_service,
+)
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
@@ -73,6 +79,14 @@ class AppColumn(BaseModel):
     pii: str | None = Field(
         default=None,
         description="Sensitive-data kind; values are masked for viewers and public links.",
+    )
+    ref_table: str | None = Field(
+        default=None,
+        description="Target table key for a reference column.",
+    )
+    ref_label: str | None = Field(
+        default=None,
+        description="Target column used as the display label for a reference.",
     )
 
 
@@ -233,6 +247,9 @@ class AppServiceOut(BaseModel):
     allowed_url_prefixes: list[str] = Field(
         description="URL prefixes accepted for tools that fetch a URL."
     )
+    request_headers: dict[str, str] = Field(
+        description="Allowlisted request headers sent by the public HTTP adapter."
+    )
     cache_ttl_seconds: int = Field(description="Response cache TTL; 0 disables caching.")
     max_calls_per_minute: int = Field(description="Live call budget per minute.")
     public_live: bool = Field(description="Reserved for public-link live calls.")
@@ -249,7 +266,20 @@ class SaveAppServiceBody(BaseModel):
     provider: Literal["connector", "external"] = Field(
         description="connector: authenticated connector; external: public source."
     )
-    connector_instance_id: str = Field(description="Existing connector instance id.")
+    connector_instance_id: str = Field(
+        default="",
+        description=(
+            "Existing connector instance id. Leave empty for a credential-free "
+            "public source; the server reuses or auto-creates a connector."
+        ),
+    )
+    connector_kind: str | None = Field(
+        default=None,
+        description=(
+            "Connector kind to auto-provision when connector_instance_id is "
+            "empty (http-extract by default, or douban for book metadata)."
+        ),
+    )
     allowed_tools: list[str] = Field(
         min_length=1,
         description="Read-only tool names the page may call.",
@@ -257,6 +287,13 @@ class SaveAppServiceBody(BaseModel):
     allowed_url_prefixes: list[str] = Field(
         default_factory=list,
         description="Required for URL-fetching tools; http(s) prefixes only.",
+    )
+    request_headers: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Allowlisted headers for http-extract: User-Agent, Referer, Accept, "
+            "Accept-Language. Omit to keep the stored value on update."
+        ),
     )
     cache_ttl_seconds: int = Field(default=300, ge=0, le=86_400)
     max_calls_per_minute: int = Field(default=30, ge=1, le=600)
@@ -316,6 +353,132 @@ class AckEventsBody(BaseModel):
 
 class AckEventsOut(BaseModel):
     acknowledged: int
+
+
+class WebhookOut(BaseModel):
+    webhook_id: str
+    name: str
+    url: str
+    event_types: list[str] = Field(description="Exact event types or patterns like order.* / *.")
+    enabled: bool
+    created_at: int
+    updated_at: int
+
+
+class WebhookCreatedOut(WebhookOut):
+    secret: str = Field(description="HMAC signing secret; shown once at creation/rotation.")
+
+
+class WebhookUpdatedOut(WebhookOut):
+    secret: str | None = Field(
+        default=None,
+        description="New signing secret when rotate_secret was requested.",
+    )
+
+
+class CreateWebhookBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    url: str = Field(description="http(s) destination URL.")
+    event_types: list[str] = Field(
+        min_length=1,
+        description="Exact types or patterns (order.*, *).",
+    )
+    enabled: bool = True
+
+
+class UpdateWebhookBody(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    url: str | None = None
+    event_types: list[str] | None = None
+    enabled: bool | None = None
+    rotate_secret: bool = False
+
+
+class DeleteWebhookOut(BaseModel):
+    deleted: bool
+
+
+class IngressOut(BaseModel):
+    ingress_id: str
+    name: str
+    mode: str = Field(description="Subscription mode: app.inbox, app.import or app.refresh.")
+    event_type: str = Field(description="Optional exact event type filter.")
+    mapping: dict[str, Any] = Field(
+        description="Subscription mapping; app.import uses table/columns, app.refresh uses source_id."
+    )
+    max_per_minute: int
+    enabled: bool
+    source_id: str
+    hook_url: str = Field(description="Absolute or relative webhook URL for senders.")
+    created_at: int
+    updated_at: int
+
+
+class IngressCreatedOut(IngressOut):
+    secret: str = Field(description="HMAC signing secret; shown once at creation.")
+
+
+class IngressSecretOut(BaseModel):
+    secret: str = Field(description="New HMAC signing secret; shown once.")
+    hook_url: str
+
+
+class CreateIngressBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    mode: str = Field(description="app.inbox, app.import or app.refresh.")
+    event_type: str = Field(default="", max_length=100)
+    mapping: dict[str, Any] = Field(default_factory=dict)
+    max_per_minute: int = Field(default=0, ge=0, le=600)
+    enabled: bool = True
+
+
+class UpdateIngressBody(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    mode: str | None = None
+    event_type: str | None = Field(default=None, max_length=100)
+    mapping: dict[str, Any] | None = None
+    max_per_minute: int | None = Field(default=None, ge=0, le=600)
+    enabled: bool | None = None
+
+
+class TestIngressBody(BaseModel):
+    event_type: str = Field(default="", max_length=100)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class TestIngressOut(BaseModel):
+    event_id: str
+    event_type: str
+    deliveries: int
+    rate_limited: int
+
+
+class EmitEventBody(BaseModel):
+    event_type: str = Field(description="Event type such as order.approved.")
+    payload: dict[str, Any] = Field(default_factory=dict)
+    summary: str = Field(default="", max_length=500)
+    client_event_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Optional idempotency key; a retry with the same id is deduped.",
+    )
+
+
+class EmitWebhookResult(BaseModel):
+    webhook_id: str
+    event_id: str = Field(description="Stored external-event id for this webhook.")
+    duplicate: bool
+    deliveries: int
+    rate_limited: int
+
+
+class EmitEventOut(BaseModel):
+    external_id: str = Field(description="Dedupe key for the emitted event.")
+    emitted: int
+    duplicates: int
+    deliveries: int
+    rate_limited: int
+    webhooks: list[EmitWebhookResult]
 
 
 class DeleteBindingResponse(BaseModel):
@@ -448,6 +611,13 @@ class AppRowsResponse(BaseModel):
         default_factory=list,
         description="Sensitive columns whose values are masked for this caller.",
     )
+    refs: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description=(
+            "Reference labels keyed by column then row id, when expand_refs=true. "
+            "Dangling or invisible targets are omitted."
+        ),
+    )
 
 
 class AppendRowBody(BaseModel):
@@ -486,11 +656,60 @@ class DeleteRowResponse(BaseModel):
     deleted: str
 
 
+class RowHistoryEntry(BaseModel):
+    history_id: int
+    table: str = Field(description="Table the row belongs to.")
+    row_id: str
+    version: int = Field(description="Row version at the time of the change.")
+    action: str = Field(description="update, delete or replace.")
+    actor: str = Field(description="user:<id> or _system.")
+    source: str = Field(default="", description="manual, agent, import or external.")
+    changed_at: int = Field(description="Unix timestamp of the change.")
+    before: dict[str, str] | None = Field(
+        default=None,
+        description="Values before the change; null when no prior state exists.",
+    )
+    after: dict[str, str] | None = Field(
+        default=None,
+        description="Values after the change; null for deletes and replace-imports.",
+    )
+
+
+class RowHistoryResponse(BaseModel):
+    entries: list[RowHistoryEntry]
+    limit: int
+    offset: int
+
+
+class AggregateGroup(BaseModel):
+    key: str = Field(description="Group value; empty string for a blank group.")
+    value: float = Field(description="Aggregated value (count for agg=count).")
+    count: int = Field(description="Rows in this group.")
+
+
+class AggregateResponse(BaseModel):
+    table: str
+    group_by: str | None = Field(
+        default=None, description="Grouping column, null for one overall group."
+    )
+    metric: str | None = Field(default=None, description="Aggregated column, null for count.")
+    agg: str = Field(description="One of sum, avg, count, min, max.")
+    groups: list[AggregateGroup]
+    matched_rows: int = Field(description="Rows that matched the table and filters.")
+    truncated: bool = Field(description="Whether more groups were omitted by limit.")
+
+
 class ColumnTypeSpec(BaseModel):
     type: str | None = Field(default=None, description="New column type.")
     label: str | None = Field(default=None, description="New display label.")
     required: bool | None = Field(default=None, description="Required flag.")
     values: list[str] | None = Field(default=None, description="Allowed values for an enum.")
+    ref_table: str | None = Field(
+        default=None, description="Target table key when type is reference."
+    )
+    ref_label: str | None = Field(
+        default=None, description="Target label column when type is reference."
+    )
 
 
 class AlterSchemaBody(BaseModel):
@@ -586,6 +805,8 @@ def _columns(schema: Schema) -> list[AppColumn]:
             required=col.required,
             values=list(col.values),
             pii=col.pii,
+            ref_table=col.ref_table,
+            ref_label=col.ref_label,
         )
         for col in schema.columns
     ]
@@ -742,6 +963,24 @@ def _public_link(server: OctopServer, token: str) -> str:
     """
     base = (getattr(server.config, "public_base_url", "") or "").strip().rstrip("/")
     path = f"/p/{token}"
+    return f"{base}{path}" if base else path
+
+
+def _webhooks(server: OctopServer, service: AppService) -> AppWebhookService:
+    if server.services is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
+    return build_webhook_service(repos=server.services.repos, app_service=service)
+
+
+def _ingress(server: OctopServer, service: AppService) -> AppIngressService:
+    if server.services is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
+    return build_ingress_service(repos=server.services.repos, app_service=service)
+
+
+def _ingress_hook_url(server: OctopServer, source_id: str) -> str:
+    base = (getattr(server.config, "public_base_url", "") or "").strip().rstrip("/")
+    path = f"/api/hooks/{source_id}"
     return f"{base}{path}" if base else path
 
 
@@ -1550,6 +1789,7 @@ def _service_out(view: ServiceView) -> AppServiceOut:
         connector_instance_id=view.connector_instance_id,
         allowed_tools=list(view.allowed_tools),
         allowed_url_prefixes=list(view.allowed_url_prefixes),
+        request_headers=dict(view.request_headers),
         cache_ttl_seconds=view.cache_ttl_seconds,
         max_calls_per_minute=view.max_calls_per_minute,
         public_live=view.public_live,
@@ -1599,8 +1839,10 @@ async def save_app_service(
         name=name,
         provider=body.provider,
         connector_instance_id=body.connector_instance_id,
+        connector_kind=body.connector_kind,
         allowed_tools=body.allowed_tools,
         allowed_url_prefixes=body.allowed_url_prefixes,
+        request_headers=body.request_headers,
         cache_ttl_seconds=body.cache_ttl_seconds,
         max_calls_per_minute=body.max_calls_per_minute,
         public_live=body.public_live,
@@ -1731,6 +1973,354 @@ async def ack_app_events(
     return AckEventsOut(acknowledged=service.ack_events(row, body.event_ids))
 
 
+@router.get(
+    "/{app_id}/webhooks",
+    response_model=list[WebhookOut],
+    summary="List outbound webhooks",
+    description=(
+        "Owner-declared outbound webhook destinations for this MiniApp. The "
+        "signing secret is only returned at creation or rotation."
+    ),
+)
+async def list_app_webhooks(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> list[WebhookOut]:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return [WebhookOut(**view.__dict__) for view in _webhooks(server, service).list_for_app(row)]
+
+
+@router.post(
+    "/{app_id}/webhooks",
+    response_model=WebhookCreatedOut,
+    status_code=201,
+    summary="Create an outbound webhook",
+    description=(
+        "Declares one destination URL, an event-type allowlist and a generated "
+        "HMAC signing secret. Requires owner or admin and the events.emit capability "
+        "for the page to actually emit."
+    ),
+)
+async def create_app_webhook(
+    app_id: str,
+    body: CreateWebhookBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> WebhookCreatedOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view, secret = await _webhooks(server, service).create(
+        row,
+        name=body.name,
+        url=body.url,
+        event_types=body.event_types,
+        enabled=body.enabled,
+        actor_user_id=user.id,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.webhook.create",
+        target=app_id,
+        payload={"webhook_id": view.webhook_id, "event_types": list(view.event_types)},
+    )
+    return WebhookCreatedOut(**view.__dict__, secret=secret)
+
+
+@router.patch(
+    "/{app_id}/webhooks/{webhook_id}",
+    response_model=WebhookUpdatedOut,
+    summary="Update an outbound webhook",
+    description="Requires owner or admin. Set rotate_secret to issue a new signing secret.",
+)
+async def update_app_webhook(
+    app_id: str,
+    webhook_id: str,
+    body: UpdateWebhookBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> WebhookUpdatedOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view, secret = await _webhooks(server, service).update(
+        row,
+        webhook_id,
+        name=body.name,
+        url=body.url,
+        event_types=body.event_types,
+        enabled=body.enabled,
+        rotate_secret=body.rotate_secret,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.webhook.update",
+        target=app_id,
+        payload={"webhook_id": webhook_id, "secret_rotated": secret is not None},
+    )
+    return WebhookUpdatedOut(**view.__dict__, secret=secret)
+
+
+@router.delete(
+    "/{app_id}/webhooks/{webhook_id}",
+    response_model=DeleteWebhookOut,
+    summary="Delete an outbound webhook",
+    description="Removes the destination, its subscription and its internal event source.",
+)
+async def delete_app_webhook(
+    app_id: str,
+    webhook_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> DeleteWebhookOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    deleted = _webhooks(server, service).delete(row, webhook_id)
+    if deleted:
+        _audit(
+            server,
+            actor=f"user:{user.id}",
+            action="light_app.webhook.delete",
+            target=app_id,
+            payload={"webhook_id": webhook_id},
+        )
+    return DeleteWebhookOut(deleted=deleted)
+
+
+@router.post(
+    "/{app_id}/events/emit",
+    response_model=EmitEventOut,
+    summary="Emit an outbound MiniApp event",
+    description=(
+        "Ingests one page-originated event into the owner-declared outbound "
+        "webhooks. Requires the events.emit capability (owner-enabled). "
+        "Delivery is at-least-once; use client_event_id for idempotent retries."
+    ),
+)
+async def emit_app_event(
+    app_id: str,
+    body: EmitEventBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> EmitEventOut:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    event_service = (
+        server.app_runtime.external_event_service if server.app_runtime is not None else None
+    )
+    if event_service is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "external event service is not started")
+    result = await _webhooks(server, service).emit(
+        row,
+        event_service,
+        event_type=body.event_type,
+        payload=body.payload,
+        summary=body.summary,
+        client_event_id=body.client_event_id,
+    )
+    return EmitEventOut(**result)
+
+
+def _ingress_out(server: OctopServer, view: IngressView) -> IngressOut:
+    return IngressOut(
+        **view.__dict__,
+        hook_url=_ingress_hook_url(server, view.source_id),
+    )
+
+
+@router.get(
+    "/{app_id}/ingress",
+    response_model=list[IngressOut],
+    summary="List app-owned inbound endpoints",
+    description=(
+        "Lists inbound sources owned by this MiniApp. Each endpoint owns its "
+        "event source, signing secret and subscription; the secret is only "
+        "returned at creation or rotation."
+    ),
+)
+async def list_app_ingress(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> list[IngressOut]:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    return [_ingress_out(server, view) for view in _ingress(server, service).list(row)]
+
+
+@router.post(
+    "/{app_id}/ingress",
+    response_model=IngressCreatedOut,
+    status_code=201,
+    summary="Create an app-owned inbound endpoint",
+    description=(
+        "Creates an app-ingress source, subscription and HMAC secret. Senders "
+        "POST to hook_url with X-Octop-Timestamp and X-Octop-Signature. "
+        "Requires owner or admin."
+    ),
+)
+async def create_app_ingress(
+    app_id: str,
+    body: CreateIngressBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> IngressCreatedOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view, secret = await _ingress(server, service).create(
+        row,
+        name=body.name,
+        mode=body.mode,
+        event_type=body.event_type,
+        mapping=body.mapping,
+        max_per_minute=body.max_per_minute,
+        enabled=body.enabled,
+        actor_user_id=user.id,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.ingress.create",
+        target=app_id,
+        payload={"ingress_id": view.ingress_id, "mode": view.mode},
+    )
+    return IngressCreatedOut(
+        **_ingress_out(server, view).model_dump(),
+        secret=secret,
+    )
+
+
+@router.patch(
+    "/{app_id}/ingress/{ingress_id}",
+    response_model=IngressOut,
+    summary="Update an app-owned inbound endpoint",
+    description="Requires owner or admin.",
+)
+async def update_app_ingress(
+    app_id: str,
+    ingress_id: str,
+    body: UpdateIngressBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> IngressOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    view = await _ingress(server, service).update(
+        row,
+        ingress_id,
+        name=body.name,
+        mode=body.mode,
+        event_type=body.event_type,
+        mapping=body.mapping,
+        max_per_minute=body.max_per_minute,
+        enabled=body.enabled,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.ingress.update",
+        target=app_id,
+        payload={"ingress_id": ingress_id, "enabled": view.enabled},
+    )
+    return _ingress_out(server, view)
+
+
+@router.delete(
+    "/{app_id}/ingress/{ingress_id}",
+    response_model=DeleteWebhookOut,
+    summary="Delete an app-owned inbound endpoint",
+    description="Removes the endpoint, its subscription and its event source.",
+)
+async def delete_app_ingress(
+    app_id: str,
+    ingress_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> DeleteWebhookOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    deleted = _ingress(server, service).delete(row, ingress_id)
+    if deleted:
+        _audit(
+            server,
+            actor=f"user:{user.id}",
+            action="light_app.ingress.delete",
+            target=app_id,
+            payload={"ingress_id": ingress_id},
+        )
+    return DeleteWebhookOut(deleted=deleted)
+
+
+@router.post(
+    "/{app_id}/ingress/{ingress_id}/rotate-secret",
+    response_model=IngressSecretOut,
+    summary="Rotate an inbound signing secret",
+    description="Returns the new secret once. Requires owner or admin.",
+)
+async def rotate_app_ingress_secret(
+    app_id: str,
+    ingress_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> IngressSecretOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    ingress = _ingress(server, service)
+    secret = await ingress.rotate_secret(row, ingress_id)
+    view = next(item for item in ingress.list(row) if item.ingress_id == ingress_id)
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.ingress.rotate_secret",
+        target=app_id,
+        payload={"ingress_id": ingress_id},
+    )
+    return IngressSecretOut(
+        secret=secret,
+        hook_url=_ingress_hook_url(server, view.source_id),
+    )
+
+
+@router.post(
+    "/{app_id}/ingress/{ingress_id}/test",
+    response_model=TestIngressOut,
+    summary="Send a test event through an inbound endpoint",
+    description=(
+        "Ingests one event directly (no HMAC) and lets the normal delivery "
+        "worker write it. Requires owner or admin."
+    ),
+)
+async def test_app_ingress(
+    app_id: str,
+    ingress_id: str,
+    body: TestIngressBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> TestIngressOut:
+    service, row, _permission = _manage_write_access(server, user, app_id)
+    event_service = (
+        server.app_runtime.external_event_service if server.app_runtime is not None else None
+    )
+    if event_service is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "external event service is not started")
+    result = await _ingress(server, service).test_event(
+        row,
+        ingress_id,
+        event_service,
+        event_type=body.event_type,
+        payload=body.payload,
+    )
+    if server.app_runtime is not None:
+        worker = server.app_runtime.external_event_worker
+        if worker is not None:
+            worker.wake()
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.ingress.test",
+        target=app_id,
+        payload={"ingress_id": ingress_id, "event_id": result.event.event_id},
+    )
+    return TestIngressOut(
+        event_id=result.event.event_id,
+        event_type=result.event.event_type,
+        deliveries=result.delivery_count,
+        rate_limited=result.rate_limited,
+    )
+
+
 @router.post(
     "/{app_id}/services/{name}/image",
     response_model=ServiceImageOut,
@@ -1808,7 +2398,7 @@ async def get_app_html(
     server: OctopServer = Depends(get_server),
 ) -> Response:
     service, row, _permission = _row_access(server, user, app_id, "view")
-    html = await service.read_html(row)
+    html = await service.read_html(row, validate=True)
     # The HTML is agent-generated. Render it in the dashboard's sandboxed
     # iframe; a direct visit must not run its scripts on the API origin, so
     # mirror the workspace preview sandbox headers.
@@ -2034,6 +2624,10 @@ async def get_app_rows(
         default=None,
         description="Column to sort by; prefix with ``-`` for descending.",
     ),
+    expand_refs: bool = Query(
+        default=False,
+        description="Resolve display labels for reference columns into ``refs``.",
+    ),
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppRowsResponse:
@@ -2063,6 +2657,18 @@ async def get_app_rows(
             viewer_user_id=user.id,
             include_all_rows=include_all_rows,
         )
+    refs = (
+        await service.reference_labels(
+            row,
+            schema,
+            rows,
+            viewer_user_id=user.id,
+            include_all_rows=include_all_rows,
+            redact_pii=redact_pii,
+        )
+        if expand_refs
+        else {}
+    )
     return AppRowsResponse(
         columns=_columns(schema),
         rows=rows,
@@ -2072,6 +2678,7 @@ async def get_app_rows(
         offset=offset,
         table=table,
         pii_columns=[column.name for column in schema.columns if column.pii] if redact_pii else [],
+        refs=refs,
     )
 
 
@@ -2131,6 +2738,7 @@ async def update_app_row(
         expected_version=body.expected_version,
         viewer_user_id=user.id,
         include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        actor_user_id=user.id,
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -2162,11 +2770,87 @@ async def delete_app_row(
         expected_version=expected_version,
         viewer_user_id=user.id,
         include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        actor_user_id=user.id,
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
     METRICS.inc("light_app_row_write_total")
     return DeleteRowResponse(deleted=deleted)
+
+
+@router.get(
+    "/{app_id}/rows/{row_id}/history",
+    response_model=RowHistoryResponse,
+    summary="Get row change history",
+    description=(
+        "Returns the append-only change ledger for one row, newest first. "
+        "Sensitive columns are masked for viewers; owners and admins see the "
+        "stored values. Requires view permission."
+    ),
+)
+async def get_app_row_history(
+    app_id: str,
+    row_id: str,
+    limit: int = Query(default=100, ge=1, le=500, description="History entries to return."),
+    offset: int = Query(default=0, ge=0, description="Entries to skip."),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> RowHistoryResponse:
+    service, row, permission = _row_access(server, user, app_id, "view")
+    entries = await service.row_history(
+        row,
+        row_id,
+        limit=limit,
+        offset=offset,
+        redact_pii=permission == "view",
+        viewer_user_id=user.id,
+        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+    )
+    return RowHistoryResponse(
+        entries=[RowHistoryEntry(**entry) for entry in entries],
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/{app_id}/aggregate",
+    response_model=AggregateResponse,
+    summary="Aggregate app rows",
+    description=(
+        "Groups one table by a column and aggregates a numeric metric server-side. "
+        "Use agg=count without a metric, or sum/avg/min/max with metric. "
+        "Sensitive columns cannot be grouped, measured or filtered. Requires view."
+    ),
+)
+async def aggregate_app_rows(
+    app_id: str,
+    table: str = Query(default=MAIN_TABLE_KEY, description="Table key to aggregate."),
+    group_by: str | None = Query(default=None, description="Column to group by."),
+    metric: str | None = Query(default=None, description="Numeric column to aggregate."),
+    agg: str = Query(default="count", description="sum, avg, count, min or max."),
+    filter_: list[str] = Query(
+        default=[],
+        alias="filter",
+        description="Repeatable ``column=value`` filter; every filter must match.",
+    ),
+    limit: int = Query(default=50, ge=1, le=200, description="Maximum groups to return."),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AggregateResponse:
+    service, row, _permission = _row_access(server, user, app_id, "view")
+    result = await service.aggregate_rows(
+        row,
+        table=table,
+        group_by=group_by,
+        metric=metric,
+        agg=agg,
+        filters=_parse_row_filters(filter_),
+        limit=limit,
+        viewer_user_id=user.id,
+        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+    )
+    return AggregateResponse(**result)
 
 
 @router.get(

@@ -1,8 +1,9 @@
 # MiniApp 对外开放事件机制：评估与设计建议
 
-> 状态：讨论稿（2026-11-11）。**2026-11-15 更新：`app.inbox` 已落地**
+> 状态：讨论稿（2026-11-11）。**2026-11-15 更新：`app.inbox` 已落地；
+> 2026-11-17 更新：页面出站（`events.emit` + owner 声明的 `webhook.post`）已落地（v42）**
 > （见 [miniapp-overview.md](./miniapp-overview.md)）；本文的 app-scoped ingress key、
-> CloudEvents、事件契约、per-target ordering、egress 仍未实施。术语与投递保证以
+> CloudEvents、事件契约、per-target ordering 仍未实施。术语与投递保证以
 > [event-model.md](./event-model.md) 为准。
 >
 > **当前实现状态以 [MiniApp 功能与架构现状](./miniapp-overview.md) 为准；本文保留事件模型评估与协议对照。**

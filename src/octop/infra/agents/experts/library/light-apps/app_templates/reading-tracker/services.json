@@ -1,0 +1,14 @@
+{
+  "services": [
+    {
+      "name": "douban",
+      "provider": "external",
+      "connector_kind": "douban",
+      "allowed_tools": ["search_books", "get_book", "get_cover"],
+      "allowed_url_prefixes": [],
+      "cache_ttl_seconds": 600,
+      "max_calls_per_minute": 20,
+      "enabled": true
+    }
+  ]
+}

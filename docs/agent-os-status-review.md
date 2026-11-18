@@ -31,7 +31,7 @@ Related: `docs/agent-os-roadmap.md`（实施路线）、`docs/agent-os-overall-p
 |---|---|
 | 通知/审批持久化 | 新增 `notifications`（schema v39）、服务端 inbox、4 个 API、`notification*` WS 帧；访问申请、cron HITL、聊天历史 HITL 落库；通知中心合并服务端与本地临时通知 |
 | 隐藏窗口资源治理 | 最小化/跨空间暂停 5 秒 `data_version` 轮询；隐藏 30 分钟卸载 MiniApp/外链 iframe；专家会话窗口不卸载 |
-| MiniApp | R1 + R2.0–R2.3：数据/视图/发布/能力清单/事件收件箱/应用级调度 |
+| MiniApp | R1 + R2.0–R2.3：数据/视图/发布/能力清单/事件收件箱/出站 Webhook/应用级调度 |
 | Agent/团队 | Agent 运行时、团队目标/任务/派发/审批/预算（token）、bounded-agentic 编排 |
 | 桌面 Shell | 窗口注册表、拖拽/缩放/层级、Dock、Mission Control、命令面板、通知中心 |
 | 运维 | setup、TLS、backup、systemd、i18n、多 IM/连接器 |
@@ -77,7 +77,7 @@ Related: `docs/agent-os-roadmap.md`（实施路线）、`docs/agent-os-overall-p
 |---|---|---|
 | D1 | 执行隔离为零：默认 host-rooted `local_shell`，Agent 是进程内对象；无 per-agent 并发/内存/墙钟配额 | 一个失控循环拖垮节点 |
 | D2 | 权限是用户 ACL + 前端能力位：无 app principal，服务端只对 3 类能力二次校验，工具调用无审计 | 无法最小权限、追责、抗注入 |
-| D3 | 调度/事件语义碎片化：五套循环；cron/proactive/team 无 DB 租约；事件平面有 P0 正确性缺口 | 重复执行、丢事件、不可证 |
+| D3 | 调度/事件语义碎片化：五套循环；cron/proactive/team 无 DB 租约；事件平面仍有 PG 并发/expert.turn 重试缺口（app inbox 作用域与 delivery 结果已修 v41） | 重复执行、丢事件、不可证 |
 | D4 | 预算滞后：只有团队 token 预算 opt-in；无 `paused_budget`、reserved 结算、全路径计费 | 账单/死循环保护不足 |
 | D5 | 应用不是包：只有当前 HTML + 一版回滚；无版本/签名/迁移/市场；9 种扩展面、两种信任模型 | 无生态、升级/搬迁困难 |
 | D6 | 控制面/数据面同库、单写者、无 tenant；app 行 document-in-row、2 万行上限、全表过滤 | 热点争用、无租户、无扩展 |
@@ -87,7 +87,7 @@ Related: `docs/agent-os-roadmap.md`（实施路线）、`docs/agent-os-overall-p
 
 - 审批处理完后通知不会自动已读；聊天回复提示仍是客户端临时通知。
 - 窗口布局仍只存 localStorage，换设备/换浏览器即丢；多设备承诺不成立。
-- MiniApp 缺行级变更历史、引用/聚合、查询下推、附件上传：业务审核/报表场景不成立。
+- MiniApp 行级变更历史已完成（v40，2026-11-17）；仍缺引用/聚合、查询下推、附件上传：业务审核场景成立，报表场景仍不成立。
 - 没有解释 Worker：老板问「为什么没做/卡在哪/谁批的」只能翻数据库。
 - 自主执行有断点：goal-only 不唤醒拆解；self-execute HITL 未接线；`stop()` 不取消在飞回合。
 - 团队缺独立验收/证据/绩效；成本只有 token 维度，无金额与降级。
@@ -118,9 +118,9 @@ Related: `docs/agent-os-roadmap.md`（实施路线）、`docs/agent-os-overall-p
 |---|---|---|---|
 | **M1** | **能力合约 + 边界三态 + 能力审计**（含目标 bounds） | 没有它，就没有最小权限、审批、追责；这是 Route A 的差异化 | 未标注工具默认拒绝；越界 `app_*` 调用弹审批；每次工具调用可查「谁/何时/什么权限/结果」；目标不能超 bounds |
 | **M2** | **执行信封 + 监督恢复** | 一个失控 agent/长任务现在能拖垮全节点；重启即丢 | 失控循环被限时终止；节点保持可响应；重启后 in-flight 任务可见/可恢复或明确失败；`stop()` 取消在飞回合 |
-| **M3** | **事件平面 P0 + 统一调度** | 重复执行/丢事件/语义不一致会让自动化不可信 | `docs/event-model.md` §5 P0 全绿；cron/proactive/team 有租约或显式单实例断言；backlog/背压可见 |
+| **M3** | **事件平面 P0 + 统一调度** | 重复执行/丢事件/语义不一致会让自动化不可信 | `docs/event-model.md` §5 P0 全绿（app inbox 作用域 + delivery 结果已修 v41；PG 并发/expert.turn 重试待修）；cron/proactive/team 有租约或显式单实例断言；backlog/背压可见 |
 | **M4** | **预算硬闸门** | 账单失控与死循环是业务底线 | `paused_budget` 生效；reserved 结算/释放；decision/proactive/cron/assistant 全部计费；可设金额维度与降级 |
-| **M5** | **应用数据 P0** | 没有行级历史/引用/查询下推，业务应用不能审核、不能当台账 | 改一行可查「谁/何时/从什么改成什么」；引用不存在被拒；2 万行筛选 ≤50ms；附件可上传 |
+| **M5** | **应用数据 P0** | 行级历史已完成；没有引用/查询下推，报表场景仍不成立 | 改一行可查「谁/何时/从什么改成什么」（✅ v40）；引用不存在被拒；2 万行筛选 ≤50ms；附件可上传 |
 | **M6** | **可观测/核算** | 无法定位慢/错/贵，就无法运营 OS | 一次 turn 可端到端追踪；指标可导出；每 agent/app/task 成本可查；readiness 能反映 DB/agent/harness |
 | **M0** | **交付基线** | 152 文件 WIP + 红色全量测试，任何功能都不可信 | 工作区按主题切分提交/PR；CI 全量绿；9 个既有前端失败修复或建单隔离；迁移/备份断言同步 |
 

@@ -32,6 +32,51 @@ import { InfoSection } from "./shared";
 
 const { Text } = Typography;
 
+const PUBLIC_HTTP_TOOLS: AppSourceTool[] = [
+  {
+    name: "fetch_json",
+    description: "GET a public JSON endpoint",
+    read_only: true,
+    input_schema: {},
+  },
+  {
+    name: "fetch_text",
+    description: "GET a public text endpoint",
+    read_only: true,
+    input_schema: {},
+  },
+  {
+    name: "fetch_html",
+    description: "GET a public HTML page",
+    read_only: true,
+    input_schema: {},
+  },
+];
+
+function headersToText(headers: Record<string, string>): string {
+  return Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\n");
+}
+
+function textToHeaders(
+  text: string,
+  invalidMessage: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const index = line.indexOf(":");
+    if (index <= 0) throw new Error(invalidMessage);
+    const name = line.slice(0, index).trim();
+    const value = line.slice(index + 1).trim();
+    if (!name || !value) throw new Error(invalidMessage);
+    headers[name] = value;
+  }
+  return headers;
+}
+
 interface Props {
   appId: string;
   open: boolean;
@@ -44,6 +89,7 @@ interface ServiceFormValues {
   connector_instance_id: string;
   allowed_tools: string[];
   allowed_url_prefixes: string[];
+  request_headers: string;
   cache_ttl_seconds: number;
   max_calls_per_minute: number;
   enabled: boolean;
@@ -60,6 +106,13 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
   const [tools, setTools] = useState<AppSourceTool[]>([]);
   const [form] = Form.useForm<ServiceFormValues>();
   const instanceId = Form.useWatch("connector_instance_id", form);
+  const provider = Form.useWatch("provider", form);
+  const selectedInstance = instances.find(
+    (item) => item.instance_id === instanceId,
+  );
+  const supportsRequestHeaders =
+    selectedInstance?.kind === "http-extract" ||
+    (provider === "external" && !instanceId);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,15 +139,20 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
   }, [open, canManage]);
 
   useEffect(() => {
-    if (!modalOpen || !instanceId) {
+    if (!modalOpen || (!instanceId && provider !== "external")) {
       setTools([]);
+      return;
+    }
+    if (!instanceId) {
+      // Empty connector + external = the built-in public HTTP source.
+      setTools(PUBLIC_HTTP_TOOLS);
       return;
     }
     appsApi
       .sourceTools(appId, instanceId)
       .then((data) => setTools(data.tools.filter((tool) => tool.read_only)))
       .catch(() => setTools([]));
-  }, [appId, modalOpen, instanceId]);
+  }, [appId, modalOpen, instanceId, provider]);
 
   const openCreate = () => {
     setEditing(null);
@@ -102,8 +160,9 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
       name: "",
       provider: "external",
       connector_instance_id: "",
-      allowed_tools: [],
+      allowed_tools: ["fetch_json"],
       allowed_url_prefixes: [],
+      request_headers: "",
       cache_ttl_seconds: 300,
       max_calls_per_minute: 30,
       enabled: true,
@@ -119,6 +178,7 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
       connector_instance_id: service.connector_instance_id,
       allowed_tools: service.allowed_tools,
       allowed_url_prefixes: service.allowed_url_prefixes,
+      request_headers: headersToText(service.request_headers || {}),
       cache_ttl_seconds: service.cache_ttl_seconds,
       max_calls_per_minute: service.max_calls_per_minute,
       enabled: service.enabled,
@@ -127,11 +187,23 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
   };
 
   const save = async (values: ServiceFormValues) => {
+    const instance = instances.find(
+      (item) => item.instance_id === values.connector_instance_id,
+    );
+    const supportsHeaders =
+      instance?.kind === "http-extract" ||
+      (values.provider === "external" && !values.connector_instance_id);
     const body: AppServiceInput = {
       provider: values.provider,
       connector_instance_id: values.connector_instance_id,
       allowed_tools: values.allowed_tools,
       allowed_url_prefixes: values.allowed_url_prefixes,
+      request_headers: supportsHeaders
+        ? textToHeaders(
+            values.request_headers,
+            t("apps.services.requestHeadersInvalid"),
+          )
+        : {},
       cache_ttl_seconds: values.cache_ttl_seconds,
       max_calls_per_minute: values.max_calls_per_minute,
       enabled: values.enabled,
@@ -164,6 +236,7 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
         connector_instance_id: service.connector_instance_id,
         allowed_tools: service.allowed_tools,
         allowed_url_prefixes: service.allowed_url_prefixes,
+        request_headers: service.request_headers || {},
         cache_ttl_seconds: service.cache_ttl_seconds,
         max_calls_per_minute: service.max_calls_per_minute,
         enabled,
@@ -345,24 +418,56 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
           >
             <Select
               options={[
-                { value: "external", label: "external" },
-                { value: "connector", label: "connector" },
+                {
+                  value: "external",
+                  label: t("apps.services.providerExternal"),
+                },
+                {
+                  value: "connector",
+                  label: t("apps.services.providerConnector"),
+                },
               ]}
             />
           </Form.Item>
           <Form.Item
             name="connector_instance_id"
             label={t("apps.services.connector")}
-            rules={[{ required: true }]}
+            extra={
+              provider === "external"
+                ? t("apps.services.publicHttpHint")
+                : undefined
+            }
+            rules={[
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (getFieldValue("provider") === "connector" && !value) {
+                    return Promise.reject(
+                      new Error(t("apps.services.selectConnector")),
+                    );
+                  }
+                  return Promise.resolve();
+                },
+              }),
+            ]}
           >
             <Select
               showSearch
               optionFilterProp="label"
               placeholder={t("apps.services.selectConnector")}
-              options={instances.map((item) => ({
-                value: item.instance_id,
-                label: `${item.display_name} (${item.kind})`,
-              }))}
+              options={[
+                ...(provider === "external"
+                  ? [
+                      {
+                        value: "",
+                        label: t("apps.services.publicHttp"),
+                      },
+                    ]
+                  : []),
+                ...instances.map((item) => ({
+                  value: item.instance_id,
+                  label: `${item.display_name} (${item.kind})`,
+                })),
+              ]}
               onChange={() =>
                 form.setFieldsValue({
                   allowed_tools: [],
@@ -394,6 +499,18 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
           >
             <Select mode="tags" tokenSeparators={[","]} />
           </Form.Item>
+          {supportsRequestHeaders && (
+            <Form.Item
+              name="request_headers"
+              label={t("apps.services.requestHeaders")}
+              extra={t("apps.services.requestHeadersHint")}
+            >
+              <Input.TextArea
+                rows={3}
+                placeholder={t("apps.services.requestHeadersPlaceholder")}
+              />
+            </Form.Item>
+          )}
           <Space style={{ display: "flex" }} align="start">
             <Form.Item
               name="cache_ttl_seconds"

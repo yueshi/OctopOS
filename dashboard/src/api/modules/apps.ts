@@ -9,6 +9,8 @@ export interface AppColumn {
   required: boolean;
   values: string[];
   pii?: string | null;
+  ref_table?: string | null;
+  ref_label?: string | null;
 }
 
 export interface AppSummary {
@@ -206,12 +208,134 @@ export interface AppRowsResponse {
   offset: number;
   table: string;
   pii_columns: string[];
+  refs?: Record<string, Record<string, string>>;
 }
 
 export interface AppRowUpdate {
   row_id: string;
   row: Record<string, string>;
   version: number;
+}
+
+export interface AppRowHistoryEntry {
+  history_id: number;
+  table: string;
+  row_id: string;
+  version: number;
+  action: "update" | "delete" | "replace" | string;
+  actor: string;
+  source: string;
+  changed_at: number;
+  before: Record<string, string> | null;
+  after: Record<string, string> | null;
+}
+
+export interface AppRowHistoryResponse {
+  entries: AppRowHistoryEntry[];
+  limit: number;
+  offset: number;
+}
+
+export interface AppAggregateGroup {
+  key: string;
+  value: number;
+  count: number;
+}
+
+export interface AppAggregateResponse {
+  table: string;
+  group_by: string | null;
+  metric: string | null;
+  agg: string;
+  groups: AppAggregateGroup[];
+  matched_rows: number;
+  truncated: boolean;
+}
+
+export interface AppAggregateOptions {
+  table?: string;
+  groupBy?: string;
+  metric?: string;
+  agg?: "sum" | "avg" | "count" | "min" | "max";
+  filters?: Record<string, string>;
+  limit?: number;
+}
+
+export interface AppEmitEventResponse {
+  external_id: string;
+  emitted: number;
+  duplicates: number;
+  deliveries: number;
+  rate_limited: number;
+  webhooks: Array<{
+    webhook_id: string;
+    event_id: string;
+    duplicate: boolean;
+    deliveries: number;
+    rate_limited: number;
+  }>;
+}
+
+export interface AppWebhook {
+  webhook_id: string;
+  name: string;
+  url: string;
+  event_types: string[];
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AppWebhookInput {
+  name: string;
+  url: string;
+  event_types: string[];
+  enabled: boolean;
+}
+
+export interface AppWebhookCreated extends AppWebhook {
+  secret: string;
+}
+
+export type AppWebhookUpdated = AppWebhook & { secret: string | null };
+
+export interface AppIngress {
+  ingress_id: string;
+  name: string;
+  mode: "app.inbox" | "app.import" | "app.refresh";
+  event_type: string;
+  mapping: Record<string, unknown>;
+  max_per_minute: number;
+  enabled: boolean;
+  source_id: string;
+  hook_url: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface AppIngressInput {
+  name: string;
+  mode: AppIngress["mode"];
+  event_type: string;
+  mapping: Record<string, unknown>;
+  max_per_minute: number;
+  enabled: boolean;
+}
+
+export interface AppIngressCreated extends AppIngress {
+  secret: string;
+}
+
+export interface AppIngressSecret {
+  secret: string;
+  hook_url: string;
+}
+
+export interface AppIngressTestResult {
+  event_id: string;
+  event_type: string;
+  deliveries: number;
+  rate_limited: number;
 }
 
 export interface AppShare {
@@ -432,6 +556,7 @@ export interface AppServiceDeclaration {
   connector_instance_id: string;
   allowed_tools: string[];
   allowed_url_prefixes: string[];
+  request_headers: Record<string, string>;
   cache_ttl_seconds: number;
   max_calls_per_minute: number;
   public_live: boolean;
@@ -445,6 +570,7 @@ export interface AppServiceInput {
   connector_instance_id: string;
   allowed_tools: string[];
   allowed_url_prefixes?: string[];
+  request_headers?: Record<string, string>;
   cache_ttl_seconds?: number;
   max_calls_per_minute?: number;
   public_live?: boolean;
@@ -658,6 +784,7 @@ export const appsApi = {
     table = "main",
     filters?: Record<string, string>,
     sort?: string,
+    expandRefs = false,
   ) => {
     const params = new URLSearchParams();
     params.set("limit", String(limit));
@@ -667,6 +794,7 @@ export const appsApi = {
       params.append("filter", `${column}=${value}`);
     }
     if (sort) params.set("sort", sort);
+    if (expandRefs) params.set("expand_refs", "true");
     return request<AppRowsResponse>(
       `/apps/${encodeId(appId)}/rows?${params.toString()}`,
     );
@@ -715,6 +843,118 @@ export const appsApi = {
           : `?expected_version=${expectedVersion}`),
       { method: "DELETE" },
     ),
+
+  rowHistory: (appId: string, rowId: string, limit = 100, offset = 0) => {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return request<AppRowHistoryResponse>(
+      `/apps/${encodeId(appId)}/rows/${encodeURIComponent(
+        rowId,
+      )}/history?${params.toString()}`,
+    );
+  },
+
+  listWebhooks: (appId: string) =>
+    request<AppWebhook[]>(`/apps/${encodeId(appId)}/webhooks`),
+
+  createWebhook: (appId: string, input: AppWebhookInput) =>
+    request<AppWebhookCreated>(`/apps/${encodeId(appId)}/webhooks`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateWebhook: (
+    appId: string,
+    webhookId: string,
+    input: Partial<AppWebhookInput> & { rotate_secret?: boolean },
+  ) =>
+    request<AppWebhookUpdated>(
+      `/apps/${encodeId(appId)}/webhooks/${encodeURIComponent(webhookId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+
+  listIngress: (appId: string) =>
+    request<AppIngress[]>(`/apps/${encodeId(appId)}/ingress`),
+
+  createIngress: (appId: string, input: AppIngressInput) =>
+    request<AppIngressCreated>(`/apps/${encodeId(appId)}/ingress`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateIngress: (
+    appId: string,
+    ingressId: string,
+    input: Partial<AppIngressInput>,
+  ) =>
+    request<AppIngress>(
+      `/apps/${encodeId(appId)}/ingress/${encodeURIComponent(ingressId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    ),
+
+  deleteIngress: (appId: string, ingressId: string) =>
+    request<{ deleted: boolean }>(
+      `/apps/${encodeId(appId)}/ingress/${encodeURIComponent(ingressId)}`,
+      { method: "DELETE" },
+    ),
+
+  rotateIngressSecret: (appId: string, ingressId: string) =>
+    request<AppIngressSecret>(
+      `/apps/${encodeId(appId)}/ingress/${encodeURIComponent(
+        ingressId,
+      )}/rotate-secret`,
+      { method: "POST" },
+    ),
+
+  testIngress: (
+    appId: string,
+    ingressId: string,
+    input: { event_type?: string; payload?: Record<string, unknown> } = {},
+  ) =>
+    request<AppIngressTestResult>(
+      `/apps/${encodeId(appId)}/ingress/${encodeURIComponent(ingressId)}/test`,
+      { method: "POST", body: JSON.stringify(input) },
+    ),
+
+  deleteWebhook: (appId: string, webhookId: string) =>
+    request<{ deleted: boolean }>(
+      `/apps/${encodeId(appId)}/webhooks/${encodeURIComponent(webhookId)}`,
+      { method: "DELETE" },
+    ),
+
+  emitEvent: (
+    appId: string,
+    eventType: string,
+    payload: Record<string, unknown> = {},
+    options: { summary?: string; clientEventId?: string } = {},
+  ) =>
+    request<AppEmitEventResponse>(`/apps/${encodeId(appId)}/events/emit`, {
+      method: "POST",
+      body: JSON.stringify({
+        event_type: eventType,
+        payload,
+        summary: options.summary || "",
+        client_event_id: options.clientEventId || null,
+      }),
+    }),
+
+  aggregate: (appId: string, options: AppAggregateOptions = {}) => {
+    const params = new URLSearchParams({
+      table: options.table || "main",
+      agg: options.agg || "count",
+      limit: String(options.limit ?? 50),
+    });
+    if (options.groupBy) params.set("group_by", options.groupBy);
+    if (options.metric) params.set("metric", options.metric);
+    for (const [column, value] of Object.entries(options.filters || {})) {
+      params.append("filter", `${column}=${value}`);
+    }
+    return request<AppAggregateResponse>(
+      `/apps/${encodeId(appId)}/aggregate?${params.toString()}`,
+    );
+  },
 
   exportTable: (appId: string, table = "main") =>
     requestBlob(

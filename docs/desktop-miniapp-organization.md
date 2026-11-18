@@ -18,7 +18,7 @@
 4. 第二批（本次已落地）：
    - 桌面图标拖拽排序（应用与自定义文件夹统一顺序）；
    - 自定义文件夹：创建、重命名、增删应用、删除，应用只能属于一个文件夹；
-   - 「全部应用」增加「全部 / 小程序 / 系统应用」筛选与系统应用分区，按专家上下文直接打开对应桌面窗口。
+   - 「全部应用」保持为纯 MiniApp 库；系统应用不在此按专家重复展示（多 Agent 时会产生大量同名卡片），仍从各专家桌面或命令面板打开。
 5. 后续再做：服务端同步、桌面右键菜单、系统应用状态徽标、跨专家「控制台」空间。**不**把系统应用塞进 `light_apps`。
 
 ---
@@ -59,7 +59,7 @@
 | 1 | 系统应用固定占 5 个图标，且每个专家桌面重复 | 桌面拥挤；与 Agent 生成物的语义混淆 |
 | 2 | 没有隐藏/固定/排序 | 用户无法按自己的工作方式组织桌面 |
 | 3 | Dock 是「前 10 个」而不是「我固定的」 | 高频应用可能不在 Dock，低频应用占位 |
-| 4 | 系统应用不在「全部应用」中 | 跨专家查找平台能力只能靠命令面板 |
+| 4 | 系统应用曾按专家平铺进「全部应用」 | N 个专家 × M 个应用产生大量同名卡片；已撤出，保持纯 MiniApp 库 |
 | 5 | 没有桌面级管理视图 | 用户不知道桌面图标与 Dock 从哪里来 |
 | 6 | 组织偏好与窗口一样只在浏览器本地 | 换设备/换浏览器丢失 |
 | 7 | 图标没有分组/文件夹/拖拽 | 应用多时只能横向滚动 |
@@ -140,10 +140,10 @@ interface DesktopOrgPrefs {
 | `dashboard/src/pages/Apps/SystemAppsFolder.tsx` | 系统应用文件夹 + Popover |
 | `dashboard/src/pages/Apps/DesktopAppFolder.tsx` | 自定义文件夹图标 + Popover + 拖拽属性 |
 | `dashboard/src/pages/Apps/DesktopManageDrawer.tsx` | 管理抽屉（可见性、Dock、文件夹编辑） |
-| `dashboard/src/pages/Apps/DesktopGrid.tsx` | 接入文件夹、拖拽排序、管理入口、Dock 过滤、系统应用深链 |
-| `dashboard/src/pages/Apps/AllAppsGallery.tsx` | 全部应用筛选、系统应用分区与专家上下文 |
-| `dashboard/src/pages/Apps/index.tsx` | 汇总可访问专家的系统应用并跳转桌面 |
-| `dashboard/src/pages/Apps/index.module.less` | 文件夹、拖拽态、抽屉、分区样式 |
+| `dashboard/src/pages/Apps/DesktopGrid.tsx` | 接入文件夹、拖拽排序、管理入口、Dock 过滤 |
+| `dashboard/src/pages/Apps/AllAppsGallery.tsx` | 全部应用（纯 MiniApp 库） |
+| `dashboard/src/pages/Apps/index.tsx` | MiniApp 库；系统应用不进全部应用 |
+| `dashboard/src/pages/Apps/index.module.less` | 文件夹、拖拽态、抽屉样式 |
 | `dashboard/src/locales/{zh,en}.json` | `apps.desktop.*`、`apps.all.*` |
 
 ---
@@ -158,10 +158,10 @@ interface DesktopOrgPrefs {
 - [x] 命令面板入口
 - [x] 纯函数 + 组件测试
 
-### Phase 2（本次已落地拖拽、文件夹、全部应用筛选）
+### Phase 2（本次已落地拖拽、文件夹）
 
 - [x] 拖拽排序与自定义分组/文件夹（创建、重命名、增删应用、删除）
-- [x] 「全部应用」筛选：全部 / 用户 MiniApp / 系统应用；系统应用卡片携带专家上下文并深链打开
+- [x] 「全部应用」保持纯 MiniApp 库：系统应用只出现在专家桌面/命令面板，多专家时不重复铺卡
 - [ ] 组织偏好服务端持久化（新增 per-user desktop prefs 表/API，跨设备同步）
 - [ ] 桌面右键菜单：打开、固定到 Dock、隐藏、查看详情/管理
 - [ ] 系统应用文件夹内显示状态徽标（异常/待处理数量）
@@ -204,7 +204,7 @@ NODE_OPTIONS=--max-old-space-size=3072 ./node_modules/.bin/tsc -b
 5. 管理抽屉新建文件夹（选 2 个小程序）→ 桌面只剩 1 个文件夹图标，点开可见这 2 个应用。
 6. 编辑文件夹改名/增删应用 → 桌面和文件夹内容同步更新；删除文件夹 → 应用回到桌面顶层。
 7. 拖拽两个图标/文件夹改变顺序 → 刷新页面后顺序保留。
-8. 全部应用切换到「系统应用」→ 看到各专家系统应用卡片；点击后进入对应专家桌面并打开该窗口。
+8. 全部应用只显示用户 MiniApp；系统应用不在其中，仍从各专家桌面进入。
 9. 重置后恢复默认（系统应用全显示、Dock 前 10 个、无文件夹）。
 10. 刷新页面偏好保留。
 

@@ -8,7 +8,9 @@ caller.
 
 from __future__ import annotations
 
+from octop.infra.apps.ingress import AppIngressService
 from octop.infra.apps.service import AppService, ExternalToolRunner
+from octop.infra.apps.webhooks import AppWebhookService
 from octop.infra.db.services import RepoBundle
 
 
@@ -35,4 +37,33 @@ def build_app_service(
     )
 
 
-__all__ = ["build_app_service"]
+def build_webhook_service(
+    *,
+    repos: RepoBundle,
+    app_service: AppService,
+) -> AppWebhookService:
+    return AppWebhookService(
+        app_service=app_service,
+        webhook_repo=repos.app_webhook_repo,
+        source_repo=repos.external_source_repo,
+        subscription_repo=repos.external_subscription_repo,
+        secret_repo=repos.secret_repo,
+    )
+
+
+def build_ingress_service(
+    *,
+    repos: RepoBundle,
+    app_service: AppService,
+) -> AppIngressService:
+    return AppIngressService(
+        app_service=app_service,
+        app_repo=repos.light_app_repo,
+        ingress_repo=repos.app_ingress_repo,
+        source_repo=repos.external_source_repo,
+        subscription_repo=repos.external_subscription_repo,
+        secret_repo=repos.secret_repo,
+    )
+
+
+__all__ = ["build_app_service", "build_ingress_service", "build_webhook_service"]

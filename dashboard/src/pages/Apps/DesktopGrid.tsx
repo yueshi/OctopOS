@@ -12,7 +12,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Tooltip, Typography } from "antd";
-import { useSearchParams } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   AppWindow,
@@ -179,11 +178,7 @@ import {
   visibleSystemAppsFor,
   type DesktopOrgPrefs,
 } from "./desktopOrg";
-import {
-  SYSTEM_APP_BY_KEY,
-  isSystemAppKey,
-  visibleSystemApps,
-} from "./system/registry";
+import { SYSTEM_APP_BY_KEY, visibleSystemApps } from "./system/registry";
 import type {
   SystemAppDefinition,
   SystemAppKey,
@@ -646,8 +641,6 @@ export default function DesktopGrid({
   } | null>(null);
   const [dragEntryId, setDragEntryId] = useState("");
   const [dropEntryId, setDropEntryId] = useState("");
-  const [searchParams, setSearchParams] = useSearchParams();
-  const systemDeepLinkRef = useRef("");
   const [spaceId, setSpaceId] = useState(
     () => localStorage.getItem(ACTIVE_SPACE_KEY) ?? "",
   );
@@ -1997,40 +1990,6 @@ export default function DesktopGrid({
     },
     [setActiveAgent],
   );
-
-  // "All Apps" deep-links a system app as ?agent=<id>&system=<key>. Open the
-  // expert desktop and its system window, then strip the query so a refresh
-  // does not keep reopening it.
-  useEffect(() => {
-    const agentParam = searchParams.get("agent");
-    const systemParam = searchParams.get("system");
-    if (!agentParam || !systemParam) return;
-    if (!isSystemAppKey(systemParam)) return;
-    const linkKey = `${agentParam}:${systemParam}`;
-    if (systemDeepLinkRef.current === linkKey) return;
-    if (!spaces.some((item) => item.id === agentParam)) return;
-    const agent = accessibleAgents.find((item) => item.agent_id === agentParam);
-    if (!agent) return;
-    const definition = visibleSystemApps({
-      agent,
-      user: currentUser,
-    }).find((item) => item.key === systemParam);
-    if (!definition) return;
-    systemDeepLinkRef.current = linkKey;
-    setSpaceId(agentParam);
-    openSystemAppFor(agentParam, agentParam, definition);
-    const next = new URLSearchParams(searchParams);
-    next.delete("agent");
-    next.delete("system");
-    setSearchParams(next, { replace: true });
-  }, [
-    accessibleAgents,
-    currentUser,
-    openSystemAppFor,
-    searchParams,
-    setSearchParams,
-    spaces,
-  ]);
 
   const commandItems = useMemo<DesktopCommandItem[]>(() => {
     const items: DesktopCommandItem[] = [];

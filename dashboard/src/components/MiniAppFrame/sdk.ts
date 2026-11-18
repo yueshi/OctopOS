@@ -99,7 +99,18 @@ export const APP_SDK = `(function () {
     me: function () { return call("me"); },
     schema: function (table) { return call("schema", { table: table || null }); },
     tables: function () { return call("tables"); },
-    listRows: function (options) { return call("rows", options || {}); },
+    listRows: function (options) {
+      var opts = options || {};
+      return call("rows", {
+        limit: opts.limit,
+        offset: opts.offset,
+        table: opts.table || null,
+        filters: opts.filters,
+        sort: opts.sort,
+        expandRefs: opts.expandRefs === true
+      });
+    },
+    aggregate: function (options) { return call("aggregate", options || {}); },
     appendRow: function (row, options) {
       return call("append", { row: row, table: (options || {}).table || null });
     },
@@ -153,10 +164,26 @@ export const APP_SDK = `(function () {
     ackEvents: function (eventIds) {
       return call("ackEvents", { event_ids: eventIds || [] });
     },
+    emitEvent: function (eventType, payload, options) {
+      var opts = options || {};
+      return call("emitEvent", {
+        event_type: eventType || "",
+        payload: payload || {},
+        summary: opts.summary || "",
+        client_event_id: opts.clientEventId || ""
+      });
+    },
     service: function (name) {
       return {
         call: function (tool, args) {
           return call("service", { name: name || "", tool: tool || "", args: args || {} });
+        },
+        callDetailed: function (tool, args) {
+          return call("serviceDetailed", {
+            name: name || "",
+            tool: tool || "",
+            args: args || {}
+          });
         },
         image: function (url) {
           return call("serviceImage", { name: name || "", url: url || "" });

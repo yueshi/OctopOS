@@ -604,7 +604,7 @@ make build-frontend
 - **P2 轻操作**：技能启停（`skills.toggle`）、任务立即运行（`cron.run`）已接入现有 POST 端点；通道启停、记忆审核仍未开放。
 - **可见性收口**：普通用户与管理员一致，只显示自建/共享专家的桌面与其可用 MiniApp；服务端 `AppService.list_for_user` 同步收窄，管理员不再列出全部应用。
 - **桌面组织**：系统应用收进一个文件夹；新增「管理桌面」抽屉（按专家隐藏系统应用、隐藏用户 MiniApp、固定/取消固定 Dock、重置）；组织偏好存 `localStorage`（`octop:apps-desktop-org:v1`）。详见 [桌面小程序组织](./desktop-miniapp-organization.md)。
-- **桌面组织二期**：图标拖拽排序；自定义文件夹（创建、重命名、增删应用、删除，应用只能属于一个文件夹）；「全部应用」增加「全部 / 小程序 / 系统应用」筛选，系统应用按专家卡片深链打开对应桌面窗口。
+- **桌面组织二期**：图标拖拽排序；自定义文件夹（创建、重命名、增删应用、删除，应用只能属于一个文件夹）；「全部应用」保持纯 MiniApp 库，系统应用不按专家重复展示。
 - **数据投影**：`queries.ts` 只返回白名单字段；通道/连接器/技能/工具/指标/待办/定时任务均已接入；深链走 `openManager` + 桌面原生管理抽屉，不加载原网页界面、不新开浏览器标签页。
 - **管理入口收口**：五个系统应用的全部管理入口（技能、工具、通道、连接器、任务）统一走 `octopSystem.openManager`，由 `DesktopManagerDrawer` 在桌面内渲染原生管理面板；HTML 内不存在 `<a href>`、`window.open` 或顶层 `location` 跳转，`apps.test.ts` 对此做静态回归检查。
 - **测试**：系统应用/桌面/桥相关 **98 项**通过（`SystemAppFrame`、`registry`、`queries`、`actions`、`desktopWindows`、`DesktopGrid.system`、`MiniAppFrame`）；五个 HTML 内联脚本 `node --check` 通过。

@@ -15,6 +15,16 @@ describe("APP_SDK", () => {
     expect(APP_SDK).toContain("iframe,frame,object,embed,portal");
   });
 
+  it("exposes server-side aggregation", () => {
+    expect(APP_SDK).toContain("aggregate: function");
+    expect(APP_SDK).toContain('call("aggregate"');
+  });
+
+  it("opts into reference label expansion", () => {
+    expect(APP_SDK).toContain("expandRefs");
+    expect(APP_SDK).toContain("expandRefs: opts.expandRefs === true");
+  });
+
   it("exposes data-change subscriptions", () => {
     expect(APP_SDK).toContain("onDataChange");
     expect(APP_SDK).toContain("octop:data-changed");
@@ -24,12 +34,19 @@ describe("APP_SDK", () => {
   it("exposes declared external services", () => {
     expect(APP_SDK).toContain("service: function");
     expect(APP_SDK).toContain('call("service"');
+    expect(APP_SDK).toContain('call("serviceDetailed"');
     expect(APP_SDK).toContain('call("serviceImage"');
   });
 
   it("exposes the event inbox", () => {
     expect(APP_SDK).toContain('call("events"');
     expect(APP_SDK).toContain('call("ackEvents"');
+  });
+
+  it("exposes outbound event emission", () => {
+    expect(APP_SDK).toContain("emitEvent: function");
+    expect(APP_SDK).toContain('call("emitEvent"');
+    expect(APP_SDK).toContain("client_event_id");
   });
 });
 

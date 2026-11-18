@@ -2022,6 +2022,7 @@ def _ensure_light_app_services_schema(db: DatabasePool) -> None:
               connector_instance_id     TEXT NOT NULL,
               allowed_tools_json        TEXT NOT NULL DEFAULT '[]',
               allowed_url_prefixes_json TEXT NOT NULL DEFAULT '[]',
+              request_headers_json      TEXT NOT NULL DEFAULT '{{}}',
               cache_ttl_seconds         INTEGER NOT NULL DEFAULT 300,
               max_calls_per_minute      INTEGER NOT NULL DEFAULT 30,
               public_live               INTEGER NOT NULL DEFAULT 0,
@@ -2054,35 +2055,223 @@ def _ensure_light_app_services_schema(db: DatabasePool) -> None:
             "CREATE INDEX IF NOT EXISTS idx_light_app_service_cache_expiry "
             "ON light_app_service_cache(expires_at)"
         )
+    _ensure_column(
+        db,
+        "light_app_services",
+        "request_headers_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )
 
 
-def _ensure_light_app_events_schema(db: DatabasePool) -> None:
-    """Create the v37 event inbox table idempotently."""
-    if not _table_exists(db, "light_apps"):
-        return
-    pk = _integer_pk_sql(db)
+def _light_app_events_has_global_unique(db: DatabasePool) -> bool:
+    """Whether SQLite still enforces UNIQUE(event_id) alone (v37–v40)."""
+    if not _table_exists(db, "light_app_events"):
+        return False
     with db.connect() as conn:
+        for index in conn.execute("PRAGMA index_list(light_app_events)").fetchall():
+            if int(index["unique"] or 0) != 1:
+                continue
+            columns = [
+                str(item["name"])
+                for item in conn.execute(f"PRAGMA index_info({index['name']})").fetchall()
+            ]
+            if columns == ["event_id"]:
+                return True
+    return False
+
+
+def _rebuild_light_app_events_sqlite(db: DatabasePool) -> None:
+    """Rebuild v37–v40 events with the app-scoped uniqueness key."""
+    pk = _integer_pk_sql(db)
+    with db.transaction() as conn:
         conn.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS light_app_events (
+            CREATE TABLE light_app_events_new (
               id              {pk},
-              event_id        TEXT NOT NULL UNIQUE,
+              event_id        TEXT NOT NULL,
               app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
               event_type      TEXT NOT NULL,
               source          TEXT NOT NULL DEFAULT '',
               summary         TEXT NOT NULL DEFAULT '',
               payload_json    TEXT NOT NULL DEFAULT '{{}}',
               created_at      INTEGER NOT NULL,
-              acknowledged_at INTEGER
+              acknowledged_at INTEGER,
+              UNIQUE(app_id, event_id)
             )
             """
         )
+        conn.execute(
+            "INSERT OR IGNORE INTO light_app_events_new("
+            "id, event_id, app_id, event_type, source, summary, payload_json, "
+            "created_at, acknowledged_at"
+            ") SELECT id, event_id, app_id, event_type, source, summary, payload_json, "
+            "created_at, acknowledged_at FROM light_app_events"
+        )
+        conn.execute("DROP TABLE light_app_events")
+        conn.execute("ALTER TABLE light_app_events_new RENAME TO light_app_events")
+
+
+def _ensure_light_app_events_schema(db: DatabasePool) -> None:
+    """Create or repair the event inbox with app-scoped idempotency (v41)."""
+    if not _table_exists(db, "light_apps"):
+        return
+    if not _table_exists(db, "light_app_events"):
+        pk = _integer_pk_sql(db)
+        with db.connect() as conn:
+            conn.execute(
+                f"""
+                CREATE TABLE light_app_events (
+                  id              {pk},
+                  event_id        TEXT NOT NULL,
+                  app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+                  event_type      TEXT NOT NULL,
+                  source          TEXT NOT NULL DEFAULT '',
+                  summary         TEXT NOT NULL DEFAULT '',
+                  payload_json    TEXT NOT NULL DEFAULT '{{}}',
+                  created_at      INTEGER NOT NULL,
+                  acknowledged_at INTEGER,
+                  UNIQUE(app_id, event_id)
+                )
+                """
+            )
+    elif db.dialect == "postgresql":
+        with db.connect() as conn:
+            conn.execute(
+                "ALTER TABLE light_app_events "
+                "DROP CONSTRAINT IF EXISTS light_app_events_event_id_key"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_light_app_events_app_event "
+                "ON light_app_events(app_id, event_id)"
+            )
+    elif _light_app_events_has_global_unique(db):
+        _rebuild_light_app_events_sqlite(db)
+    with db.connect() as conn:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_light_app_events_app ON light_app_events(app_id, id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_light_app_events_created "
             "ON light_app_events(created_at)"
+        )
+
+
+def _ensure_external_deliveries_result_schema(db: DatabasePool) -> None:
+    """Add delivery result_json for databases that predate v41."""
+    if _table_exists(db, "external_deliveries"):
+        _ensure_column(
+            db,
+            "external_deliveries",
+            "result_json",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )
+
+
+def _ensure_light_app_webhooks_schema(db: DatabasePool) -> None:
+    """Create the v42 outbound webhook table idempotently."""
+    if not (
+        _table_exists(db, "light_apps")
+        and _table_exists(db, "external_sources")
+        and _table_exists(db, "external_subscriptions")
+    ):
+        return
+    pk = _integer_pk_sql(db)
+    blob = "BYTEA" if db.dialect == "postgresql" else "BLOB"
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_webhooks (
+              id              {pk},
+              webhook_id      TEXT NOT NULL UNIQUE,
+              app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              name            TEXT NOT NULL,
+              url             TEXT NOT NULL,
+              event_types_json TEXT NOT NULL DEFAULT '[]',
+              source_id       TEXT NOT NULL REFERENCES external_sources(source_id)
+                              ON DELETE CASCADE,
+              subscription_id TEXT NOT NULL REFERENCES external_subscriptions(subscription_id)
+                              ON DELETE CASCADE,
+              secret_blob     {blob},
+              enabled         INTEGER NOT NULL DEFAULT 1,
+              created_by      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              created_at      INTEGER NOT NULL,
+              updated_at      INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_webhooks_app ON light_app_webhooks(app_id)"
+        )
+
+
+def _ensure_light_app_ingress_schema(db: DatabasePool) -> None:
+    """Create the v43 app-owned inbound ingress table idempotently."""
+    if not (
+        _table_exists(db, "light_apps")
+        and _table_exists(db, "external_sources")
+        and _table_exists(db, "external_subscriptions")
+    ):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_ingress (
+              id              {pk},
+              ingress_id      TEXT NOT NULL UNIQUE,
+              app_id          TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              name            TEXT NOT NULL,
+              mode            TEXT NOT NULL,
+              source_id       TEXT NOT NULL REFERENCES external_sources(source_id)
+                              ON DELETE CASCADE,
+              subscription_id TEXT NOT NULL REFERENCES external_subscriptions(subscription_id)
+                              ON DELETE CASCADE,
+              enabled         INTEGER NOT NULL DEFAULT 1,
+              created_by      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              created_at      INTEGER NOT NULL,
+              updated_at      INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_ingress_app ON light_app_ingress(app_id)"
+        )
+
+
+def _ensure_light_app_row_history_schema(db: DatabasePool) -> None:
+    """Create the v40 row-history table idempotently."""
+    if not _table_exists(db, "light_apps"):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_row_history (
+              id           {pk},
+              app_id       TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              table_key    TEXT NOT NULL,
+              row_id       TEXT NOT NULL,
+              version      INTEGER NOT NULL,
+              action       TEXT NOT NULL,
+              actor        TEXT NOT NULL,
+              source       TEXT NOT NULL DEFAULT '',
+              before_json  TEXT,
+              after_json   TEXT,
+              changed_at   INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_row_history_row "
+            "ON light_app_row_history(app_id, row_id, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_row_history_app "
+            "ON light_app_row_history(app_id, changed_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_row_history_changed "
+            "ON light_app_row_history(changed_at)"
         )
 
 
@@ -3142,6 +3331,49 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 40:
+            _ensure_light_app_row_history_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 41:
+            _ensure_light_app_events_schema(db)
+            _ensure_external_deliveries_result_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 42:
+            _ensure_light_app_webhooks_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 43:
+            _ensure_light_app_ingress_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 44:
+            # ADD COLUMN is not replay-safe on SQLite; the helper also repairs
+            # databases whose recorded version skipped this migration.
+            _ensure_light_app_services_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -3163,6 +3395,7 @@ def run_migrations(db: DatabasePool) -> None:
             _apply_sqlite_migration(db, version, path)
     _reconcile_pre_squash_schema_version(db)
     _ensure_knowledge_bases_schema(db)
+    _ensure_light_app_row_history_schema(db)
     _ensure_skill_packages_schema(db)
     _ensure_published_experts_schema(db)
     _ensure_usage_cache_schema(db)
@@ -3184,6 +3417,9 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_light_app_rows_schema(db)
     _ensure_light_app_services_schema(db)
     _ensure_light_app_events_schema(db)
+    _ensure_external_deliveries_result_schema(db)
+    _ensure_light_app_webhooks_schema(db)
+    _ensure_light_app_ingress_schema(db)
     _ensure_light_app_schedules_schema(db)
     _ensure_light_app_table_visibility(db)
     _ensure_light_app_publications_schema(db)

@@ -11,7 +11,7 @@ import {
   Typography,
 } from "antd";
 import {
-  FileCode,
+  Image as ImageIcon,
   Link2,
   RefreshCw,
   Table2,
@@ -22,15 +22,26 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
 import type { AppDetail, AppFile, AppSource } from "../../../api/modules/apps";
+import { fileTreeIcon } from "../../../utils/fileTreeIcon";
 import { formatBytes } from "../../../utils/formatBytes";
 import { formatServerDateTime } from "../../../utils/formatMessageTime";
 import { useServerTimezone } from "../../../hooks/useServerTimezone";
 import { useIsMobile } from "../../../hooks/useIsMobile";
 import CapabilitiesSection from "./CapabilitiesSection";
+import IngressSection from "./IngressSection";
 import ServicesSection from "./ServicesSection";
+import WebhooksSection from "./WebhooksSection";
 import { InfoSection } from "./shared";
 
 const { Text } = Typography;
+
+/** Assets keep no file extension, so resolve their icon by folder. */
+function fileIcon(file: AppFile) {
+  if (file.name.startsWith("assets/")) {
+    return <ImageIcon size={14} color="#8b5cf6" aria-hidden />;
+  }
+  return fileTreeIcon(file.path, 14);
+}
 
 function sourceScheduleLabel(seconds: number, t: TFunction): string {
   if (seconds % 86400 === 0)
@@ -137,6 +148,14 @@ export default function AppInfoDrawer({
       />
 
       <ServicesSection
+        appId={detail.app_id}
+        open={open}
+        canManage={canManage}
+      />
+
+      <IngressSection appId={detail.app_id} open={open} canManage={canManage} />
+
+      <WebhooksSection
         appId={detail.app_id}
         open={open}
         canManage={canManage}
@@ -350,44 +369,65 @@ export default function AppInfoDrawer({
             <Spin />
           </div>
         ) : (
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
-            {files.map((file) => (
-              <div
-                key={file.name}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  padding: "10px 12px",
-                  border: "1px solid rgba(5, 5, 5, 0.06)",
-                  borderRadius: 8,
-                  background: "#fafafa",
-                }}
-              >
+          <>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {t("apps.filesCount", { count: files.length })}
+            </Text>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isMobile
+                  ? "1fr"
+                  : "repeat(2, minmax(0, 1fr))",
+                gap: 8,
+                marginTop: 8,
+                maxHeight: 300,
+                overflowY: "auto",
+              }}
+            >
+              {files.map((file) => (
                 <div
+                  key={file.name}
+                  title={file.path}
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
                     minWidth: 0,
-                    flex: 1,
+                    padding: "7px 10px",
+                    border: "1px solid rgba(5, 5, 5, 0.06)",
+                    borderRadius: 8,
+                    background: "#fafafa",
                   }}
                 >
-                  <FileCode size={14} style={{ flexShrink: 0 }} />
-                  <Text ellipsis style={{ fontSize: 13, minWidth: 0 }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {fileIcon(file)}
+                  </span>
+                  <Text
+                    ellipsis
+                    style={{ fontSize: 13, minWidth: 0, flex: "1 1 auto" }}
+                  >
                     {file.name}
                   </Text>
+                  <Text
+                    type="secondary"
+                    style={{
+                      fontSize: 12,
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {formatBytes(file.size)}
+                  </Text>
                 </div>
-                <Text
-                  type="secondary"
-                  style={{ fontSize: 12, whiteSpace: "nowrap" }}
-                >
-                  {formatBytes(file.size)}
-                </Text>
-              </div>
-            ))}
-          </Space>
+              ))}
+            </div>
+          </>
         )}
       </InfoSection>
     </Drawer>

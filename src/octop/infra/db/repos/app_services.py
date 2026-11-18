@@ -27,6 +27,18 @@ def _json_list(raw: object) -> tuple[str, ...]:
     return tuple(str(item) for item in parsed)
 
 
+def _json_dict(raw: object) -> dict[str, str]:
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(value) for key, value in parsed.items()}
+
+
 @dataclass(frozen=True)
 class LightAppServiceRow:
     service_id: str
@@ -37,6 +49,7 @@ class LightAppServiceRow:
     connector_instance_id: str
     allowed_tools: tuple[str, ...]
     allowed_url_prefixes: tuple[str, ...]
+    request_headers: dict[str, str]
     cache_ttl_seconds: int
     max_calls_per_minute: int
     public_live: bool
@@ -56,6 +69,7 @@ class LightAppServiceRow:
             connector_instance_id=str(r["connector_instance_id"]),
             allowed_tools=_json_list(r["allowed_tools_json"]),
             allowed_url_prefixes=_json_list(r["allowed_url_prefixes_json"]),
+            request_headers=_json_dict(r["request_headers_json"]),
             cache_ttl_seconds=int(r["cache_ttl_seconds"] or 0),
             max_calls_per_minute=int(r["max_calls_per_minute"] or 0),
             public_live=bool(int(r["public_live"] or 0)),
@@ -110,6 +124,7 @@ class LightAppServiceRepo:
         connector_instance_id: str,
         allowed_tools: list[str],
         allowed_url_prefixes: list[str],
+        request_headers: dict[str, str],
         cache_ttl_seconds: int,
         max_calls_per_minute: int,
         public_live: bool,
@@ -123,10 +138,10 @@ class LightAppServiceRepo:
                 conn,
                 "INSERT INTO light_app_services("
                 "service_id, app_id, name, provider, connector_instance_id, "
-                "allowed_tools_json, allowed_url_prefixes_json, "
+                "allowed_tools_json, allowed_url_prefixes_json, request_headers_json, "
                 "cache_ttl_seconds, max_calls_per_minute, public_live, enabled, "
                 "created_by, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     service_id,
                     app_id,
@@ -135,6 +150,7 @@ class LightAppServiceRepo:
                     connector_instance_id,
                     json.dumps(allowed_tools, ensure_ascii=False),
                     json.dumps(allowed_url_prefixes, ensure_ascii=False),
+                    json.dumps(request_headers, ensure_ascii=False),
                     cache_ttl_seconds,
                     max_calls_per_minute,
                     int(public_live),
@@ -157,6 +173,7 @@ class LightAppServiceRepo:
         connector_instance_id: str,
         allowed_tools: list[str],
         allowed_url_prefixes: list[str],
+        request_headers: dict[str, str],
         cache_ttl_seconds: int,
         max_calls_per_minute: int,
         public_live: bool,
@@ -166,7 +183,8 @@ class LightAppServiceRepo:
             conn.execute(
                 "UPDATE light_app_services SET "
                 "provider = ?, connector_instance_id = ?, allowed_tools_json = ?, "
-                "allowed_url_prefixes_json = ?, cache_ttl_seconds = ?, "
+                "allowed_url_prefixes_json = ?, request_headers_json = ?, "
+                "cache_ttl_seconds = ?, "
                 "max_calls_per_minute = ?, public_live = ?, enabled = ?, updated_at = ? "
                 "WHERE service_id = ?",
                 (
@@ -174,6 +192,7 @@ class LightAppServiceRepo:
                     connector_instance_id,
                     json.dumps(allowed_tools, ensure_ascii=False),
                     json.dumps(allowed_url_prefixes, ensure_ascii=False),
+                    json.dumps(request_headers, ensure_ascii=False),
                     cache_ttl_seconds,
                     max_calls_per_minute,
                     int(public_live),

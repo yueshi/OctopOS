@@ -39,6 +39,7 @@ are updating `catalog.json` in the same change.
 | `tencent-meeting` | Tencent Meeting | 腾讯会议 | office | personal_token | remote |
 | `tencent-news` | Tencent News | 腾讯新闻 | media | api_key | gateway |
 | `wechat-reading` | Weixin Reading | 微信读书 | media | api_key | gateway |
+| `douban` | Douban Books | 豆瓣读书 | media | none | gateway |
 | `tencent-lexiang` | Tencent Lexiang | 腾讯乐享 | office | api_key | remote |
 | `tencent-weiyun` | Tencent Weiyun | 腾讯微云 | office | personal_token | remote |
 | `qq-mail` | Personal Mail | 个人邮箱 | productivity | imap_app_password | gateway |
@@ -64,6 +65,10 @@ are updating `catalog.json` in the same change.
 | `weknora` | WeKnora | WeKnora | knowledge | custom_fields | gateway |
 | `dify` | Dify | Dify | self_hosted | custom_fields | remote |
 | `http-extract` | HTTP JSON | HTTP 取数 | knowledge | none | gateway |
+
+> `http-extract` 同时是 MiniApp 外部服务的默认公开 HTTP 源：服务声明留空 connector 时，服务端复用或自动创建当前 owner 的实例；提供 `fetch_json` / `fetch_text` / `fetch_html`，必须配置 URL 前缀。服务声明还可设置受限请求头（`User-Agent`、`Referer`、`Accept`、`Accept-Language`）。`public_live` 仍只读缓存、不会发起 live 调用。
+>
+> `douban` 是只读公开书目录取 adapter（`search_books` / `get_book` / `get_cover`）；`reading-tracker` 模板会通过 `services.json` 自动声明它，并复用/自动创建 owner 的豆瓣 connector。
 
 ## MCP modes / MCP 模式
 

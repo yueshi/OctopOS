@@ -12,7 +12,7 @@ import pytest
 from deepagents.backends import FilesystemBackend
 from octop_harness.backends import BackendWorkspace
 
-from octop.infra.apps.models import parse_schema_payload
+from octop.infra.apps.models import PII_MASK, parse_schema_payload
 from octop.infra.apps.service import (
     _APP_LOCKS,
     FILE_PENDING,
@@ -198,7 +198,7 @@ def _block_migration(monkeypatch: pytest.MonkeyPatch, world: World) -> None:
     monkeypatch.setattr(world.service, "_ensure_db_rows", _no_migrate)
 
 
-async def test_create_writes_schema_csv_and_manifest(world: World) -> None:
+async def test_create_writes_schema_and_manifest(world: World) -> None:
     row = await world.service.create(
         agent_id=world.agent_id,
         owner_user_id=world.alice_id,
@@ -215,9 +215,9 @@ async def test_create_writes_schema_csv_and_manifest(world: World) -> None:
         await world.workspace.aread_text(app_path(row.app_id, "schema.json"))
     )
     assert schema.names == ("title", "qty", "status")
-    assert await world.workspace.aread_text(app_path(row.app_id, "data.csv")) == (
-        "title,qty,status\n"
-    )
+    # v2 keeps rows in the control-plane DB; the workspace has no empty CSV
+    # shell that could be mistaken for the live data.
+    assert await world.workspace.aexists(app_path(row.app_id, "data.csv")) is False
     manifest = json.loads(await world.workspace.aread_text(app_path(row.app_id, "manifest.json")))
     assert manifest["app_id"] == row.app_id
     assert manifest["owner_user_id"] == world.alice_id
@@ -310,11 +310,42 @@ async def test_write_and_read_html(world: World) -> None:
     _assert_code(exc, ErrorCode.APP_HTML_INVALID)
 
 
+async def test_read_html_validation_catches_direct_workspace_edit(world: World) -> None:
+    """A generic file write must not bypass the app_write_html scan."""
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.write_html(row, "<h1>ok</h1>")
+
+    # Simulate write_file/shell editing the workspace file behind AppService.
+    await world.workspace.awrite_text(
+        app_path(app_id, "app.html"),
+        '<script src="https://evil.example/x.js"></script>',
+    )
+
+    assert "evil.example" in (await world.service.read_html(row) or "")
+    with pytest.raises(OctopError) as exc:
+        await world.service.read_html(row, validate=True)
+    _assert_code(exc, ErrorCode.APP_HTML_INVALID)
+
+
+async def test_publish_rejects_unvalidated_html(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.workspace.awrite_text(
+        app_path(app_id, "app.html"),
+        '<a href="https://evil.example/leak">open</a>',
+    )
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.publish(row, user_id=world.alice_id)
+    _assert_code(exc, ErrorCode.APP_HTML_INVALID)
+
+
 async def test_file_stats_track_the_workspace_files(world: World) -> None:
     app_id = await _create(world)
     row = world.service.get(app_id)
     assert row.html_bytes == 0
-    assert row.data_bytes > 0
+    assert row.data_bytes == 0
 
     await world.service.write_html(row, "<h1>Hello</h1>")
     row = world.service.get(app_id)
@@ -337,14 +368,12 @@ async def test_list_files_reports_the_app_workspace_files(world: World) -> None:
     files = await world.service.list_files(row)
     assert [item.name for item in files] == [
         "app.html",
-        "data.csv",
         "schema.json",
         "manifest.json",
     ]
     by_name = {item.name: item for item in files}
     assert by_name["app.html"].size == len("<h1>Hello</h1>")
-    assert by_name["data.csv"].size and by_name["data.csv"].size > 0
-    assert by_name["data.csv"].path == f"apps/{app_id}/data.csv"
+    assert "data.csv" not in by_name
 
 
 async def test_list_views_backfills_the_cached_interface_size(world: World) -> None:
@@ -360,7 +389,9 @@ async def test_list_views_backfills_the_cached_interface_size(world: World) -> N
     views = await world.service.list_views_with_stats(world.alice_id, is_admin=False)
     assert [view.app_id for view in views] == [app_id]
     assert views[0].html_bytes == len("<h1>Hello</h1>")
-    assert views[0].data_bytes > 0
+    # v2 apps no longer ship an empty data.csv, so a forced-legacy app has
+    # no data bytes to report until rows are written.
+    assert views[0].data_bytes == 0
     assert views[0].has_html is True
     # The repaired sizes are cached, so later listings do not read the workspace.
     stored = world.service.get(app_id)
@@ -730,7 +761,8 @@ async def test_manifest_refreshes_after_mutations(world: World) -> None:
 
     await world.service.append_row(world.service.get(app_id), {"title": "A", "status": "new"})
     manifest = json.loads(await world.workspace.aread_text(app_path(app_id, "manifest.json")))
-    assert manifest["row_count"] == 1
+    # Counts are not duplicated into the manifest: the DB is the authority.
+    assert "row_count" not in manifest
     assert manifest["schema_version"] == 1
 
     await world.service.add_columns(world.service.get(app_id), [{"name": "notes"}])
@@ -744,6 +776,12 @@ async def test_row_count_reconciles_with_data_csv(
     app_id = await _create(world)
     _make_legacy(world, app_id)
     _block_migration(monkeypatch, world)
+    # v2 create no longer writes an empty CSV, so simulate the legacy file
+    # the test is about before the first append.
+    await world.workspace.awrite_text(
+        app_path(app_id, "data.csv"),
+        "title,qty,status\n",
+    )
     await world.service.append_row(world.service.get(app_id), {"title": "A", "status": "new"})
     await world.workspace.awrite_text(
         app_path(app_id, "data.csv"),
@@ -785,6 +823,10 @@ async def test_append_aborts_when_data_csv_is_unreadable(
     app_id = await _create(world)
     _make_legacy(world, app_id)
     _block_migration(monkeypatch, world)
+    await world.workspace.awrite_text(
+        app_path(app_id, "data.csv"),
+        "title,qty,status\n",
+    )
     row = world.service.get(app_id)
     await world.service.append_row(row, {"title": "A", "status": "new"})
     await world.workspace.adelete(app_path(app_id, "data.csv"))
@@ -807,7 +849,9 @@ async def test_create_cleans_up_partial_workspace_files(
 
     async def failing_write(path: str, content: str) -> None:
         calls["count"] += 1
-        if calls["count"] == 2:
+        # v2 create writes schema.json first; a failure there must roll the
+        # app row back. (The manifest is best-effort by design.)
+        if calls["count"] == 1:
             raise RuntimeError("disk full")
         await original(path, content)
 
@@ -825,6 +869,10 @@ async def test_append_staging_failure_preserves_existing_rows(
     app_id = await _create(world)
     _make_legacy(world, app_id)
     _block_migration(monkeypatch, world)
+    await world.workspace.awrite_text(
+        app_path(app_id, "data.csv"),
+        "title,qty,status\n",
+    )
     row = world.service.get(app_id)
     await world.service.append_row(row, {"title": "A", "status": "new"})
 
@@ -852,6 +900,10 @@ async def test_add_columns_recovers_interrupted_promotion(
     app_id = await _create(world)
     _make_legacy(world, app_id)
     _block_migration(monkeypatch, world)
+    await world.workspace.awrite_text(
+        app_path(app_id, "data.csv"),
+        "title,qty,status\n",
+    )
     row = world.service.get(app_id)
     await world.service.append_row(row, {"title": "A", "status": "new"})
 
@@ -881,6 +933,10 @@ async def test_add_columns_recovers_interrupted_promotion(
 async def test_pending_journal_rejects_paths_outside_the_app(world: World) -> None:
     app_id = await _create(world)
     _make_legacy(world, app_id)
+    await world.workspace.awrite_text(
+        app_path(app_id, "data.csv"),
+        "title,qty,status\n",
+    )
     await world.workspace.awrite_text("SOUL.md", "secret")
     await world.workspace.awrite_text(
         app_path(app_id, FILE_PENDING),
@@ -963,13 +1019,13 @@ async def test_multi_table_rows_are_isolated(world: World) -> None:
     assert schema.names == ("item",)
 
     names = [item.name for item in await world.service.list_files(world.service.get(app_id))]
-    assert "tables/orders.csv" in names
+    assert "tables/orders.csv" not in names
     assert "tables/orders.schema.json" in names
 
     manifest = json.loads(await world.workspace.aread_text(app_path(app_id, "manifest.json")))
     assert [item["key"] for item in manifest["tables"]] == ["main", "orders"]
     assert manifest["tables"][1]["schema_version"] == 1
-    assert manifest["tables"][1]["row_count"] == 2
+    assert "row_count" not in manifest["tables"][1]
 
 
 async def test_add_columns_on_an_extra_table(world: World) -> None:
@@ -2629,7 +2685,7 @@ def _connector_instance(world: World, *, owner_id: int, kind: str = "http-extrac
         instance_id=instance_id,
         user_id=owner_id,
         kind=kind,
-        display_name="HTTP",
+        display_name=f"HTTP {instance_id[-6:]}",
         mcp_server_name=f"http_{instance_id}",
     )
     return instance_id
@@ -2727,6 +2783,152 @@ async def test_service_declaration_validates_and_mirrors_binding(world: World) -
     _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
 
 
+async def test_public_http_service_auto_provisions_a_connector(world: World) -> None:
+    app_id = await _create_external_app(world)
+    row = world.service.get(app_id)
+
+    view = world.service.save_service(
+        row,
+        name="public",
+        provider="external",
+        connector_instance_id="",
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=60,
+        max_calls_per_minute=30,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    instance = world.connector_repo.get(view.connector_instance_id)
+    assert instance is not None
+    assert instance.kind == "http-extract"
+
+    # A second public service reuses the same auto-created connector.
+    second = world.service.save_service(
+        row,
+        name="public-two",
+        provider="external",
+        connector_instance_id="",
+        allowed_tools=["fetch_text"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=5,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    assert second.connector_instance_id == view.connector_instance_id
+    assert len(world.connector_repo.list_by_user(world.alice_id)) == 1
+
+    # http-extract has a fixed tool set and cannot be a public-live service.
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="bad-tool",
+            provider="external",
+            connector_instance_id="",
+            allowed_tools=["write_file"],
+            allowed_url_prefixes=["https://api.example.com"],
+            cache_ttl_seconds=0,
+            max_calls_per_minute=5,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="no-prefix",
+            provider="external",
+            connector_instance_id="",
+            allowed_tools=["fetch_json"],
+            allowed_url_prefixes=[],
+            cache_ttl_seconds=0,
+            max_calls_per_minute=5,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+
+async def test_template_services_auto_provision_douban(world: World) -> None:
+    schema = json.dumps(
+        {
+            "version": 1,
+            "columns": [
+                {"name": "title", "label": "书名", "type": "text", "required": True},
+            ],
+        },
+        ensure_ascii=False,
+    )
+    await world.workspace.awrite_text("app_templates/reading/schema.json", schema)
+    await world.workspace.awrite_text("app_templates/reading/app.html", "<h1>Reading</h1>")
+    await world.workspace.awrite_text(
+        "app_templates/reading/services.json",
+        json.dumps(
+            {
+                "services": [
+                    {
+                        "name": "douban",
+                        "provider": "external",
+                        "connector_kind": "douban",
+                        "allowed_tools": ["search_books", "get_book", "get_cover"],
+                        "allowed_url_prefixes": [],
+                        "cache_ttl_seconds": 600,
+                        "max_calls_per_minute": 20,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    row = await world.service.create_from_template(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        template="reading",
+        name="读书记录",
+    )
+    services = world.service.list_services(row)
+    assert [item.name for item in services] == ["douban"]
+    assert "https://img3.doubanio.com" in services[0].allowed_url_prefixes
+    instance = world.connector_repo.get(services[0].connector_instance_id)
+    assert instance is not None
+    assert instance.kind == "douban"
+    assert instance.user_id == world.alice_id
+
+
+async def test_douban_service_gets_default_cover_prefixes(world: World) -> None:
+    app_id = await _create_external_app(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id, kind="douban")
+
+    view = world.service.save_service(
+        row,
+        name="douban",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["search_books", "get_book", "get_cover"],
+        allowed_url_prefixes=[],
+        cache_ttl_seconds=300,
+        max_calls_per_minute=10,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    assert "https://img3.doubanio.com" in view.allowed_url_prefixes
+    assert "https://img9.doubanio.com" in view.allowed_url_prefixes
+
+
 async def test_service_call_caches_and_enforces_allowlists(world: World) -> None:
     app_id = await _create_external_app(world)
     row = world.service.get(app_id)
@@ -2817,6 +3019,135 @@ async def test_service_call_caches_and_enforces_allowlists(world: World) -> None
     _assert_code(exc, ErrorCode.APP_BUSY)
 
 
+async def test_service_request_headers_are_forwarded(world: World) -> None:
+    app_id = await _create_external_app(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+    view = world.service.save_service(
+        row,
+        name="books",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_html"],
+        allowed_url_prefixes=["https://book.douban.com"],
+        request_headers={
+            "user-agent": "Mozilla/5.0",
+            "Referer": "https://book.douban.com/",
+        },
+        cache_ttl_seconds=300,
+        max_calls_per_minute=3,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    assert view.request_headers == {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://book.douban.com/",
+    }
+
+    runner = world.service._external_tool_runner
+    assert isinstance(runner, FakeExternalToolRunner)
+    first = await world.service.call_service(
+        row,
+        name="books",
+        tool="fetch_html",
+        args={"url": "https://book.douban.com/subject/2567698/"},
+    )
+    assert first.cached is False
+    assert runner.calls == [
+        (
+            instance_id,
+            "fetch_html",
+            {
+                "url": "https://book.douban.com/subject/2567698/",
+                "_headers": {
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://book.douban.com/",
+                },
+            },
+        )
+    ]
+
+    second = await world.service.call_service(
+        row,
+        name="books",
+        tool="fetch_html",
+        args={"url": "https://book.douban.com/subject/2567698/"},
+    )
+    assert second.cached is True
+    assert len(runner.calls) == 1
+
+
+async def test_service_request_headers_are_restricted(world: World) -> None:
+    app_id = await _create_external_app(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="books",
+            provider="external",
+            connector_instance_id=instance_id,
+            allowed_tools=["fetch_json"],
+            allowed_url_prefixes=["https://book.douban.com"],
+            request_headers={"Authorization": "secret"},
+            cache_ttl_seconds=0,
+            max_calls_per_minute=3,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+    douban_id = _connector_instance(world, owner_id=world.alice_id, kind="douban")
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            name="douban",
+            provider="external",
+            connector_instance_id=douban_id,
+            allowed_tools=["search_books"],
+            allowed_url_prefixes=["https://book.douban.com"],
+            request_headers={"User-Agent": "Mozilla/5.0"},
+            cache_ttl_seconds=0,
+            max_calls_per_minute=3,
+            public_live=False,
+            enabled=True,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+    world.service.save_service(
+        row,
+        name="books",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://book.douban.com"],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=3,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    with pytest.raises(OctopError) as exc:
+        await world.service.call_service(
+            row,
+            name="books",
+            tool="fetch_json",
+            args={
+                "url": "https://book.douban.com/j/subject_suggest",
+                "_headers": {"User-Agent": "page-supplied"},
+            },
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+
 async def test_service_call_requires_external_fetch_capability(world: World) -> None:
     app_id = await _create(world)
     row = world.service.get(app_id)
@@ -2886,6 +3217,44 @@ async def test_service_image_is_saved_as_asset(
             url="https://evil.example.net/cover.png",
         )
     _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+
+def test_service_image_fetch_sends_origin_referer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from octop.infra.apps import service as app_service_module
+
+    seen: list[tuple[str, dict[str, str] | None]] = []
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "image/png"}
+        content = b"\x89PNG\r\n\x1a\nfake-pixels"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            headers = kwargs.get("headers")
+            seen.append((url, headers if isinstance(headers, dict) else None))
+            return FakeResponse()
+
+    monkeypatch.setattr(app_service_module, "validate_agent_fetch_url", lambda url: url)
+    monkeypatch.setattr(app_service_module.httpx, "Client", FakeClient)
+
+    data = app_service_module._fetch_service_image("https://img.example.com/cover.png")
+    assert data == FakeResponse.content
+    assert seen == [("https://img.example.com/cover.png", {"Referer": "https://img.example.com/"})]
 
 
 async def test_app_event_inbox_cursor_ack_and_idempotency(world: World) -> None:
@@ -3036,3 +3405,411 @@ async def test_source_retry_after_partial_commit_does_not_duplicate(
     monkeypatch.setattr("octop.infra.apps.service.MAX_ROWS", 1)
     at_cap = await world.service.run_source(row, "src_retry")
     assert at_cap.imported == 0
+
+
+async def test_row_history_records_update_and_delete(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    _, stored = await world.service.append_row_record(
+        row,
+        {"title": "A", "qty": "1", "status": "new"},
+        created_by=world.alice_id,
+        source="manual",
+    )
+
+    await world.service.update_row(
+        row,
+        stored.row_id,
+        {"title": "B", "qty": "2", "status": "doing"},
+        actor_user_id=world.bob_id,
+        source="agent",
+    )
+    history = await world.service.row_history(row, stored.row_id)
+    assert len(history) == 1
+    update = history[0]
+    assert update["action"] == "update"
+    assert update["actor"] == f"user:{world.bob_id}"
+    assert update["source"] == "agent"
+    assert update["version"] == 2
+    assert update["before"] == {"title": "A", "qty": "1", "status": "new"}
+    assert update["after"] == {"title": "B", "qty": "2", "status": "doing"}
+
+    await world.service.delete_row(
+        row,
+        stored.row_id,
+        actor_user_id=world.alice_id,
+    )
+    history = await world.service.row_history(row, stored.row_id)
+    assert [item["action"] for item in history] == ["delete", "update"]
+    deleted = history[0]
+    assert deleted["actor"] == f"user:{world.alice_id}"
+    assert deleted["before"] == {"title": "B", "qty": "2", "status": "doing"}
+    assert deleted["after"] is None
+    assert deleted["version"] == 2
+
+
+async def test_row_history_records_replace_import(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    _, first = await world.service.append_row_record(
+        row,
+        {"title": "A", "status": "new"},
+        created_by=world.alice_id,
+    )
+    _, second = await world.service.append_row_record(
+        row,
+        {"title": "B", "status": "done"},
+        created_by=world.alice_id,
+    )
+
+    await world.service.import_rows(
+        row,
+        [{"title": "C", "status": "new"}],
+        mode="replace",
+        created_by=world.alice_id,
+        source="import",
+    )
+    for row_id, title in ((first.row_id, "A"), (second.row_id, "B")):
+        history = await world.service.row_history(row, row_id)
+        assert len(history) == 1
+        entry = history[0]
+        assert entry["action"] == "replace"
+        assert entry["actor"] == f"user:{world.alice_id}"
+        assert entry["source"] == "import"
+        assert entry["before"]["title"] == title
+        assert entry["after"] is None
+
+
+async def test_row_history_records_upsert_update(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    _, stored = await world.service.append_row_record(
+        row,
+        {"title": "A", "qty": "1", "status": "new"},
+        source="import",
+        source_id="import",
+        source_key="A",
+        created_by=world.alice_id,
+    )
+
+    result = await world.service.import_rows(
+        row,
+        [{"title": "A", "qty": "7", "status": "done"}],
+        upsert_key=["title"],
+        source="import",
+        created_by=world.alice_id,
+    )
+    assert result.updated == 1
+    history = await world.service.row_history(row, stored.row_id)
+    assert len(history) == 1
+    entry = history[0]
+    assert entry["action"] == "update"
+    assert entry["source"] == "import"
+    assert entry["actor"] == f"user:{world.alice_id}"
+    assert entry["before"]["qty"] == "1"
+    assert entry["after"]["qty"] == "7"
+    assert entry["after"]["status"] == "done"
+
+
+async def test_row_history_redacts_pii_for_viewers(world: World) -> None:
+    app = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        name="Contacts",
+        description="",
+        columns=[
+            {"name": "title", "type": "string"},
+            {"name": "phone", "type": "string", "pii": "phone"},
+        ],
+    )
+    _, stored = await world.service.append_row_record(
+        app,
+        {"title": "A", "phone": "13800138000"},
+        created_by=world.alice_id,
+    )
+    await world.service.update_row(
+        app,
+        stored.row_id,
+        {"title": "B", "phone": "13900139000"},
+        actor_user_id=world.alice_id,
+    )
+
+    raw = await world.service.row_history(app, stored.row_id)
+    assert raw[0]["before"]["phone"] == "13800138000"
+    assert raw[0]["after"]["phone"] == "13900139000"
+
+    redacted = await world.service.row_history(app, stored.row_id, redact_pii=True)
+    assert redacted[0]["before"]["phone"] == PII_MASK
+    assert redacted[0]["after"]["phone"] == PII_MASK
+
+
+async def test_row_history_is_scoped_to_user_rows(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.set_table_row_scope(row, table="main", row_scope="user")
+    row = world.service.get(app_id)
+    _, stored = await world.service.append_row_record(
+        row,
+        {"title": "A", "status": "new"},
+        created_by=world.alice_id,
+    )
+    await world.service.update_row(
+        row,
+        stored.row_id,
+        {"title": "B", "status": "done"},
+        actor_user_id=world.alice_id,
+        viewer_user_id=world.alice_id,
+        include_all_rows=True,
+    )
+
+    assert await world.service.row_history(row, stored.row_id, viewer_user_id=world.bob_id) == []
+    visible = await world.service.row_history(row, stored.row_id, viewer_user_id=world.alice_id)
+    assert len(visible) == 1
+    owner_view = await world.service.row_history(
+        row,
+        stored.row_id,
+        viewer_user_id=world.alice_id,
+        include_all_rows=True,
+    )
+    assert len(owner_view) == 1
+
+    await world.service.delete_row(
+        row,
+        stored.row_id,
+        actor_user_id=world.alice_id,
+        viewer_user_id=world.alice_id,
+        include_all_rows=True,
+    )
+    assert await world.service.row_history(row, stored.row_id, viewer_user_id=world.bob_id) == []
+    after_delete = await world.service.row_history(
+        row,
+        stored.row_id,
+        viewer_user_id=world.alice_id,
+    )
+    assert [entry["action"] for entry in after_delete] == ["delete", "update"]
+
+
+async def test_row_history_trim_drops_old_entries(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    _, stored = await world.service.append_row_record(
+        row,
+        {"title": "A", "status": "new"},
+        created_by=world.alice_id,
+    )
+    await world.service.update_row(
+        row,
+        stored.row_id,
+        {"title": "B", "status": "done"},
+        actor_user_id=world.alice_id,
+    )
+    with world.db.transaction() as conn:
+        conn.execute(
+            "UPDATE light_app_row_history SET changed_at = 0 WHERE app_id = ?",
+            (app_id,),
+        )
+    assert world.service.trim_row_history() == 1
+    assert await world.service.row_history(row, stored.row_id) == []
+
+
+async def test_db_stats_stay_authoritative_after_every_write(world: World) -> None:
+    """P0-3: counts/version have one source (the DB), not CSV or manifest copies."""
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    _, first = await world.service.append_row_record(
+        row,
+        {"title": "A", "qty": "1", "status": "new"},
+        created_by=world.alice_id,
+    )
+    await world.service.append_row_record(
+        row,
+        {"title": "B", "qty": "2", "status": "done"},
+        created_by=world.alice_id,
+    )
+    await world.service.update_row(
+        row,
+        first.row_id,
+        {"title": "A", "qty": "3", "status": "done"},
+        actor_user_id=world.alice_id,
+    )
+    await world.service.delete_row(row, first.row_id, actor_user_id=world.alice_id)
+    await world.service.import_rows(
+        row,
+        [{"title": "C", "qty": "4", "status": "new"}],
+        mode="replace",
+        created_by=world.alice_id,
+    )
+
+    stored = world.repo.get(app_id)
+    table = world.repo.get_table(app_id, "main")
+    assert table is not None
+    assert stored.row_count == table.row_count == world.repo.count_data_rows(app_id, "main")
+    assert stored.row_count == 1
+    assert table.data_version > 0
+    with world.db.connect() as conn:
+        total = conn.execute(
+            "SELECT COALESCE(SUM(row_count), 0) AS c FROM light_app_tables WHERE app_id = ?",
+            (app_id,),
+        ).fetchone()["c"]
+    assert total == stored.row_count
+
+    manifest = json.loads(await world.workspace.aread_text(app_path(app_id, "manifest.json")))
+    assert "row_count" not in manifest
+    assert all("row_count" not in item for item in manifest["tables"])
+    # v2 apps keep no data.csv mirror in the workspace.
+    assert await world.workspace.aexists(app_path(app_id, "data.csv")) is False
+
+
+async def test_scheduled_source_replace_does_not_write_row_history(world: World) -> None:
+    """Automated full-table syncs must not copy every old row into history."""
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    _, stored = await world.service.append_row_record(
+        row,
+        {"title": "A", "qty": "1", "status": "new"},
+        created_by=world.alice_id,
+    )
+    path = "inbound/imports/sync.csv"
+    await world.workspace.awrite_text(path, "title,qty,status\nB,7,done\n")
+    world.service.save_source(
+        row,
+        source_id="src_sync",
+        table_key="main",
+        kind="workspace_file",
+        mode="replace",
+        schedule_seconds=120,
+        params={"path": path},
+        created_by=world.alice_id,
+    )
+
+    result = await world.service.run_source(row, "src_sync")
+
+    assert result.imported == 1
+    assert await world.service.row_history(row, stored.row_id) == []
+    _, rows, total = await world.service.read_rows(world.service.get(app_id))
+    assert total == 1
+    assert rows[0]["title"] == "B"
+
+
+async def test_aggregate_rows_apply_filters_and_row_scope(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.append_row_record(
+        row,
+        {"title": "A", "qty": "1", "status": "new"},
+        created_by=world.alice_id,
+    )
+    await world.service.append_row_record(
+        row,
+        {"title": "B", "qty": "2", "status": "done"},
+        created_by=world.alice_id,
+    )
+    await world.service.append_row_record(
+        row,
+        {"title": "C", "qty": "4", "status": "done"},
+        created_by=world.bob_id,
+    )
+
+    result = await world.service.aggregate_rows(
+        row,
+        group_by="status",
+        metric="qty",
+        agg="sum",
+        filters={"status": "done"},
+    )
+    assert result["table"] == "main"
+    assert result["matched_rows"] == 2
+    assert result["groups"] == [{"key": "done", "value": 6.0, "count": 2}]
+
+    # A per-user table only aggregates the caller's rows unless owner/admin.
+    await world.service.set_table_row_scope(row, table="main", row_scope="user")
+    row = world.service.get(app_id)
+    bob_view = await world.service.aggregate_rows(
+        row,
+        group_by="status",
+        metric="qty",
+        agg="sum",
+        viewer_user_id=world.bob_id,
+    )
+    assert bob_view["matched_rows"] == 1
+    assert bob_view["groups"] == [{"key": "done", "value": 4.0, "count": 1}]
+
+    owner_view = await world.service.aggregate_rows(
+        row,
+        group_by="status",
+        metric="qty",
+        agg="sum",
+        viewer_user_id=world.alice_id,
+        include_all_rows=True,
+    )
+    assert owner_view["matched_rows"] == 3
+    assert owner_view["groups"] == [
+        {"key": "done", "value": 6.0, "count": 2},
+        {"key": "new", "value": 1.0, "count": 1},
+    ]
+
+
+async def test_aggregate_rejects_pii_filter(world: World) -> None:
+    app = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        name="Contacts",
+        description="",
+        columns=[
+            {"name": "title", "type": "string"},
+            {"name": "phone", "type": "string", "pii": "phone"},
+        ],
+    )
+    await world.service.append_row_record(
+        app,
+        {"title": "A", "phone": "13800138000"},
+        created_by=world.alice_id,
+    )
+    with pytest.raises(OctopError) as exc:
+        await world.service.aggregate_rows(
+            app, group_by="title", agg="count", filters={"phone": "13800138000"}
+        )
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+
+
+async def test_app_event_idempotency_is_scoped_to_each_app(world: World) -> None:
+    first_id = await _create(world, name="First")
+    second_id = await _create(world, name="Second")
+    first = world.service.get(first_id)
+    second = world.service.get(second_id)
+
+    first_event = world.service.append_event(
+        first,
+        event_type="order.created",
+        payload={"order": 1},
+        source="crm",
+        summary="first",
+        external_event_id="upstream-1",
+    )
+    second_event = world.service.append_event(
+        second,
+        event_type="order.created",
+        payload={"order": 2},
+        source="crm",
+        summary="second",
+        external_event_id="upstream-1",
+    )
+    assert first_event.event_id == second_event.event_id
+
+    first_events, _ = world.service.list_events(first)
+    second_events, _ = world.service.list_events(second)
+    assert [item.payload for item in first_events] == [{"order": 1}]
+    assert [item.payload for item in second_events] == [{"order": 2}]
+
+    # The same upstream event retried for the same app stays idempotent.
+    retried = world.service.append_event(
+        first,
+        event_type="order.created",
+        payload={"order": 3},
+        source="crm",
+        summary="retry",
+        external_event_id="upstream-1",
+    )
+    assert retried.event_id == first_event.event_id
+    first_events, _ = world.service.list_events(first)
+    assert [item.payload for item in first_events] == [{"order": 1}]

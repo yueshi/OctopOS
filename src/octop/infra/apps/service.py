@@ -28,11 +28,13 @@ import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from octop_harness.backends import BackendWorkspace
 from octop_harness.security.ssrf import validate_agent_fetch_url
 
+from octop.infra.apps import aggregate as app_aggregate
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps import limits as app_limits
 from octop.infra.apps.importer import parse_import_file
@@ -46,6 +48,7 @@ from octop.infra.apps.models import (
     MAX_ROW_READ,
     MAX_ROWS,
     MAX_TABLES_PER_APP,
+    PII_MASK,
     TABLE_KEY_RE,
     Column,
     Schema,
@@ -63,6 +66,7 @@ from octop.infra.apps.models import (
     validate_table_key,
 )
 from octop.infra.apps.pii import find_unmarked_pii
+from octop.infra.apps.pii import redact_text as redact_pii_text
 from octop.infra.apps.preview import PREVIEW_FILENAME, validate_preview_svg
 from octop.infra.apps.templates import (
     AGENT_SOURCE,
@@ -73,9 +77,15 @@ from octop.infra.apps.templates import (
     clean_template_id,
     list_system_templates,
     read_system_template,
+    read_system_template_services,
 )
 from octop.infra.apps.viewgen import render_html as render_view_html
 from octop.infra.apps.viewgen import render_multi_html, suggest_view
+from octop.infra.connectors.builder import mcp_server_name
+from octop.infra.connectors.catalog import get_catalog_entry
+from octop.infra.connectors.gateway.adapters.douban import COVER_URL_PREFIXES
+from octop.infra.connectors.gateway.adapters.http_extract import normalize_request_headers
+from octop.infra.connectors.gateway.registry import mcp_tools_for_kind
 from octop.infra.db.repos.agents import AgentRepo
 from octop.infra.db.repos.app_access import (
     APP_ACCESS_APPROVED,
@@ -116,7 +126,7 @@ from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo, UserRow
 from octop.infra.errors import ErrorCode, OctopError
-from octop.infra.utils.ulid import new_short_id
+from octop.infra.utils.ulid import new_short_id, new_ulid
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +134,7 @@ APPS_DIR = "apps"
 FILE_HTML = "app.html"
 FILE_DATA = "data.csv"
 FILE_SCHEMA = "schema.json"
+FILE_ROW_IDS = "row_ids.json"
 FILE_MANIFEST = "manifest.json"
 FILE_PENDING = ".pending.json"
 FILE_PREVIEW = PREVIEW_FILENAME
@@ -139,7 +150,7 @@ MAX_FAILED_ROWS = 200
 """Largest asset an app may store (covers book covers and small icons)."""
 
 BACKUP_FORMAT = "octop.light-app.backup"
-BACKUP_VERSION = 1
+BACKUP_VERSION = 2
 MAX_BACKUP_BYTES = 64 * 1024 * 1024
 """Largest backup archive accepted for restore."""
 
@@ -332,6 +343,7 @@ class ServiceView:
     connector_instance_id: str
     allowed_tools: tuple[str, ...]
     allowed_url_prefixes: tuple[str, ...]
+    request_headers: dict[str, str]
     cache_ttl_seconds: int
     max_calls_per_minute: int
     public_live: bool
@@ -397,6 +409,9 @@ SERVICE_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 APP_EVENT_RETENTION_SECONDS = 30 * 24 * 3600
 APP_EVENT_KEEP = 500
 APP_EVENT_MAX_PAYLOAD_BYTES = 64 * 1024
+
+ROW_HISTORY_RETENTION_DAYS = 90
+"""Row-history entries older than this are trimmed by the app scheduler."""
 
 IMPORT_DIR = "inbound/imports"
 MAX_IMPORT_ERRORS = 5
@@ -616,6 +631,11 @@ def _extract_records(output: str, result_path: str) -> list[dict[str, str]]:
     return records
 
 
+def _history_actor(user_id: int | None) -> str:
+    """Stable actor label for the row-history ledger."""
+    return f"user:{user_id}" if user_id is not None else "_system"
+
+
 def _invalid(code: ErrorCode, reason: str, **details: object) -> OctopError:
     return OctopError(code, reason, details={**details})
 
@@ -639,7 +659,7 @@ def _read_backup_zip(
     data: bytes,
 ) -> tuple[
     dict[str, Any],
-    dict[str, tuple[str, bytes, bytes]],
+    dict[str, tuple[str, bytes, bytes, bytes]],
     str | None,
     str | None,
     list[tuple[str, bytes]],
@@ -679,7 +699,7 @@ def _read_backup_zip(
         raw_tables = manifest.get("tables")
         if not isinstance(raw_tables, list) or not raw_tables:
             raise ValueError("manifest is missing tables")
-        tables: dict[str, tuple[str, bytes, bytes]] = {}
+        tables: dict[str, tuple[str, bytes, bytes, bytes]] = {}
         for item in raw_tables:
             if not isinstance(item, dict):
                 raise ValueError("manifest has an invalid table entry")
@@ -688,6 +708,7 @@ def _read_backup_zip(
                 raise ValueError(f"duplicate table: {key}")
             schema_name = f"{TABLES_DIR}/{key}/{FILE_SCHEMA}"
             csv_name = f"{TABLES_DIR}/{key}/{FILE_DATA}"
+            row_ids_name = f"{TABLES_DIR}/{key}/{FILE_ROW_IDS}"
             if schema_name not in names:
                 raise ValueError(f"table {key} has no schema")
             label = str(item.get("label") or "")[:MAX_LABEL_LEN]
@@ -695,6 +716,7 @@ def _read_backup_zip(
                 label,
                 read_entry(schema_name),
                 read_entry(csv_name) if csv_name in names else b"",
+                read_entry(row_ids_name) if row_ids_name in names else b"",
             )
         html: str | None = None
         if FILE_HTML in names:
@@ -745,7 +767,13 @@ def _fetch_service_image(url: str, *, timeout: float = 20.0) -> bytes:
     with httpx.Client(timeout=timeout, follow_redirects=False) as client:
         for _ in range(6):
             validate_agent_fetch_url(current)
-            response = client.get(current)
+            # Some public image CDNs (e.g. Douban) reject hotlinks without a
+            # Referer; the image's own origin is what a browser would send.
+            parts = urlsplit(current)
+            response = client.get(
+                current,
+                headers={"Referer": f"{parts.scheme}://{parts.netloc}/"},
+            )
             if 300 <= response.status_code < 400:
                 location = (response.headers.get("location") or "").strip()
                 if not location:
@@ -1699,7 +1727,7 @@ class AppService:
                         source="migration",
                     )
                 self._app_repo.set_storage_version(current.app_id, 2)
-                await self._refresh_manifest(ws, current.app_id)
+                await self._after_write(ws, current.app_id)
                 return True
             except Exception:
                 logger.warning(
@@ -1805,7 +1833,6 @@ class AppService:
             "description": row.description,
             "agent_id": row.agent_id,
             "owner_user_id": row.owner_user_id,
-            "row_count": row.row_count,
             "schema_version": main_version,
             "data_storage": ("control-plane-db" if row.storage_version >= 2 else "workspace-csv"),
             "created_at": row.created_at,
@@ -1813,6 +1840,16 @@ class AppService:
             "tables": tables,
         }
         return json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+
+    async def _after_write(self, ws: BackendWorkspace, app_id: str) -> None:
+        """Single post-write hook for MiniApp persistence.
+
+        Counts, ``data_version`` and app totals are updated atomically inside
+        the row-store repo methods. This hook owns the remaining derived
+        artifact — the workspace ``manifest.json`` — so a new write path does
+        not have to remember it separately.
+        """
+        await self._refresh_manifest(ws, app_id)
 
     async def _refresh_manifest(self, ws: BackendWorkspace, app_id: str) -> None:
         row = self._app_repo.get(app_id)
@@ -1828,7 +1865,6 @@ class AppService:
                 {
                     "key": table.table_key,
                     "label": table.label,
-                    "row_count": table.row_count,
                     "schema_version": version,
                     "is_main": table.is_main,
                     "public_visible": table.public_visible,
@@ -1916,8 +1952,10 @@ class AppService:
         clean = clean_template_id(template)
         schema_text: str
         html: str | None
+        services_text: str | None = None
         if source == SYSTEM_SOURCE:
             schema_text, html = read_system_template(clean)
+            services_text = read_system_template_services(clean)
         elif source == AGENT_SOURCE:
             ws = await self._workspace(agent_id)
             stored_schema = await ws.aread_text(f"app_templates/{clean}/schema.json")
@@ -1925,6 +1963,7 @@ class AppService:
                 raise _invalid(ErrorCode.APP_NOT_FOUND, f"unknown app template: {clean}")
             schema_text = stored_schema
             html = await ws.aread_text(f"app_templates/{clean}/app.html")
+            services_text = await ws.aread_text(f"app_templates/{clean}/services.json")
         else:
             raise _invalid(ErrorCode.APP_NOT_FOUND, f"unknown template source: {source!r}")
         row = await self.create(
@@ -1954,7 +1993,82 @@ class AppService:
                     clean,
                     exc_info=True,
                 )
+        if services_text:
+            await self._apply_template_services(
+                row,
+                services_text,
+                owner_user_id=owner_user_id,
+                template=clean,
+            )
         return row
+
+    async def _apply_template_services(
+        self,
+        row: AppRecord,
+        services_text: str,
+        *,
+        owner_user_id: int,
+        template: str,
+    ) -> None:
+        """Create the service declarations a template ships with.
+
+        Template files must not contain credentials or connector instance ids;
+        zero-credential gateway connectors are auto-provisioned per owner.
+        A service failure is logged and does not delete an otherwise usable app.
+        """
+        try:
+            payload = json.loads(services_text)
+        except ValueError:
+            logger.warning("template %s: invalid services.json", template)
+            return
+        raw_items = payload.get("services") if isinstance(payload, dict) else payload
+        if not isinstance(raw_items, list):
+            logger.warning("template %s: services.json must be a list", template)
+            return
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            name = str(raw.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                self.save_service(
+                    row,
+                    name=name,
+                    provider=str(raw.get("provider") or "external"),
+                    connector_instance_id=str(raw.get("connector_instance_id") or ""),
+                    connector_kind=(
+                        str(raw["connector_kind"]).strip() if raw.get("connector_kind") else None
+                    ),
+                    allowed_tools=[
+                        str(item).strip()
+                        for item in raw.get("allowed_tools") or []
+                        if str(item).strip()
+                    ],
+                    allowed_url_prefixes=[
+                        str(item).strip()
+                        for item in raw.get("allowed_url_prefixes") or []
+                        if str(item).strip()
+                    ],
+                    request_headers=(
+                        raw.get("request_headers")
+                        if isinstance(raw.get("request_headers"), dict)
+                        else None
+                    ),
+                    cache_ttl_seconds=int(raw.get("cache_ttl_seconds", 300)),
+                    max_calls_per_minute=int(raw.get("max_calls_per_minute", 30)),
+                    public_live=bool(raw.get("public_live", False)),
+                    enabled=bool(raw.get("enabled", True)),
+                    actor_user_id=owner_user_id,
+                    is_admin=False,
+                )
+            except Exception:
+                logger.warning(
+                    "template %s: failed to create service %s",
+                    template,
+                    name,
+                    exc_info=True,
+                )
 
     # ----- create / metadata -----
 
@@ -1994,10 +2108,11 @@ class AppService:
             capabilities_json=app_capabilities.dump(selected_capabilities),
         )
         try:
-            empty_csv = render_csv(schema, [])
+            # v2 rows live in the control-plane DB. The workspace keeps a
+            # schema mirror for the agent, but no empty data.csv shell: a
+            # file that looks authoritative but is always empty is exactly
+            # the drift P0-3 removes.
             await ws.awrite_text(app_path(app_id, FILE_SCHEMA), schema.to_json())
-            await ws.awrite_text(app_path(app_id, FILE_DATA), empty_csv)
-            data_bytes = len(empty_csv.encode("utf-8"))
             self._app_repo.create_table(
                 app_id,
                 MAIN_TABLE_KEY,
@@ -2013,24 +2128,10 @@ class AppService:
                 app_id,
                 MAIN_TABLE_KEY,
                 row_count=0,
-                data_bytes=data_bytes,
+                data_bytes=0,
             )
-            await ws.awrite_text(
-                app_path(app_id, FILE_MANIFEST),
-                self._manifest_text(
-                    row,
-                    [
-                        {
-                            "key": MAIN_TABLE_KEY,
-                            "label": "",
-                            "row_count": 0,
-                            "schema_version": schema.version,
-                            "is_main": True,
-                        }
-                    ],
-                ),
-            )
-            self._app_repo.set_file_stats(app_id, html_bytes=0, data_bytes=data_bytes)
+            await self._after_write(ws, app_id)
+            self._app_repo.set_file_stats(app_id, html_bytes=0, data_bytes=0)
         except Exception:
             self._app_repo.delete(app_id)
             try:
@@ -2150,12 +2251,11 @@ class AppService:
                     limit=MAX_TABLES_PER_APP,
                 )
             ws = await self._workspace(row.agent_id)
-            schema_file, data_file = table_file_names(key)
-            empty_csv = render_csv(schema, [])
+            schema_file, _data_file = table_file_names(key)
             await self._write_atomic(
                 ws,
                 row.app_id,
-                {schema_file: schema.to_json(), data_file: empty_csv},
+                {schema_file: schema.to_json()},
             )
             self._app_repo.create_table(
                 row.app_id,
@@ -2169,9 +2269,10 @@ class AppService:
                 row.app_id,
                 key,
                 row_count=0,
-                data_bytes=len(empty_csv.encode("utf-8")),
+                data_bytes=0,
             )
             self._app_repo.refresh_app_totals(row.app_id)
+            await self._after_write(ws, row.app_id)
         return AppTableView(
             table_key=key,
             label=clean_label,
@@ -2203,7 +2304,7 @@ class AppService:
             self._ensure_main_table(current)
             self._app_repo.set_table_row_scope(current.app_id, key, row_scope=clean_scope)
             ws = await self._workspace(current.agent_id)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
         return next(item for item in self.list_tables(current) if item.table_key == key)
 
     def table_row_scope(self, row: AppRecord, table: str) -> str:
@@ -2236,7 +2337,7 @@ class AppService:
             if len(payload.encode("utf-8")) > 16 * 1024:
                 raise _invalid(ErrorCode.APP_SHARE_INVALID, "table rules exceed 16 KB")
             self._app_repo.set_table_rules(current.app_id, key, rules_json=payload)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
         return next(item for item in self.list_tables(current) if item.table_key == key)
 
     @staticmethod
@@ -2432,6 +2533,164 @@ class AppService:
             )
         return viewer_user_id
 
+    # ----- reference columns -------------------------------------------------
+
+    @staticmethod
+    def _reference_columns(schema: Schema) -> list[Column]:
+        return [column for column in schema.columns if column.type == "reference"]
+
+    @staticmethod
+    def _reference_label_column(target: Schema, column: Column) -> Column | None:
+        if column.ref_label:
+            found = target.column(column.ref_label)
+            if found is not None:
+                return found
+        candidates = [item for item in target.columns if item.type in {"string", "text"}]
+        for item in candidates:
+            if not item.pii:
+                return item
+        return candidates[0] if candidates else None
+
+    async def _reference_ids(
+        self,
+        current: AppRecord,
+        table_key: str,
+        *,
+        cache: dict[str, set[str]] | None = None,
+    ) -> set[str]:
+        if cache is not None and table_key in cache:
+            return cache[table_key]
+        ids = {item.row_id for item in self._app_repo.list_all_data_rows(current.app_id, table_key)}
+        if cache is not None:
+            cache[table_key] = ids
+        return ids
+
+    async def _validate_references(
+        self,
+        current: AppRecord,
+        schema: Schema,
+        values: Mapping[str, str],
+        *,
+        cache: dict[str, set[str]] | None = None,
+    ) -> None:
+        """Reject a write whose reference column points at a missing row."""
+        refs = [
+            (column, str(values.get(column.name) or "").strip())
+            for column in self._reference_columns(schema)
+        ]
+        refs = [(column, value) for column, value in refs if value]
+        if not refs:
+            return
+        ws = await self._workspace(current.agent_id)
+        for column, value in refs:
+            target_key = column.ref_table or ""
+            # Raises APP_SCHEMA_INVALID when the target table no longer exists.
+            await self._read_schema(ws, current.app_id, target_key)
+            ids = await self._reference_ids(current, target_key, cache=cache)
+            if value not in ids:
+                raise _invalid(
+                    ErrorCode.APP_ROW_INVALID,
+                    f"column {column.name!r} references a missing row in table {target_key!r}",
+                    column=column.name,
+                    ref_table=target_key,
+                    row_id=value,
+                )
+
+    async def _inbound_references(
+        self,
+        current: AppRecord,
+        target_table: str,
+        target_row_ids: set[str],
+    ) -> list[tuple[str, str, str]]:
+        """Rows in other tables that point at one of *target_row_ids*."""
+        ws = await self._workspace(current.agent_id)
+        hits: list[tuple[str, str, str]] = []
+        for table_view in self.list_tables(current):
+            schema = await self._read_schema(ws, current.app_id, table_view.table_key)
+            ref_cols = [
+                column
+                for column in self._reference_columns(schema)
+                if column.ref_table == target_table
+            ]
+            if not ref_cols:
+                continue
+            for item in self._app_repo.list_all_data_rows(current.app_id, table_view.table_key):
+                for column in ref_cols:
+                    value = str(item.values.get(column.name) or "").strip()
+                    if value and value in target_row_ids:
+                        hits.append((table_view.table_key, column.name, value))
+        return hits
+
+    async def reference_labels(
+        self,
+        row: AppRecord,
+        schema: Schema,
+        rows: Sequence[Mapping[str, str]],
+        *,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
+        redact_pii: bool = False,
+    ) -> dict[str, dict[str, str]]:
+        """Resolve page-visible labels for the reference columns in *rows*."""
+        ref_columns = self._reference_columns(schema)
+        if not ref_columns:
+            return {}
+        ids_by_table: dict[str, set[str]] = {}
+        for column in ref_columns:
+            target_key = column.ref_table or ""
+            for item in rows:
+                value = str(item.get(column.name) or "").strip()
+                if value:
+                    ids_by_table.setdefault(target_key, set()).add(value)
+        if not ids_by_table:
+            return {}
+        ws = await self._workspace(row.agent_id)
+        schemas: dict[str, Schema | None] = {}
+        target_rows: dict[str, dict[str, Any]] = {}
+        for table_key, ids in ids_by_table.items():
+            try:
+                schemas[table_key] = await self._read_schema(ws, row.app_id, table_key)
+            except OctopError:
+                schemas[table_key] = None
+                continue
+            target_rows[table_key] = {
+                item.row_id: item
+                for item in self._app_repo.list_data_rows_by_ids(row.app_id, table_key, sorted(ids))
+            }
+        output: dict[str, dict[str, str]] = {}
+        for column in ref_columns:
+            table_key = column.ref_table or ""
+            target_schema = schemas.get(table_key)
+            if target_schema is None:
+                output[column.name] = {}
+                continue
+            label_column = self._reference_label_column(target_schema, column)
+            scope = self.table_row_scope(row, table_key)
+            available: dict[str, str] = {}
+            for target_row in target_rows.get(table_key, {}).values():
+                if (
+                    scope == "user"
+                    and not include_all_rows
+                    and viewer_user_id is not None
+                    and target_row.created_by != viewer_user_id
+                ):
+                    continue
+                label = (
+                    str(target_row.values.get(label_column.name) or "")
+                    if label_column is not None
+                    else ""
+                )
+                if redact_pii and label_column is not None and label_column.pii:
+                    label = PII_MASK
+                available[target_row.row_id] = label or target_row.row_id
+            resolved: dict[str, str] = {}
+            for item in rows:
+                value = str(item.get(column.name) or "").strip()
+                if value and value in available:
+                    resolved[value] = available[value]
+            output[column.name] = resolved
+        return output
+
     async def set_table_visibility(
         self,
         row: AppRecord,
@@ -2451,7 +2710,7 @@ class AppService:
                 public_visible=public_visible,
             )
             ws = await self._workspace(current.agent_id)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
         view = next(item for item in self.list_tables(current) if item.table_key == key)
         return view
 
@@ -2483,7 +2742,7 @@ class AppService:
                 description=clean_description,
             )
             ws = await self._workspace(row.agent_id)
-            await self._refresh_manifest(ws, row.app_id)
+            await self._after_write(ws, row.app_id)
             return self.get(row.app_id)
 
     async def delete(self, row: AppRecord) -> None:
@@ -2511,9 +2770,20 @@ class AppService:
 
     # ----- UI / data -----
 
-    async def read_html(self, row: AppRecord) -> str | None:
+    async def read_html(self, row: AppRecord, *, validate: bool = False) -> str | None:
+        """Read the app HTML.
+
+        ``validate=True`` re-runs the write-time external-reference scan so a
+        page edited directly in the workspace (generic ``write_file``/shell, a
+        user's file browser) cannot bypass ``app_write_html`` and reach the
+        dashboard or a published snapshot unchecked. Backup/share-inspection
+        callers keep the raw read so legacy files remain exportable.
+        """
         ws = await self._workspace(row.agent_id)
-        return await ws.aread_text(app_path(row.app_id, FILE_HTML))
+        html = await ws.aread_text(app_path(row.app_id, FILE_HTML))
+        if validate and html:
+            validate_html(html)
+        return html
 
     async def has_html(self, row: AppRecord) -> bool:
         ws = await self._workspace(row.agent_id)
@@ -2526,13 +2796,20 @@ class AppService:
         tables contribute one CSV and one schema file each.
         """
         ws = await self._workspace(row.agent_id)
+        current = self._app_repo.get(row.app_id) or row
         sizes = await self._dir_sizes(ws, row.app_id)
-        names = [FILE_HTML, FILE_DATA, FILE_SCHEMA, FILE_MANIFEST]
+        # v2 rows are authoritative in the DB; its data.csv (if any) is a
+        # migration leftover, not a file the user should act on.
+        names = [FILE_HTML, FILE_SCHEMA, FILE_MANIFEST]
+        if current.storage_version < 2:
+            names.insert(1, FILE_DATA)
         for table in self.list_tables(row):
             if table.is_main:
                 continue
             schema_file, data_file = table_file_names(table.table_key)
-            names.extend((schema_file, data_file))
+            names.append(schema_file)
+            if current.storage_version < 2:
+                names.append(data_file)
         names.extend(f"{ASSETS_DIR}/{asset}" for asset in await self.list_assets(row))
         if await ws.aexists(app_path(row.app_id, FILE_PREVIEW)):
             names.append(FILE_PREVIEW)
@@ -2672,7 +2949,7 @@ class AppService:
             await ws.awrite_text(app_path(row.app_id, FILE_HTML), content)
             self._app_repo.touch(row.app_id)
             self._app_repo.set_file_stats(row.app_id, html_bytes=size)
-            await self._refresh_manifest(ws, row.app_id)
+            await self._after_write(ws, row.app_id)
         return size
 
     async def restore_html(self, row: AppRecord) -> LightAppRow:
@@ -2972,6 +3249,7 @@ class AppService:
                         limit=MAX_ROWS,
                     )
                 normalized = validate_row(schema, values)
+                await self._validate_references(current, schema, normalized)
                 _reject_unmarked_pii(schema, normalized, table=key)
                 table_view = self._app_repo.get_table(current.app_id, key)
                 current_bytes = table_view.data_bytes if table_view is not None else 0
@@ -2993,7 +3271,7 @@ class AppService:
                     created_by=created_by,
                 )
                 self._emit_row_event(current, key, "on_create", stored.row_id, stored.values)
-                await self._refresh_manifest(ws, current.app_id)
+                await self._after_write(ws, current.app_id)
                 return index, stored
             if scope == "user":
                 raise OctopError(
@@ -3008,6 +3286,7 @@ class AppService:
                     limit=MAX_ROWS,
                 )
             normalized = validate_row(schema, values)
+            await self._validate_references(current, schema, normalized)
             _reject_unmarked_pii(schema, normalized, table=key)
             rows.append(normalized)
             await self._persist_rows(ws, current, key, schema, rows)
@@ -3050,7 +3329,7 @@ class AppService:
         )
         self._app_repo.refresh_app_totals(row.app_id)
         self._app_repo.touch(row.app_id)
-        await self._refresh_manifest(ws, row.app_id)
+        await self._after_write(ws, row.app_id)
 
     async def _persist_schema(
         self,
@@ -3356,6 +3635,7 @@ class AppService:
         include_pii: bool = False,
         created_by: int | None = None,
         idempotency_source: str | None = None,
+        record_history: bool = True,
     ) -> ImportResult:
         """Parse a workspace file (or raw bytes) and import it into one table.
 
@@ -3394,6 +3674,7 @@ class AppService:
             upsert_key=upsert_key,
             include_pii=include_pii,
             created_by=created_by,
+            record_history=record_history,
             client_request_id_prefix=(
                 _batch_prefix(
                     idempotency_source,
@@ -3422,6 +3703,7 @@ class AppService:
         upsert_key: list[str] | None = None,
         include_pii: bool = False,
         created_by: int | None = None,
+        record_history: bool = True,
     ) -> ImportResult:
         """Import a batch of workspace files into one table, in order."""
         if not paths:
@@ -3459,6 +3741,7 @@ class AppService:
             upsert_key=upsert_key,
             include_pii=include_pii,
             created_by=created_by,
+            record_history=record_history,
         )
 
     async def import_rows(
@@ -3475,6 +3758,8 @@ class AppService:
         source: str = "import",
         client_request_id_prefix: str | None = None,
         created_by: int | None = None,
+        actor_user_id: int | None = None,
+        record_history: bool = True,
     ) -> ImportResult:
         """Validate and write parsed records into one table (append or replace).
 
@@ -3489,6 +3774,11 @@ class AppService:
                 f"invalid import mode: {mode!r}",
             )
         key = self._require_table(row, table)
+        actor = actor_user_id if actor_user_id is not None else created_by
+        # Scheduled source syncs replace/upsert the whole table every few
+        # minutes; recording each old row would turn the history ledger into
+        # a write-amplified copy of the source. Manual/agent imports keep it.
+        history_actor = _history_actor(actor) if record_history else None
         owner_id = created_by
         if self.table_row_scope(row, key) == "user" and owner_id is None:
             # Imports do not have a per-row actor here; attribute them to the
@@ -3553,6 +3843,7 @@ class AppService:
             imported_rows: list[dict[str, str]] = []
             errors: list[str] = []
             failed_rows: list[dict[str, Any]] = []
+            reference_cache: dict[str, set[str]] = {}
             for index, target in enumerate(targets):
                 if blocked_pii:
                     target = {
@@ -3560,7 +3851,11 @@ class AppService:
                         for name, value in target.items()
                     }
                 try:
-                    imported_rows.append(validate_row(schema, target))
+                    normalized = validate_row(schema, target)
+                    await self._validate_references(
+                        current, schema, normalized, cache=reference_cache
+                    )
+                    imported_rows.append(normalized)
                 except OctopError as exc:
                     if len(errors) < MAX_IMPORT_ERRORS:
                         errors.append(f"row {index + 1}: {exc.message}")
@@ -3597,6 +3892,23 @@ class AppService:
                     ),
                     errors=errors,
                 )
+            if mode == IMPORT_MODE_REPLACE:
+                target_ids = {
+                    item.row_id for item in self._app_repo.list_all_data_rows(current.app_id, key)
+                }
+                inbound = (
+                    await self._inbound_references(current, key, target_ids) if target_ids else []
+                )
+                if inbound:
+                    table_key, column_name, _value = inbound[0]
+                    raise OctopError(
+                        ErrorCode.APP_ROW_IN_USE,
+                        (
+                            f"table {key!r} is referenced by "
+                            f"{table_key}.{column_name}; replace would break those references"
+                        ),
+                        details={"table": table_key, "column": column_name},
+                    )
             if current.storage_version >= 2:
                 duplicate_indices: set[int] = set()
                 if client_request_id_prefix and mode != IMPORT_MODE_REPLACE:
@@ -3662,6 +3974,7 @@ class AppService:
                         imported_rows,
                         source=source,
                         created_by=owner_id,
+                        history_actor=history_actor,
                     )
                 elif upsert_key:
                     for index, item in enumerate(imported_rows):
@@ -3713,6 +4026,8 @@ class AppService:
                                 current.app_id,
                                 existing_row.row_id,
                                 item,
+                                history_actor=history_actor,
+                                history_source=source,
                             )
                             updated_count += 1
                 elif client_request_id_prefix:
@@ -3743,7 +4058,7 @@ class AppService:
                         imported_rows,
                         created_by=owner_id,
                     )
-                await self._refresh_manifest(ws, current.app_id)
+                await self._after_write(ws, current.app_id)
                 return ImportResult(
                     imported=len(imported_rows) - updated_count - duplicate_count,
                     skipped=len(clean) - len(imported_rows),
@@ -3843,6 +4158,8 @@ class AppService:
         expected_version: int | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
+        actor_user_id: int | None = None,
+        source: str = "manual",
     ) -> dict[str, Any]:
         """Update one row with an optional version check (CAS)."""
         key = self._require_table(row, table)
@@ -3868,6 +4185,7 @@ class AppService:
             if owner_filter is not None and existing_row.created_by != owner_filter:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
             normalized = validate_row(schema, values)
+            await self._validate_references(current, schema, normalized)
             _reject_unmarked_pii(schema, normalized, table=key)
             self._check_transition(current, key, existing_row.values, normalized)
             table_view = self._app_repo.get_table(current.app_id, key)
@@ -3885,6 +4203,8 @@ class AppService:
                 row_id,
                 normalized,
                 expected_version=expected_version,
+                history_actor=_history_actor(actor_user_id),
+                history_source=source,
             )
             if updated is None:
                 raise OctopError(
@@ -3892,7 +4212,7 @@ class AppService:
                     "row changed since it was read; refresh and retry",
                 )
             self._emit_row_event(current, key, "on_update", updated.row_id, updated.values)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
             return {
                 "row_id": updated.row_id,
                 "values": updated.values,
@@ -3907,6 +4227,8 @@ class AppService:
         expected_version: int | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
+        actor_user_id: int | None = None,
+        source: str = "manual",
     ) -> str:
         """Delete one row with an optional version check (CAS)."""
         await self._ensure_db_rows(row)
@@ -3923,17 +4245,27 @@ class AppService:
             )
             if owner_filter is not None and existing_row.created_by != owner_filter:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
+            inbound = await self._inbound_references(current, existing_row.table_key, {row_id})
+            if inbound:
+                table_key, column_name, _value = inbound[0]
+                raise OctopError(
+                    ErrorCode.APP_ROW_IN_USE,
+                    f"row is referenced by {table_key}.{column_name}; remove those references first",
+                    details={"table": table_key, "column": column_name},
+                )
             if not self._app_repo.delete_data_row(
                 current.app_id,
                 row_id,
                 expected_version=expected_version,
+                history_actor=_history_actor(actor_user_id),
+                history_source=source,
             ):
                 raise OctopError(
                     ErrorCode.APP_CONFLICT,
                     "row changed since it was read; refresh and retry",
                 )
             ws = await self._workspace(current.agent_id)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
             return row_id
 
     async def export_rows(
@@ -3966,6 +4298,170 @@ class AppService:
             rows = await self._read_rows_file(ws, current.app_id, schema, key)
         schema, rows = _apply_pii(schema, rows, redact_pii=redact_pii)
         return f"{key}.csv", render_csv(schema, rows)
+
+    async def aggregate_rows(
+        self,
+        row: AppRecord,
+        *,
+        table: str = MAIN_TABLE_KEY,
+        group_by: str | None = None,
+        metric: str | None = None,
+        agg: str = "count",
+        filters: Mapping[str, object] | None = None,
+        limit: int = app_aggregate.DEFAULT_AGGREGATE_LIMIT,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
+    ) -> dict[str, Any]:
+        """Aggregate one table server-side without returning every row."""
+        key = self._require_table(row, table)
+        await self._ensure_db_rows(row)
+        current = self._app_repo.get(row.app_id) or row
+        ws = await self._workspace(current.agent_id)
+        schema = await self._read_schema(ws, current.app_id, key)
+        clean_filters = {
+            str(column).strip(): str(value) for column, value in (filters or {}).items()
+        }
+        for column in clean_filters:
+            found = schema.column(column)
+            if found is None:
+                raise _invalid(
+                    ErrorCode.APP_SCHEMA_INVALID,
+                    f"unknown filter column: {column!r}",
+                    table=key,
+                )
+            if found.pii:
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    f"cannot filter on a sensitive column: {column!r}",
+                )
+        owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
+        if current.storage_version >= 2:
+            data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
+            if owner_filter is not None:
+                data_rows = [item for item in data_rows if item.created_by == owner_filter]
+            rows = _normalize_rows(schema, [item.values for item in data_rows])
+        else:
+            if owner_filter is not None:
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    "row-scoped table requires DB storage; migrate the app first",
+                )
+            rows = await self._read_rows_file(ws, current.app_id, schema, key)
+        if clean_filters:
+            wanted = {column: value.strip().lower() for column, value in clean_filters.items()}
+            rows = [
+                item
+                for item in rows
+                if all(
+                    item.get(column, "").strip().lower() == value
+                    for column, value in wanted.items()
+                )
+            ]
+        result = app_aggregate.aggregate_rows(
+            schema,
+            rows,
+            group_by=group_by,
+            metric=metric,
+            agg=agg,
+            limit=limit,
+        )
+        result["table"] = key
+        return result
+
+    async def row_history(
+        self,
+        row: AppRecord,
+        row_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        redact_pii: bool = False,
+        viewer_user_id: int | None = None,
+        include_all_rows: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Append-only change history for one row, newest first.
+
+        A viewer on a ``user``-scoped table only sees history while the row
+        still exists and belongs to them. After a delete, the owner/admin (who
+        can see every row) and the user who made a change can read the trail;
+        another collaborator cannot.
+        """
+        current = self._app_repo.get(row.app_id) or row
+        if current.storage_version < 2:
+            return []
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        entries = self._app_repo.list_row_history(
+            current.app_id,
+            row_id,
+            limit=safe_limit,
+            offset=safe_offset,
+        )
+        if not entries:
+            return []
+        table_key = entries[0].table_key
+        table_view = self._app_repo.get_table(current.app_id, table_key)
+        if table_view is None:
+            # The table was deleted; only an owner/admin may still read its
+            # history, because row-scope ownership can no longer be checked.
+            if not include_all_rows:
+                return []
+        elif not include_all_rows and table_view.row_scope == "user":
+            live = self._app_repo.get_data_row(current.app_id, row_id)
+            if live is not None:
+                if live.created_by != viewer_user_id:
+                    return []
+            elif viewer_user_id is None or not any(
+                entry.actor == f"user:{viewer_user_id}" for entry in entries
+            ):
+                # The row is gone, so ownership cannot be checked; let the
+                # user who changed it read their own trail.
+                return []
+        schema: Schema | None = None
+        try:
+            ws = await self._workspace(current.agent_id)
+            schema = await self._read_schema(ws, current.app_id, table_key)
+        except OctopError:
+            # The table or workspace is gone; history is still readable but
+            # needs the value-level PII fallback below.
+            schema = None
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            before = entry.before
+            after = entry.after
+            if redact_pii:
+                if schema is not None:
+                    if before is not None:
+                        before = redact_rows(schema, [before], redact_text=True)[0]
+                    if after is not None:
+                        after = redact_rows(schema, [after], redact_text=True)[0]
+                else:
+                    if before is not None:
+                        before = {key: redact_pii_text(value) for key, value in before.items()}
+                    if after is not None:
+                        after = {key: redact_pii_text(value) for key, value in after.items()}
+            result.append(
+                {
+                    "history_id": entry.history_id,
+                    "table": entry.table_key,
+                    "row_id": entry.row_id,
+                    "version": entry.version,
+                    "action": entry.action,
+                    "actor": entry.actor,
+                    "source": entry.source,
+                    "changed_at": entry.changed_at,
+                    "before": before,
+                    "after": after,
+                }
+            )
+        return result
+
+    def trim_row_history(self, keep_days: int = ROW_HISTORY_RETENTION_DAYS) -> int:
+        """Drop row-history entries older than *keep_days*."""
+        if keep_days <= 0:
+            return 0
+        cutoff = int(time.time()) - keep_days * 86400
+        return self._app_repo.delete_row_history_before(cutoff)
 
     # ----- backup / restore -----
 
@@ -4004,6 +4500,19 @@ class AppService:
                     csv_text.encode("utf-8"),
                 )
             )
+            if current.storage_version >= 2:
+                row_ids = [
+                    item.row_id
+                    for item in self._app_repo.list_all_data_rows(
+                        current.app_id, table_view.table_key
+                    )
+                ]
+                entries.append(
+                    (
+                        f"{TABLES_DIR}/{table_view.table_key}/{FILE_ROW_IDS}",
+                        json.dumps(row_ids, ensure_ascii=False).encode("utf-8"),
+                    )
+                )
         html = await self.read_html(current)
         if html:
             entries.append((FILE_HTML, html.encode("utf-8")))
@@ -4030,6 +4539,101 @@ class AppService:
         )
         archive = await asyncio.to_thread(_zip_entries, entries)
         return f"miniapp-{current.app_id}.zip", archive
+
+    async def _restore_table_rows(
+        self,
+        row: AppRecord,
+        key: str,
+        records: list[dict[str, Any]],
+        *,
+        row_ids: list[str] | None,
+    ) -> dict[str, str]:
+        """Insert backup rows and return old-row-id -> new-row-id.
+
+        Row ids are globally unique, so restoring into the same database
+        cannot keep them. The mapping is used to rewrite reference columns
+        afterwards, which keeps the restored graph intact.
+        """
+        if len(records) > MAX_ROWS:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"backup table {key!r} exceeds the {MAX_ROWS}-row limit",
+            )
+        if row_ids is not None and len(set(row_ids)) != len(row_ids):
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"backup has duplicate row ids for table {key!r}",
+            )
+        ws = await self._workspace(row.agent_id)
+        schema = await self._read_schema(ws, row.app_id, key)
+        normalized: list[dict[str, str]] = []
+        for index, record in enumerate(records):
+            try:
+                normalized.append(validate_row(schema, record))
+            except OctopError as exc:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"backup row {index + 1} of table {key!r} does not fit the schema: {exc.message}",
+                ) from exc
+        total_bytes = sum(
+            len(json.dumps(item, ensure_ascii=False).encode("utf-8")) for item in normalized
+        )
+        if total_bytes > MAX_CSV_BYTES:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"backup table {key!r} exceeds the {MAX_CSV_BYTES // (1024 * 1024)} MB limit",
+            )
+        new_ids = [f"row_{new_short_id(12)}" for _ in normalized]
+        self._app_repo.append_data_rows(
+            row.app_id,
+            key,
+            normalized,
+            source="restore",
+            created_by=row.owner_user_id,
+            row_ids=new_ids,
+        )
+        await self._after_write(ws, row.app_id)
+        if row_ids is None:
+            return {}
+        return dict(zip(row_ids, new_ids, strict=True))
+
+    async def _remap_restored_references(
+        self, row: AppRecord, id_maps: Mapping[str, Mapping[str, str]]
+    ) -> None:
+        ws = await self._workspace(row.agent_id)
+        for table_view in self.list_tables(row):
+            schema = await self._read_schema(ws, row.app_id, table_view.table_key)
+            ref_columns = self._reference_columns(schema)
+            if not ref_columns:
+                continue
+            rewritten: list[tuple[str, dict[str, str]]] = []
+            for item in self._app_repo.list_all_data_rows(row.app_id, table_view.table_key):
+                values = dict(item.values)
+                changed = False
+                for column in ref_columns:
+                    old = str(values.get(column.name) or "").strip()
+                    new = id_maps.get(column.ref_table or "", {}).get(old)
+                    if new and new != old:
+                        values[column.name] = new
+                        changed = True
+                if changed:
+                    rewritten.append((item.row_id, values))
+            if rewritten:
+                self._app_repo.rewrite_data_rows(row.app_id, table_view.table_key, rewritten)
+
+    async def _validate_restored_references(self, row: AppRecord) -> None:
+        ws = await self._workspace(row.agent_id)
+        cache: dict[str, set[str]] = {}
+        for table_view in self.list_tables(row):
+            schema = await self._read_schema(ws, row.app_id, table_view.table_key)
+            for item in self._app_repo.list_all_data_rows(row.app_id, table_view.table_key):
+                try:
+                    await self._validate_references(row, schema, item.values, cache=cache)
+                except OctopError as exc:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"backup has a broken reference: {exc.message}",
+                    ) from exc
 
     async def restore_archive(
         self,
@@ -4070,7 +4674,7 @@ class AppService:
         try:
             schemas = {
                 key: json.loads(schema_bytes.decode("utf-8"))
-                for key, (_label, schema_bytes, _csv) in tables.items()
+                for key, (_label, schema_bytes, _csv, _row_ids) in tables.items()
             }
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise _invalid(
@@ -4086,7 +4690,7 @@ class AppService:
             capabilities=restored_capabilities,
         )
         try:
-            for key, (label, _schema_bytes, _csv) in tables.items():
+            for key, (label, _schema_bytes, _csv, _row_ids) in tables.items():
                 if key == MAIN_TABLE_KEY:
                     continue
                 await self.create_table(
@@ -4095,16 +4699,40 @@ class AppService:
                     label=label,
                     columns=schemas[key],
                 )
-            for key, (_label, _schema_bytes, csv_bytes) in tables.items():
+            id_maps: dict[str, dict[str, str]] = {}
+            for key, (_label, _schema_bytes, csv_bytes, row_ids_bytes) in tables.items():
                 records = parse_import_file(f"{key}.csv", csv_bytes) if csv_bytes.strip() else []
-                if records:
-                    await self.import_rows(
-                        row,
-                        records,
-                        table=key,
-                        mode=IMPORT_MODE_REPLACE,
-                        source="restore",
+                row_ids: list[str] = []
+                if row_ids_bytes:
+                    try:
+                        parsed_ids = json.loads(row_ids_bytes.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        raise _invalid(
+                            ErrorCode.APP_SOURCE_INVALID,
+                            f"backup has unreadable row ids for table {key!r}",
+                        ) from None
+                    if not isinstance(parsed_ids, list) or not all(
+                        isinstance(item, str) and item for item in parsed_ids
+                    ):
+                        raise _invalid(
+                            ErrorCode.APP_SOURCE_INVALID,
+                            f"backup has invalid row ids for table {key!r}",
+                        )
+                    row_ids = list(parsed_ids)
+                if row_ids and len(row_ids) != len(records):
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"backup row ids do not match rows for table {key!r}",
                     )
+                if records:
+                    id_maps[key] = await self._restore_table_rows(
+                        row,
+                        key,
+                        records,
+                        row_ids=row_ids or None,
+                    )
+            await self._remap_restored_references(row, id_maps)
+            await self._validate_restored_references(row)
             if html:
                 await self.write_html(row, html)
             if preview:
@@ -4180,6 +4808,10 @@ class AppService:
     ) -> tuple[str, str]:
         """Current HTML plus the public table structure, in a stable encoding."""
         html = await ws.aread_text(app_path(row.app_id, FILE_HTML)) or ""
+        if html:
+            # Publishing freezes the HTML: validate here as well so a file
+            # edited outside app_write_html never becomes a public snapshot.
+            validate_html(html)
         tables: list[dict[str, Any]] = []
         for table in self.list_tables(row):
             if not table.public_visible or table.row_scope == "user":
@@ -4408,6 +5040,7 @@ class AppService:
             connector_instance_id=item.connector_instance_id,
             allowed_tools=item.allowed_tools,
             allowed_url_prefixes=item.allowed_url_prefixes,
+            request_headers=dict(item.request_headers),
             cache_ttl_seconds=item.cache_ttl_seconds,
             max_calls_per_minute=item.max_calls_per_minute,
             public_live=item.public_live,
@@ -4421,6 +5054,53 @@ class AppService:
             return []
         return [self._service_view(item) for item in self._service_repo.list_for_app(row.app_id)]
 
+    @staticmethod
+    def _gateway_tool_names(kind: str) -> set[str]:
+        return {str(meta.get("name") or "") for meta in mcp_tools_for_kind(kind)}
+
+    def _ensure_public_connector(self, user_id: int, kind: str) -> str:
+        """Reuse or auto-create one credential-free gateway connector.
+
+        Templates and MiniApp service declarations may omit the connector
+        instance for a zero-credential public source (``http-extract``,
+        ``douban``). One instance per user/kind keeps the connector list
+        uncluttered without requiring a detour to the Connectors page.
+        """
+        if self._connector_repo is None:
+            raise OctopError(
+                ErrorCode.INTERNAL_ERROR,
+                "connectors are not configured on this server",
+            )
+        entry = get_catalog_entry(kind)
+        if entry is None or entry.auth_kind != "none" or entry.mcp_mode != "gateway":
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"connector {kind!r} cannot be auto-provisioned; it needs credentials",
+            )
+        existing = self._connector_repo.get_by_user_kind(user_id, kind)
+        if existing is not None:
+            return existing.instance_id
+        instance_id = new_ulid()
+        self._connector_repo.create(
+            instance_id=instance_id,
+            user_id=user_id,
+            kind=kind,
+            display_name=f"{entry.name.resolve('en')} (MiniApp)",
+            mcp_server_name=mcp_server_name(kind, instance_id),
+            config_json=json.dumps(
+                {"description": f"Auto-created for MiniApp {kind} services"},
+                ensure_ascii=False,
+            ),
+        )
+        if self._audit_repo is not None:
+            self._audit_repo.write(
+                actor=f"user:{user_id}",
+                action="connector.instance.create",
+                target=instance_id,
+                payload=f"{kind} (MiniApp auto-provisioned)",
+            )
+        return instance_id
+
     def save_service(
         self,
         row: AppRecord,
@@ -4428,8 +5108,10 @@ class AppService:
         name: str,
         provider: str,
         connector_instance_id: str,
+        connector_kind: str | None = None,
         allowed_tools: list[str],
         allowed_url_prefixes: list[str],
+        request_headers: Mapping[str, str] | None = None,
         cache_ttl_seconds: int,
         max_calls_per_minute: int,
         public_live: bool,
@@ -4456,12 +5138,21 @@ class AppService:
                 ErrorCode.APP_SOURCE_INVALID, "service provider must be connector or external"
             )
         instance_id = connector_instance_id.strip()
-        if not instance_id:
+        instance_kind: str | None = None
+        if clean_provider == "external" and not instance_id:
+            # Public sources are first-class MiniApp services. Auto-provision a
+            # credential-free gateway connector instead of making the user
+            # visit the Connectors page first.
+            auto_kind = (connector_kind or "http-extract").strip().lower()
+            instance_id = self._ensure_public_connector(row.owner_user_id, auto_kind)
+            instance_kind = auto_kind
+        elif not instance_id:
             raise _invalid(ErrorCode.APP_SOURCE_INVALID, "connector_instance_id is required")
-        if self._connector_repo is not None:
+        elif self._connector_repo is not None:
             instance = self._connector_repo.get(instance_id)
             if instance is None:
                 raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown connector: {instance_id!r}")
+            instance_kind = instance.kind
             if not (is_admin or instance.user_id == row.owner_user_id or instance.shared):
                 raise OctopError(
                     ErrorCode.APP_FORBIDDEN,
@@ -4473,9 +5164,44 @@ class AppService:
         prefixes = list(
             dict.fromkeys(item.strip().rstrip("/") for item in allowed_url_prefixes if item.strip())
         )
+        if instance_kind == "douban" and not prefixes:
+            # Cover URLs come from Douban's image hosts; pre-fill the service
+            # allowlist so book covers work without extra manual setup.
+            prefixes = list(COVER_URL_PREFIXES)
         for prefix in prefixes:
             if not prefix.startswith(("https://", "http://")):
                 raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid URL prefix: {prefix!r}")
+        gateway_tools = self._gateway_tool_names(instance_kind) if instance_kind else set()
+        if gateway_tools:
+            unknown = set(tools) - gateway_tools
+            if unknown:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"connector {instance_kind!r} does not provide tools: "
+                    f"{', '.join(sorted(unknown))}",
+                )
+        if instance_kind == "http-extract" and not prefixes:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "http-extract services require at least one URL prefix",
+            )
+        existing = self._service_repo.get_by_name(row.app_id, clean_name)
+        if request_headers is None:
+            # Omitted means "keep what is stored"; older dashboard builds do
+            # not send this field when toggling an existing service.
+            headers = dict(existing.request_headers) if existing is not None else {}
+            if headers and instance_kind != "http-extract":
+                headers = {}
+        else:
+            try:
+                headers = normalize_request_headers(request_headers)
+            except ValueError as exc:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, str(exc)) from None
+            if headers and instance_kind != "http-extract":
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "request_headers are only supported by http-extract services",
+                )
         if not 0 <= cache_ttl_seconds <= 86_400:
             raise _invalid(ErrorCode.APP_SOURCE_INVALID, "cache_ttl_seconds must be 0..86400")
         if not 1 <= max_calls_per_minute <= 600:
@@ -4483,7 +5209,6 @@ class AppService:
                 ErrorCode.APP_SOURCE_INVALID,
                 "max_calls_per_minute must be 1..600",
             )
-        existing = self._service_repo.get_by_name(row.app_id, clean_name)
         if existing is None:
             stored = self._service_repo.create(
                 app_id=row.app_id,
@@ -4492,6 +5217,7 @@ class AppService:
                 connector_instance_id=instance_id,
                 allowed_tools=tools,
                 allowed_url_prefixes=prefixes,
+                request_headers=headers,
                 cache_ttl_seconds=cache_ttl_seconds,
                 max_calls_per_minute=max_calls_per_minute,
                 public_live=public_live,
@@ -4505,6 +5231,7 @@ class AppService:
                 connector_instance_id=instance_id,
                 allowed_tools=tools,
                 allowed_url_prefixes=prefixes,
+                request_headers=headers,
                 cache_ttl_seconds=cache_ttl_seconds,
                 max_calls_per_minute=max_calls_per_minute,
                 public_live=public_live,
@@ -4567,6 +5294,11 @@ class AppService:
                 f"tool {clean_tool!r} is not allowed for service {declaration.name!r}",
             )
         clean_args = {str(key): value for key, value in (args or {}).items()}
+        if "_headers" in clean_args:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "_headers is reserved for the service declaration",
+            )
         url = clean_args.get("url")
         if isinstance(url, str) and url.strip():
             clean_url = url.strip()
@@ -4582,6 +5314,9 @@ class AppService:
             separators=(",", ":"),
         )
         args_hash = hashlib.sha256(args_json.encode("utf-8")).hexdigest()
+        runner_args = dict(clean_args)
+        if declaration.request_headers:
+            runner_args["_headers"] = dict(declaration.request_headers)
         ttl = declaration.cache_ttl_seconds
         now = int(time.time())
         if ttl > 0:
@@ -4608,7 +5343,7 @@ class AppService:
                 self._external_tool_runner.run,
                 instance_id=declaration.connector_instance_id,
                 tool=clean_tool,
-                args=clean_args,
+                args=runner_args,
             )
         if not isinstance(output, str):
             output = str(output)
@@ -4659,6 +5394,11 @@ class AppService:
                 f"tool {clean_tool!r} is not allowed for service {declaration.name!r}",
             )
         clean_args = {str(key): value for key, value in (args or {}).items()}
+        if "_headers" in clean_args:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "_headers is reserved for the service declaration",
+            )
         url = clean_args.get("url")
         if (
             isinstance(url, str)
@@ -4723,7 +5463,7 @@ class AppService:
             )
         event_id = f"ext_{external_event_id.strip()[:80]}" if external_event_id else None
         if event_id is not None:
-            existing = self._event_repo.get(event_id)
+            existing = self._event_repo.get_for_app(row.app_id, event_id)
             if existing is not None:
                 return self._event_view(existing)
         clean_type = event_type.strip()[:100]
@@ -5374,6 +6114,7 @@ class AppService:
                     include_pii=include_pii,
                     created_by=item.created_by,
                     idempotency_source=item.source_id,
+                    record_history=False,
                 )
             elif item.kind == SOURCE_KIND_EXTERNAL:
                 result = await self._run_external_source(
@@ -5383,6 +6124,7 @@ class AppService:
                     upsert_key=upsert_key,
                     include_pii=include_pii,
                     idempotency_source=item.source_id,
+                    record_history=False,
                 )
             else:
                 raise _invalid(
@@ -5465,6 +6207,7 @@ class AppService:
         upsert_key: list[str] | None = None,
         include_pii: bool = False,
         idempotency_source: str | None = None,
+        record_history: bool = True,
     ) -> ImportResult:
         if self._external_tool_runner is None:
             raise _invalid(
@@ -5502,6 +6245,7 @@ class AppService:
             upsert_key=upsert_key,
             include_pii=include_pii,
             created_by=item.created_by,
+            record_history=record_history,
             client_request_id_prefix=(
                 _batch_prefix(
                     idempotency_source,
@@ -5664,7 +6408,7 @@ class AppService:
                         key,
                         exc_info=True,
                     )
-                await self._refresh_manifest(ws, current.app_id)
+                await self._after_write(ws, current.app_id)
                 return new_schema
             rows = await self._read_rows_file(ws, current.app_id, schema, key)
             new_schema = extend_schema(schema, additions)
@@ -5693,7 +6437,7 @@ class AppService:
                 data_bytes=data_bytes,
             )
             self._app_repo.refresh_app_totals(current.app_id)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
             return new_schema
 
     async def alter_schema(
@@ -5752,6 +6496,9 @@ class AppService:
                 }
                 if column_type == "enum":
                     payload["values"] = spec.get("values", list(column.values))
+                if column_type == "reference":
+                    payload["ref_table"] = spec.get("ref_table", column.ref_table)
+                    payload["ref_label"] = spec.get("ref_label", column.ref_label)
                 if column.name in clean_pii:
                     if clean_pii[column.name]:
                         payload["pii"] = clean_pii[column.name]
@@ -5772,6 +6519,7 @@ class AppService:
                 )
             new_schema = Schema(columns=tuple(new_columns), version=schema.version + 1)
             errors: list[str] = []
+            reference_cache: dict[str, set[str]] = {}
             if current.storage_version >= 2:
                 rewritten: list[tuple[str, dict[str, str]]] = []
                 for data_row in self._app_repo.list_all_data_rows(current.app_id, key):
@@ -5781,7 +6529,14 @@ class AppService:
                         if name not in clean_drops
                     }
                     try:
-                        rewritten.append((data_row.row_id, validate_row(new_schema, values)))
+                        normalized = validate_row(new_schema, values)
+                        await self._validate_references(
+                            current,
+                            new_schema,
+                            normalized,
+                            cache=reference_cache,
+                        )
+                        rewritten.append((data_row.row_id, normalized))
                     except OctopError as exc:
                         if len(errors) < MAX_IMPORT_ERRORS:
                             errors.append(f"row {data_row.row_id}: {exc.message}")
@@ -5833,7 +6588,7 @@ class AppService:
                     exc_info=True,
                 )
             self._app_repo.touch(current.app_id)
-            await self._refresh_manifest(ws, current.app_id)
+            await self._after_write(ws, current.app_id)
             return new_schema
 
     # ----- sharing -----

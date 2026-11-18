@@ -113,7 +113,7 @@
 | 能力 | 对应 SDK/动作 | 新应用默认 | 旧应用 | 强制点 |
 |---|---|---|---|---|
 | `data.read` | `me/schema/tables/listRows` | 开 | 开 | 宿主 bridge |
-| `data.write` | `appendRow` | 开 | 开 | **仅 bridge**（详情页数据面板也走 `POST /rows`，服务端不能拦） |
+| `data.write` | `appendRow` / `updateRow` / `updateRows` / `deleteRow` | 开 | 开 | **仅 bridge**（详情页数据面板也走 `POST /rows`，服务端不能拦） |
 | `asset.read` | `asset` | 开 | 开 | 宿主 bridge |
 | `external.open` | `openExternal` | 开 | 开 | 宿主 bridge |
 | `chat.compose` | `composeMessage`（F3） | 开 | 开 | 宿主 bridge |
@@ -327,6 +327,8 @@ light_app_service_cache (
 **Agent 工具**：`app_add_service`、`app_list_services`、`app_remove_service`。
 
 ### 6.2 I1b 豆瓣 adapter + 公开实时
+
+> 2026-11-18：adapter 已实现（`search_books` / `get_book` / `get_cover`）；公开实时仍按本节下面的规则，`http-extract` 不参与公开 live。
 
 - 新增 `src/octop/infra/connectors/gateway/adapters/douban.py`，在 `gateway/registry.py` 注册，`catalog.json` 加条目（`mcp_mode: gateway`, `auth_kind: none`）。
 - 工具：`search_books(keyword)`、`get_book(isbn|url)`、`get_cover(url)`。

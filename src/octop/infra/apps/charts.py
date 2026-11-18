@@ -74,6 +74,21 @@ def _aggregate(values: Sequence[float], agg: str) -> float:
     return float(len(values))
 
 
+def cell_text(value: object) -> str:
+    """Trimmed string form of one cell; shared with the aggregate endpoint."""
+    return _cell_text(value)
+
+
+def to_number(value: object) -> float | None:
+    """Parse one cell as a finite number; shared with the aggregate endpoint."""
+    return _to_float(value)
+
+
+def aggregate_values(values: Sequence[float], agg: str) -> float:
+    """Apply ``sum`` / ``avg`` / ``count`` / ``min`` / ``max`` to values."""
+    return _aggregate(values, agg)
+
+
 def build_chart_spec(
     schema: Schema,
     rows: Sequence[Mapping[str, Any]],
@@ -276,5 +291,9 @@ def build_chart_spec(
 __all__ = [
     "CHART_AGGS",
     "CHART_TYPES",
+    "NUMERIC_TYPES",
+    "aggregate_values",
     "build_chart_spec",
+    "cell_text",
+    "to_number",
 ]

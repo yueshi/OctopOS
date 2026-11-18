@@ -470,7 +470,9 @@ Webhook headers:
   `external.event`. Repeating the same event id is deduplicated.
 
 Bodies are capped at 256 KiB; the event is stored before any agent work.
-Events and their deliveries are retained for 30 days.
+Events and their deliveries are retained for 30 days. The acceptance response
+returns `deliveries` (subscriptions fanned out) and `rate_limited`
+(subscriptions skipped because their `max_per_minute` was hit).
 
 Delivery is **at-least-once**: a failed delivery is retried with backoff, and a
 consumer that already ran may be invoked again after a crash. The event
@@ -518,14 +520,21 @@ Subscription modes:
   upsert semantics; without it, `client_request_id` derived from the event id
   makes retries idempotent. An empty/missing record list is rejected so an
   event cannot wipe the table. PII-looking column values are blanked by
-  default (`include_pii` is not exposed on the event path yet), and the
-  resulting warning is not surfaced in the delivery record.
+  default (`include_pii` is not exposed on the event path yet); the affected
+  columns and counts are recorded in the delivery `result`.
 - `app.inbox` — appends the event to the app's inbox (`light_app_events`).
   The page reads it with `GET /api/apps/{app_id}/events?since=` and
   acknowledges with `POST /api/apps/{app_id}/events/ack`; the SDK exposes
   `octopApp.events()` / `ackEvents(ids)`. Delivery also pushes an `app_event`
   frame to the app owner, but the dashboard consumer for that frame is not
   wired yet — polling remains the source of truth.
+- `webhook.post` — POSTs the event to a MiniApp owner's declared outbound
+  webhook. The endpoint is created with `POST /api/apps/{app_id}/webhooks`
+  (owner/admin) and the page emits with `POST /api/apps/{app_id}/events/emit`
+  behind the `events.emit` capability. Requests carry `X-Octop-Event-Id`,
+  `X-Octop-Timestamp` and `X-Octop-Signature: sha256=HMAC_SHA256(secret,
+  timestamp + "." + raw_body)`. Delivery is at-least-once; 2xx succeeds,
+  408/425/429/5xx retry, other 4xx dead-letters.
 
 ## Workspace, skills, subagents, memory, files
 

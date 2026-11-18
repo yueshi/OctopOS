@@ -12,6 +12,11 @@ from pydantic import Field
 
 from octop.infra.agents.tool_scope import current_tool_scope
 from octop.infra.apps import capabilities as app_capabilities
+from octop.infra.apps.integration_ops import (
+    integration_health,
+    integration_inventory,
+    integration_trace,
+)
 from octop.infra.apps.models import MAIN_TABLE_KEY
 from octop.infra.apps.pii import detect_text_pii, find_unmarked_pii
 from octop.infra.apps.service import (
@@ -21,7 +26,9 @@ from octop.infra.apps.service import (
     AppTableView,
     app_path,
 )
+from octop.infra.apps.wiring import build_ingress_service
 from octop.infra.db.repos.apps import PERMISSION_RANK, LightAppRow
+from octop.infra.db.services import RepoBundle
 
 APP_DELETE_TOOL_NAME = "app_delete"
 
@@ -49,6 +56,13 @@ APP_TOOL_NAMES: tuple[str, ...] = (
     "app_import_rows",
     "app_save_asset",
     "app_set_preview",
+    "app_integration_list",
+    "app_integration_health",
+    "app_integration_trace",
+    "app_integration_create_ingress",
+    "app_integration_update_ingress",
+    "app_integration_delete_ingress",
+    "app_integration_test_ingress",
     APP_DELETE_TOOL_NAME,
 )
 """Names of the built-in light-app tools, in the order they are registered."""
@@ -56,9 +70,13 @@ APP_TOOL_NAMES: tuple[str, ...] = (
 _COLUMNS_HELP = (
     "Column definitions. Each item: "
     '{"name": "snake_case identifier", "label": "display label", '
-    '"type": "string|text|integer|number|boolean|date|datetime|enum", '
+    '"type": "string|text|integer|number|boolean|date|datetime|enum|reference", '
     '"required": false, "values": ["only for enum"], '
+    '"ref_table": "target table, only for reference", '
+    '"ref_label": "target display column, only for reference", '
     '"pii": "required for sensitive data: id_card|bank_card|phone|address|salary|email|secret"}. '
+    "A reference column stores the target row_id; write/import values must be "
+    "row ids that already exist in ref_table. "
     "Up to 50 columns; names must start with a letter or underscore. "
     "Never put a phone, ID, bank card, email or address in a free-text/note "
     "column: mark the column pii instead."
@@ -80,7 +98,11 @@ _HTML_HELP = (
     "render tabs from that response instead of hardcoding table keys, because "
     "public links omit private tables. "
     "`await octopApp.appendRow({column: value}, {table})` adds a row when the "
-    "viewer has edit permission. Remote scripts/styles/images/fonts are blocked, "
+    "viewer has edit permission; `await octopApp.updateRow(rowId, values, "
+    "{table, expectedVersion})` and `updateRows(rows, {table})` edit existing "
+    "rows, and `deleteRow(rowId, {table, expectedVersion})` deletes one. "
+    "The row_id comes from the `row_meta` array returned by listRows(). "
+    "Remote scripts/styles/images/fonts are blocked, "
     "so keep CSS/JS inline and use data: or blob: URLs for images; relative URLs "
     "and fetch() to the platform API are not allowed. Call octopApp.listRows() on "
     "load to render current data."
@@ -394,6 +416,7 @@ def build_app_tools(
     service: AppService,
     *,
     public_base_url: str = "",
+    repos: RepoBundle | None = None,
 ) -> list[StructuredTool]:
     """Return built-in light-app tools (wired via ``HarnessAgentConfig.tools``)."""
 
@@ -498,10 +521,6 @@ def build_app_tools(
             str,
             Field(description="connector (authenticated) or external (public source)."),
         ],
-        connector_instance_id: Annotated[
-            str,
-            Field(description="Existing connector instance owned by the app owner/admin."),
-        ],
         allowed_tools: Annotated[
             list[str],
             Field(description="Read-only tool names the page may call."),
@@ -509,6 +528,34 @@ def build_app_tools(
         allowed_url_prefixes: Annotated[
             list[str] | None,
             Field(description="http(s) prefixes accepted for URL-fetching tools."),
+        ] = None,
+        request_headers: Annotated[
+            dict[str, str] | None,
+            Field(
+                description=(
+                    "Optional headers for http-extract: User-Agent, Referer, "
+                    "Accept, Accept-Language."
+                )
+            ),
+        ] = None,
+        connector_instance_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Existing connector instance owned by the app owner/admin. "
+                    "Omit for a credential-free public source; the server "
+                    "reuses or auto-creates the connector."
+                )
+            ),
+        ] = "",
+        connector_kind: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Connector kind to auto-provision when the instance is "
+                    "empty: http-extract (default) or douban."
+                )
+            ),
         ] = None,
         cache_ttl_seconds: Annotated[
             int,
@@ -530,8 +577,10 @@ def build_app_tools(
                 name=name,
                 provider=provider,
                 connector_instance_id=connector_instance_id,
+                connector_kind=connector_kind,
                 allowed_tools=allowed_tools,
                 allowed_url_prefixes=allowed_url_prefixes or [],
+                request_headers=request_headers,
                 cache_ttl_seconds=cache_ttl_seconds,
                 max_calls_per_minute=max_calls_per_minute,
                 public_live=False,
@@ -548,6 +597,7 @@ def build_app_tools(
                         "connector_instance_id": view.connector_instance_id,
                         "allowed_tools": list(view.allowed_tools),
                         "allowed_url_prefixes": list(view.allowed_url_prefixes),
+                        "request_headers": dict(view.request_headers),
                         "enabled": view.enabled,
                     },
                     "note": "The app owner must enable external.fetch before the page can call it.",
@@ -573,6 +623,7 @@ def build_app_tools(
                             "connector_instance_id": item.connector_instance_id,
                             "allowed_tools": list(item.allowed_tools),
                             "allowed_url_prefixes": list(item.allowed_url_prefixes),
+                            "request_headers": dict(item.request_headers),
                             "enabled": item.enabled,
                         }
                         for item in service.list_services(row)
@@ -1150,6 +1201,8 @@ def build_app_tools(
                 expected_version=expected_version,
                 viewer_user_id=user_id,
                 include_all_rows=service.is_admin(user_id) or app.owner_user_id == user_id,
+                actor_user_id=user_id,
+                source="agent",
             )
             schema = await service.read_schema(app, table)
             return _ok(
@@ -1180,6 +1233,8 @@ def build_app_tools(
                 expected_version=expected_version,
                 viewer_user_id=user_id,
                 include_all_rows=service.is_admin(user_id) or app.owner_user_id == user_id,
+                actor_user_id=user_id,
+                source="agent",
             )
             return _ok({"app_id": app.app_id, "deleted": deleted})
         except Exception as exc:
@@ -1404,6 +1459,246 @@ def build_app_tools(
         except Exception as exc:
             return _err(exc)
 
+    def _integration_repos() -> RepoBundle:
+        if repos is None:
+            raise ValueError("integration data is unavailable for this agent")
+        return repos
+
+    async def app_integration_list(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            return _ok(await integration_inventory(service, _integration_repos(), row))
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_health(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            return _ok(await integration_health(service, _integration_repos(), row))
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_trace(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        event_id: Annotated[
+            str,
+            Field(
+                description=(
+                    "Internal event id (evt_…) or the external id supplied by the "
+                    "sender. Use the value shown by the webhook response or the "
+                    "External Events page."
+                )
+            ),
+        ],
+        source_id: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional source id; disambiguates an external id shared by multiple sources."
+                ),
+            ),
+        ] = None,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            return _ok(
+                await integration_trace(
+                    service,
+                    _integration_repos(),
+                    row,
+                    event_id,
+                    source_id=source_id,
+                )
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    def _ingress_service() -> Any:
+        return build_ingress_service(repos=_integration_repos(), app_service=service)
+
+    def _hook_url(source_id: str) -> str:
+        base = public_base_url.strip().rstrip("/")
+        path = f"/api/hooks/{source_id}"
+        return f"{base}{path}" if base else path
+
+    async def app_integration_create_ingress(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        name: Annotated[str, Field(description="Human-readable endpoint name.")],
+        mode: Annotated[
+            str,
+            Field(description="app.inbox, app.import or app.refresh."),
+        ],
+        event_type: Annotated[
+            str,
+            Field(
+                default="",
+                description="Optional exact event type; empty accepts every type.",
+            ),
+        ] = "",
+        mapping: Annotated[
+            dict[str, Any] | None,
+            Field(
+                default=None,
+                description=(
+                    "app.import: {table, columns}; app.refresh: {source_id}; app.inbox: omit or {}."
+                ),
+            ),
+        ] = None,
+        max_per_minute: Annotated[
+            int,
+            Field(default=0, description="Subscription limit; 0 means no extra limit."),
+        ] = 0,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            view, secret = await _ingress_service().create(
+                row,
+                name=name,
+                mode=mode,
+                event_type=event_type,
+                mapping=mapping or {},
+                max_per_minute=max_per_minute,
+                actor_user_id=user_id,
+            )
+            return _ok(
+                {
+                    "ingress_id": view.ingress_id,
+                    "name": view.name,
+                    "mode": view.mode,
+                    "event_type": view.event_type,
+                    "mapping": view.mapping,
+                    "source_id": view.source_id,
+                    "hook_url": _hook_url(view.source_id),
+                    "secret": secret,
+                    "secret_shown_once": True,
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_update_ingress(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        ingress_id: Annotated[str, Field(description="Ingress id from list/health.")],
+        name: Annotated[str | None, Field(default=None)] = None,
+        mode: Annotated[str | None, Field(default=None)] = None,
+        event_type: Annotated[str | None, Field(default=None)] = None,
+        mapping: Annotated[dict[str, Any] | None, Field(default=None)] = None,
+        max_per_minute: Annotated[int | None, Field(default=None)] = None,
+        enabled: Annotated[bool | None, Field(default=None)] = None,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            view = await _ingress_service().update(
+                row,
+                ingress_id,
+                name=name,
+                mode=mode,
+                event_type=event_type,
+                mapping=mapping,
+                max_per_minute=max_per_minute,
+                enabled=enabled,
+            )
+            return _ok(
+                {
+                    "ingress_id": view.ingress_id,
+                    "name": view.name,
+                    "mode": view.mode,
+                    "event_type": view.event_type,
+                    "mapping": view.mapping,
+                    "enabled": view.enabled,
+                    "hook_url": _hook_url(view.source_id),
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_delete_ingress(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        ingress_id: Annotated[str, Field(description="Ingress id from list/health.")],
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            deleted = _ingress_service().delete(row, ingress_id)
+            return _ok({"deleted": deleted, "ingress_id": ingress_id})
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_test_ingress(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        ingress_id: Annotated[str, Field(description="Ingress id from list/health.")],
+        event_type: Annotated[
+            str,
+            Field(default="", description="Optional type; defaults to the ingress filter."),
+        ] = "",
+        payload: Annotated[
+            dict[str, Any] | None,
+            Field(default=None, description="Test event payload."),
+        ] = None,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            repos_value = _integration_repos()
+            from octop.infra.events.service import ExternalEventService  # noqa: PLC0415
+
+            events = ExternalEventService(repos=repos_value, secret_repo=repos_value.secret_repo)
+            result = await _ingress_service().test_event(
+                row,
+                ingress_id,
+                events,
+                event_type=event_type,
+                payload=payload or {},
+            )
+            return _ok(
+                {
+                    "event_id": result.event.event_id,
+                    "event_type": result.event.event_type,
+                    "deliveries": result.delivery_count,
+                    "rate_limited": result.rate_limited,
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
     return [
         StructuredTool.from_function(
             coroutine=app_inspect_file,
@@ -1547,7 +1842,8 @@ def build_app_tools(
             name="app_write_html",
             description=(
                 "Write the complete HTML UI for a lightweight app, replacing the previous "
-                "version. The page can read and append rows through window.octopApp."
+                "version. The page can read, append, update and delete rows through "
+                "window.octopApp."
             ),
         ),
         StructuredTool.from_function(
@@ -1611,6 +1907,68 @@ def build_app_tools(
                 "the app's thumbnail. Draw it yourself with a 1200x630 viewBox, "
                 "inline styles only, no scripts, no event handlers and no "
                 "remote references. Call it once the app's look is settled."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_list,
+            name="app_integration_list",
+            description=(
+                "List this MiniApp's inbound sources and subscriptions, outbound "
+                "webhooks, schedules and external services. Read-only; owner/admin only."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_health,
+            name="app_integration_health",
+            description=(
+                "Diagnose this MiniApp's integrations: source errors/staleness, "
+                "disabled subscriptions, mapping drift against the current schema, "
+                "target write permission, dead/failed deliveries and failing "
+                "schedules. Returns issues with suggested actions. Read-only; "
+                "owner/admin only."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_trace,
+            name="app_integration_trace",
+            description=(
+                "Trace one event into this MiniApp: source, delivery attempts and "
+                "results, inbox row and imported app rows. Accepts an internal "
+                "event id or the sender's external id. Read-only; owner/admin only."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_create_ingress,
+            name="app_integration_create_ingress",
+            description=(
+                "Create an app-owned inbound endpoint (source + subscription + "
+                "HMAC secret). Returns hook_url and the secret ONCE; show it to "
+                "the user and never repeat it later. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_update_ingress,
+            name="app_integration_update_ingress",
+            description=(
+                "Update an app-owned inbound endpoint: name, mode, event type, "
+                "mapping, rate limit or enabled. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_delete_ingress,
+            name="app_integration_delete_ingress",
+            description=(
+                "Delete an app-owned inbound endpoint, its subscription and its "
+                "source. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_test_ingress,
+            name="app_integration_test_ingress",
+            description=(
+                "Send one test event through an app-owned inbound endpoint and "
+                "let the worker deliver it. Use it after creating/updating an "
+                "ingress. Requires user approval."
             ),
         ),
         StructuredTool.from_function(

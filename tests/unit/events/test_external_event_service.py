@@ -211,3 +211,69 @@ def test_source_ownership(repos: RepoBundle, service: ExternalEventService) -> N
         service.get_source(user_id=2, is_admin=False, source_id=source.source_id)
     assert exc.value.code is ErrorCode.EXTERNAL_SOURCE_NOT_FOUND
     assert service.get_source(user_id=2, is_admin=True, source_id=source.source_id)
+
+
+def test_rate_limited_subscription_is_reported(
+    repos: RepoBundle, service: ExternalEventService
+) -> None:
+    from octop.infra.metrics import METRICS  # noqa: PLC0415
+
+    source = _source(service)
+    repos.external_subscription_repo.create(
+        source_id=source.source_id,
+        target_type="team",
+        target_id="team-1",
+        mode="team.judge",
+        created_by=1,
+        max_per_minute=1,
+    )
+    before = METRICS.snapshot()["external_event_rate_limited_total"]
+
+    first = service.ingest(
+        source=source,
+        event_type="order.created",
+        external_id="evt-1",
+        occurred_at=None,
+        payload={"summary": "one"},
+    )
+    second = service.ingest(
+        source=source,
+        event_type="order.created",
+        external_id="evt-2",
+        occurred_at=None,
+        payload={"summary": "two"},
+    )
+
+    assert first.delivery_count == 1
+    assert first.rate_limited == 0
+    assert second.delivery_count == 0
+    assert second.rate_limited == 1
+    assert second.event.status == "no_subscribers"
+    assert METRICS.snapshot()["external_event_rate_limited_total"] == before + 1
+
+
+def test_event_plane_ids_have_enough_entropy(
+    repos: RepoBundle, service: ExternalEventService
+) -> None:
+    source = _source(service)
+    subscription = repos.external_subscription_repo.create(
+        source_id=source.source_id,
+        target_type="team",
+        target_id="team-1",
+        mode="team.judge",
+        created_by=1,
+    )
+    result = service.ingest(
+        source=source,
+        event_type="order.created",
+        external_id="evt-1",
+        occurred_at=None,
+        payload={"summary": "one"},
+    )
+    deliveries = repos.external_delivery_repo.list_by_event(result.event.event_id)
+    assert len(deliveries) == 1
+
+    assert len(source.source_id) >= 12
+    assert len(subscription.subscription_id) >= 12
+    assert len(result.event.event_id) >= 12
+    assert len(deliveries[0].delivery_id) >= 12

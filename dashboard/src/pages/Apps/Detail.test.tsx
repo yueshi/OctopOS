@@ -291,6 +291,28 @@ describe("app detail header actions", () => {
     expect(screen.getByRole("button", { name: /数据源/ })).toBeInTheDocument();
   });
 
+  it("lists every app file with its size in the details drawer", async () => {
+    api.files.mockResolvedValue({
+      files: [
+        { name: "app.html", path: "apps/app_1/app.html", size: 2048 },
+        { name: "schema.json", path: "apps/app_1/schema.json", size: 512 },
+        {
+          name: "assets/svc_1",
+          path: "apps/app_1/assets/svc_1",
+          size: 1024,
+        },
+      ],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "信息" }));
+
+    expect(await screen.findByText("app.html")).toBeInTheDocument();
+    expect(screen.getByText("schema.json")).toBeInTheDocument();
+    expect(screen.getByText("assets/svc_1")).toBeInTheDocument();
+    expect(screen.getByText("共 3 个文件")).toBeInTheDocument();
+    expect(screen.getByText("2 KB")).toBeInTheDocument();
+  });
+
   it("lists declared external services", async () => {
     api.listServices.mockResolvedValue({
       services: [
@@ -317,6 +339,18 @@ describe("app detail header actions", () => {
     expect(await screen.findByText("douban")).toBeInTheDocument();
     expect(screen.getByText("fetch_json")).toBeInTheDocument();
     expect(screen.getByText("TTL 300 秒 · 30 次/分")).toBeInTheDocument();
+  });
+
+  it("offers the built-in public HTTP source when adding a service", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "信息" }));
+    fireEvent.click(await screen.findByRole("button", { name: "添加服务" }));
+
+    expect(await screen.findByText("公开数据源")).toBeInTheDocument();
+    expect(
+      screen.getByText(/连接器留空即使用内置公开 HTTP 取数/),
+    ).toBeInTheDocument();
   });
 
   it("shows per-user tables as never public", async () => {

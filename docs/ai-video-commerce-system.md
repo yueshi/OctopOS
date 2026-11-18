@@ -43,8 +43,8 @@
 - 媒体生成是实例级配置，不能按 Agent 选 provider；per-shot 路由要在 pipeline 里用 `MediaManager.submit_video(provider_id=...)`（`octop_harness/media/manager.py:182-192`）。
 - 默认媒体 job store 是内存，重启丢任务；需要 `video_jobs` 表 + worker。
 - 自定义 MCP 支持 `streamable_http`/`stdio`，loopback/LAN 允许 HTTP（`src/octop/infra/connectors/custom_mcp.py:1,27,118-166`）；`stdio` 是本地命令执行面，生产要加管理员门禁。
-- miniapp 数据源只支持进程内 gateway connector（`src/octop/infra/apps/sources.py:1-49`）；iframe 沙箱无 JWT，`asset` 返回 data URL；行 API 最大 500 行、每表 2 万行/5MB、最多 12 表，无 filter/sort/join/服务端聚合。适合摘要，不适合重 BI。
-- miniapp 页面只能 `appendRow`（`dashboard/src/components/MiniAppFrame/sdk.ts:85-107`），不能改行、不能上传文件；CSP `media-src data: blob:`，页面放不了视频（写时扫描不拦相对 URL，`src/octop/infra/apps/models.py:620-625`，关卡在运行时 CSP）。做审核/审片类应用前需先补这三项。
+- miniapp 数据源只支持进程内 gateway connector（`src/octop/infra/apps/sources.py:1-49`）；iframe 沙箱无 JWT，`asset` 返回 data URL；行 API 最大 500 行、每表 2 万行/5MB、最多 12 表；支持 `filter` / `sort` 与单表 `group_by` 聚合，无 join / 跨表聚合。适合摘要，不适合重 BI。
+- miniapp 页面已支持 `updateRow` / `updateRows` / `deleteRow`（2026-11-15，行级 CAS）；仍不能上传文件；CSP `media-src data: blob:`，页面放不了视频（写时扫描不拦相对 URL，`src/octop/infra/apps/models.py:620-625`，关卡在运行时 CSP）。做审核/审片类应用前需补的是**上传通道与同源媒体播放**，不是行编辑。
 - `generate_video`/`generate_image` 不在 `ARTIFACT_TOOL_BASES`（`src/octop/infra/agents/threads/artifact.py:25-36`），生成视频不会自动进文件 dock；需补 middleware/扩展。
 - `/media/preview`、`/workspace/download` 整文件读入内存，无 Range/流式；大视频需新增流式端点或对象存储签名 URL。
 - 当前 schema v30（`tests/unit/db/test_db_pool.py:113`）；新表用 031。
@@ -105,7 +105,7 @@
 | 产物存储 | `BackendWorkspace` + COS/S3 | 复用 |
 | 数据库 | SQLite/Postgres + migrations/repos | 复用 |
 | 定时/事件 | `AppSourceScheduler`、cron、external events | 复用 |
-| miniapp | 沙箱 iframe + app tables + 定时数据源 | 复用（有限场景）；审片台需先补 `updateRow`、上传通道、同源视频播放 |
+| miniapp | 沙箱 iframe + app tables + 定时数据源 | 复用（有限场景）；审片台还需补上传通道、同源视频播放（行编辑已支持） |
 
 ### 3.3 视频流水线
 
@@ -196,7 +196,7 @@ intake → brief_ready → storyboard_draft → approved
 **Sprint 3（第 4–5 周）：QA + 审片 + 交付**
 
 - QA：时长/比例/黑帧/字幕遮挡/音频削波/违规词 OCR/AIGC 标识/产品图存在性。
-- 审片台做成 MiniApp（分镜列表 + 关键帧/视频 + 通过/驳回 + 意见留痕）；播放依赖平台补「同源 Range 媒体端点 + CSP `media-src` 放开 + 短时媒体令牌」，另需页面 `updateRow` 与上传通道；逐帧时间轴/剪辑仍留在 React 侧。生成视频入 `threads.artifacts`。
+- 审片台做成 MiniApp（分镜列表 + 关键帧/视频 + 通过/驳回 + 意见留痕）；播放依赖平台补「同源 Range 媒体端点 + CSP `media-src` 放开 + 短时媒体令牌」，另需页面上传通道（行编辑 `updateRow` / `deleteRow` 已支持）；逐帧时间轴/剪辑仍留在 React 侧。生成视频入 `threads.artifacts`。
 - 发布 checklist：标题、封面、标签、AIGC 声明、商品链接、合规复核。
 - 验证：首轮 QA ≥60%；人工接受率 ≥70%；AIGC 100%。
 
