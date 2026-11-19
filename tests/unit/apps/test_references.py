@@ -265,6 +265,13 @@ async def test_backup_restore_preserves_reference_links(world: World) -> None:
     await world.service.append_row(app, {"order_no": "A-1", "customer": customer_id})
 
     _filename, archive = await world.service.backup_archive(world.service.get(app_id))
+    preflight = await world.service.preflight_restore(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        data=archive,
+    )
+    assert preflight["can_restore"] is True
+    assert not [item for item in preflight["issues"] if item["code"] == "reference_broken"]
     restored = await world.service.restore_archive(
         agent_id=world.agent_id,
         owner_user_id=world.alice_id,

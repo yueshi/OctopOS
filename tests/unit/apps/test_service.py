@@ -2131,6 +2131,82 @@ async def test_backup_and_restore_round_trip(world: World) -> None:
     assert source_rows == [{"title": "A", "qty": "2", "status": "new"}]
 
 
+async def test_restore_preflight_flags_missing_dependencies_before_import(
+    world: World,
+) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    instance_id = _connector_instance(world, owner_id=world.alice_id)
+    world.service.save_service(
+        row,
+        name="books",
+        provider="external",
+        connector_instance_id=instance_id,
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=300,
+        max_calls_per_minute=3,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    _filename, archive = await world.service.backup_archive(row)
+    world.connector_repo.delete(instance_id)
+
+    missing_agent = await world.service.preflight_restore(
+        agent_id=new_ulid(),
+        owner_user_id=world.alice_id,
+        data=archive,
+    )
+    assert missing_agent["can_restore"] is False
+    assert [item["code"] for item in missing_agent["issues"]] == ["agent_missing"]
+
+    report = await world.service.preflight_restore(
+        agent_id=world.other_agent_id,
+        owner_user_id=world.bob_id,
+        data=archive,
+    )
+    assert report["ok"] is False
+    assert report["can_restore"] is True
+    assert report["error_count"] == 0
+    issue = next(item for item in report["issues"] if item["code"] == "missing_connector")
+    assert issue["severity"] == "warning"
+    assert issue["component"] == "service"
+    assert issue["name"] == "books"
+    assert report["summary"]["services"] == 1
+
+    # Warnings are actionable but do not block the import; the unbound service
+    # is skipped instead of being silently bound to an arbitrary connector.
+    restored = await world.service.restore_archive(
+        agent_id=world.other_agent_id,
+        owner_user_id=world.bob_id,
+        data=archive,
+    )
+    assert world.service.list_services(restored) == []
+
+
+async def test_restore_preflight_blocks_invalid_archives(world: World) -> None:
+    report = await world.service.preflight_restore(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        data=b"not a zip",
+    )
+    assert report["can_restore"] is False
+    assert report["error_count"] == 1
+    assert report["issues"][0]["code"] == "archive_invalid"
+    assert report["issues"][0]["severity"] == "error"
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.restore_archive(
+            agent_id=world.agent_id,
+            owner_user_id=world.alice_id,
+            data=b"not a zip",
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+    assert world.repo.list_owned(world.alice_id) == []
+
+
 async def test_restore_rejects_files_that_are_not_backups(world: World) -> None:
     with pytest.raises(OctopError) as exc:
         await world.service.restore_archive(

@@ -235,6 +235,13 @@ class AppIngressService:
         except Exception:
             self._source_repo.delete(source.source_id)
             raise
+        if not enabled:
+            self._source_repo.update(source.source_id, enabled=False)
+            updated_subscription = self._subscription_repo.update(
+                subscription.subscription_id, enabled=False
+            )
+            if updated_subscription is not None:
+                subscription = updated_subscription
         return IngressView.from_rows(stored, subscription), secret
 
     async def update(

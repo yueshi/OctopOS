@@ -191,6 +191,10 @@ async def test_ingress_mutation_tools_and_hitl(world: World) -> None:
         "app_integration_update_ingress",
         "app_integration_delete_ingress",
         "app_integration_test_ingress",
+        "app_integration_create_webhook",
+        "app_integration_update_webhook",
+        "app_integration_delete_webhook",
+        "app_integration_test_webhook",
     } <= MANDATORY_HITL_TOOLS
 
     create_tool = _tool(world.tools, "app_integration_create_ingress")
@@ -223,5 +227,79 @@ async def test_ingress_mutation_tools_and_hitl(world: World) -> None:
 
         deleted = json.loads(
             await delete_tool.ainvoke({"app_id": world.app_id, "ingress_id": ingress_id})
+        )
+        assert deleted["deleted"] is True
+
+
+async def test_outbound_webhook_mutation_tools(world: World) -> None:
+    create_tool = _tool(world.tools, "app_integration_create_webhook")
+    update_tool = _tool(world.tools, "app_integration_update_webhook")
+    test_tool = _tool(world.tools, "app_integration_test_webhook")
+    delete_tool = _tool(world.tools, "app_integration_delete_webhook")
+    list_tool = _tool(world.tools, "app_integration_list")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        created = json.loads(
+            await create_tool.ainvoke(
+                {
+                    "app_id": world.app_id,
+                    "name": "ERP",
+                    "url": "https://93.184.216.34/hook",
+                    "event_types": ["order.*"],
+                }
+            )
+        )
+        webhook_id = created["webhook_id"]
+        assert created["enabled"] is True
+        assert "secret" not in created
+        assert "secret_note" in created
+
+        inventory = json.loads(await list_tool.ainvoke({"app_id": world.app_id}))
+        assert [item["webhook_id"] for item in inventory["outbound_webhooks"]] == [webhook_id]
+
+        updated = json.loads(
+            await update_tool.ainvoke(
+                {
+                    "app_id": world.app_id,
+                    "webhook_id": webhook_id,
+                    "enabled": False,
+                }
+            )
+        )
+        assert updated["enabled"] is False
+        tested = json.loads(
+            await test_tool.ainvoke(
+                {
+                    "app_id": world.app_id,
+                    "webhook_id": webhook_id,
+                }
+            )
+        )
+        assert "error" in tested
+
+        updated = json.loads(
+            await update_tool.ainvoke(
+                {
+                    "app_id": world.app_id,
+                    "webhook_id": webhook_id,
+                    "enabled": True,
+                }
+            )
+        )
+        assert updated["enabled"] is True
+
+        tested = json.loads(
+            await test_tool.ainvoke(
+                {
+                    "app_id": world.app_id,
+                    "webhook_id": webhook_id,
+                }
+            )
+        )
+        assert tested["event_type"] == "order.test"
+        assert tested["deliveries"] == 1
+
+        deleted = json.loads(
+            await delete_tool.ainvoke({"app_id": world.app_id, "webhook_id": webhook_id})
         )
         assert deleted["deleted"] is True

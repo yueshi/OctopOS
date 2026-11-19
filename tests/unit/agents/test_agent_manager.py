@@ -932,6 +932,10 @@ def test_build_harness_config_includes_cronjob_tools_when_cron_manager_set(
         "app_integration_update_ingress",
         "app_integration_delete_ingress",
         "app_integration_test_ingress",
+        "app_integration_create_webhook",
+        "app_integration_update_webhook",
+        "app_integration_delete_webhook",
+        "app_integration_test_webhook",
         "app_delete",
     }
 
@@ -976,6 +980,10 @@ def test_build_harness_config_includes_search_knowledge_without_cron(
         "app_integration_update_ingress",
         "app_integration_delete_ingress",
         "app_integration_test_ingress",
+        "app_integration_create_webhook",
+        "app_integration_update_webhook",
+        "app_integration_delete_webhook",
+        "app_integration_test_webhook",
         "app_delete",
     }
     assert any(isinstance(item, KnowledgeSearchHintMiddleware) for item in (cfg.middleware or []))

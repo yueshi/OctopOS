@@ -103,6 +103,7 @@ from octop.infra.db.repos.app_bindings import (
     LightAppBindingRow,
 )
 from octop.infra.db.repos.app_events import AppEventRepo, AppEventRow
+from octop.infra.db.repos.app_ingress import LightAppIngressRepo
 from octop.infra.db.repos.app_schedules import (
     LightAppScheduleRepo,
     LightAppScheduleRow,
@@ -112,6 +113,7 @@ from octop.infra.db.repos.app_services import (
     LightAppServiceRepo,
     LightAppServiceRow,
 )
+from octop.infra.db.repos.app_webhooks import LightAppWebhookRepo
 from octop.infra.db.repos.apps import (
     PERMISSION_RANK,
     LightAppCollaboratorRow,
@@ -123,6 +125,8 @@ from octop.infra.db.repos.apps import (
 )
 from octop.infra.db.repos.audit import AuditRepo
 from octop.infra.db.repos.connectors import ConnectorRepo
+from octop.infra.db.repos.external_sources import ExternalSourceRepo
+from octop.infra.db.repos.external_subscriptions import ExternalSubscriptionRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo, UserRow
 from octop.infra.errors import ErrorCode, OctopError
@@ -150,7 +154,7 @@ MAX_FAILED_ROWS = 200
 """Largest asset an app may store (covers book covers and small icons)."""
 
 BACKUP_FORMAT = "octop.light-app.backup"
-BACKUP_VERSION = 2
+BACKUP_VERSION = 3
 MAX_BACKUP_BYTES = 64 * 1024 * 1024
 """Largest backup archive accepted for restore."""
 
@@ -761,6 +765,33 @@ def _service_url_allowed(prefixes: Sequence[str], url: str) -> bool:
     return any(url == prefix or url.startswith(f"{prefix}/") for prefix in prefixes)
 
 
+def _validate_webhook_url(raw: str) -> str:
+    """Reject destinations the outbound webhook delivery would refuse."""
+    url = raw.strip()
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("webhook URL must be an http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("webhook URL must not contain credentials")
+    validate_agent_fetch_url(url)
+    return url
+
+
+def _preflight_result(
+    errors: list[dict[str, str]],
+    warnings: list[dict[str, str]],
+    summary: Mapping[str, int],
+) -> dict[str, Any]:
+    return {
+        "ok": not errors and not warnings,
+        "can_restore": not errors,
+        "error_count": len(errors),
+        "warning_count": len(warnings),
+        "issues": [*errors, *warnings],
+        "summary": dict(summary),
+    }
+
+
 def _fetch_service_image(url: str, *, timeout: float = 20.0) -> bytes:
     """Fetch a public image with the same SSRF/size guards as http-extract."""
     current = validate_agent_fetch_url(url)
@@ -959,6 +990,10 @@ class AppService:
         connector_repo: ConnectorRepo | None = None,
         event_repo: AppEventRepo | None = None,
         schedule_repo: LightAppScheduleRepo | None = None,
+        webhook_repo: LightAppWebhookRepo | None = None,
+        ingress_repo: LightAppIngressRepo | None = None,
+        external_source_repo: ExternalSourceRepo | None = None,
+        external_subscription_repo: ExternalSubscriptionRepo | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._app_repo = app_repo
@@ -974,6 +1009,10 @@ class AppService:
         self._connector_repo = connector_repo
         self._event_repo = event_repo
         self._schedule_repo = schedule_repo
+        self._webhook_repo = webhook_repo
+        self._ingress_repo = ingress_repo
+        self._external_source_repo = external_source_repo
+        self._external_subscription_repo = external_subscription_repo
         self._clock = clock or time.time
 
     # ----- lookup / ACL -----
@@ -4465,6 +4504,97 @@ class AppService:
 
     # ----- backup / restore -----
 
+    @staticmethod
+    def _backup_params(value: object) -> object:
+        """Best-effort redaction of credentials inside data-source params."""
+        hints = ("secret", "password", "token", "api_key", "apikey", "authorization")
+        if isinstance(value, Mapping):
+            return {
+                str(key): AppService._backup_params(item)
+                for key, item in value.items()
+                if not any(hint in str(key).lower() for hint in hints)
+            }
+        if isinstance(value, list):
+            return [AppService._backup_params(item) for item in value]
+        return value
+
+    def _backup_integrations(self, row: AppRecord) -> dict[str, Any]:
+        """Integration declarations that are safe to archive (never secrets)."""
+        integrations: dict[str, Any] = {}
+        if self._webhook_repo is not None:
+            integrations["webhooks"] = [
+                {
+                    "name": item.name,
+                    "url": item.url,
+                    "event_types": list(item.event_types),
+                    "enabled": item.enabled,
+                }
+                for item in self._webhook_repo.list_for_app(row.app_id)
+            ]
+        if self._ingress_repo is not None and self._external_subscription_repo is not None:
+            ingress: list[dict[str, Any]] = []
+            for item in self._ingress_repo.list_for_app(row.app_id):
+                subscription = self._external_subscription_repo.get(item.subscription_id)
+                if subscription is None:
+                    continue
+                try:
+                    mapping = json.loads(subscription.mapping_json or "{}")
+                except ValueError:
+                    mapping = {}
+                try:
+                    filter_rules = json.loads(subscription.filter_json or "{}")
+                except ValueError:
+                    filter_rules = {}
+                ingress.append(
+                    {
+                        "name": item.name,
+                        "mode": item.mode,
+                        "event_type": str(filter_rules.get("event_type") or ""),
+                        "mapping": mapping if isinstance(mapping, dict) else {},
+                        "max_per_minute": subscription.max_per_minute,
+                        "enabled": item.enabled,
+                    }
+                )
+            integrations["ingress"] = ingress
+        integrations["services"] = [
+            {
+                "name": item.name,
+                "provider": item.provider,
+                "connector_instance_id": item.connector_instance_id,
+                "allowed_tools": list(item.allowed_tools),
+                "allowed_url_prefixes": list(item.allowed_url_prefixes),
+                "request_headers": dict(item.request_headers),
+                "cache_ttl_seconds": item.cache_ttl_seconds,
+                "max_calls_per_minute": item.max_calls_per_minute,
+                "public_live": item.public_live,
+                "enabled": item.enabled,
+            }
+            for item in self.list_services(row)
+        ]
+        integrations["sources"] = [
+            {
+                "source_id": item.source_id,
+                "table_key": item.table_key,
+                "kind": item.kind,
+                "mode": item.mode,
+                "schedule_seconds": item.schedule_seconds,
+                "params": self._backup_params(item.params),
+                "mapping": item.mapping,
+            }
+            for item in self.list_sources(row)
+        ]
+        if self._schedule_repo is not None:
+            integrations["schedules"] = [
+                {
+                    "action": item.action,
+                    "target": item.target,
+                    "interval_seconds": item.interval_seconds,
+                    "enabled": item.enabled,
+                }
+                for item in self._schedule_repo.list_for_app(row.app_id)
+            ]
+        return integrations
+
     async def backup_archive(self, row: AppRecord) -> tuple[str, bytes]:
         """Bundle the app shell, tables and assets into one zip.
 
@@ -4481,6 +4611,9 @@ class AppService:
                     "table_key": table_view.table_key,
                     "label": table_view.label,
                     "is_main": table_view.is_main,
+                    "public_visible": table_view.public_visible,
+                    "row_scope": table_view.row_scope,
+                    "rules": table_view.rules,
                 }
             )
             entries.append(
@@ -4529,6 +4662,7 @@ class AppService:
             "app": {"name": current.name, "description": current.description},
             "capabilities": self.capability_list(current),
             "tables": tables,
+            "integrations": self._backup_integrations(current),
         }
         entries.insert(
             0,
@@ -4635,6 +4769,867 @@ class AppService:
                         f"backup has a broken reference: {exc.message}",
                     ) from exc
 
+    async def _apply_restored_table_config(
+        self, row: AppRecord, key: str, meta: Mapping[str, Any]
+    ) -> None:
+        """Restore table visibility, row scope and declarative rules."""
+        scope = str(meta.get("row_scope") or "app").strip().lower()
+        if scope not in {"app", "user"}:
+            scope = "app"
+        await self.set_table_row_scope(row, table=key, row_scope=scope)
+        await self.set_table_visibility(
+            row,
+            table=key,
+            public_visible=bool(meta.get("public_visible", key == MAIN_TABLE_KEY)),
+        )
+        rules = meta.get("rules")
+        if isinstance(rules, Mapping) and rules:
+            await self.set_table_rules(row, table=key, rules=rules)
+
+    def _restore_sources(self, row: AppRecord, integrations: Mapping[str, Any]) -> dict[str, str]:
+        """Recreate app data sources with fresh ids; returns old->new source ids."""
+        raw = integrations.get("sources")
+        if not isinstance(raw, list):
+            return {}
+        source_map: dict[str, str] = {}
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            old_id = str(item.get("source_id") or "")
+            if not old_id:
+                continue
+            new_id = new_short_id(16)
+            params = item.get("params")
+            clean_params = dict(params) if isinstance(params, Mapping) else {}
+            # A restore starts a fresh cursor; replaying the old one can skip data.
+            clean_params.pop("cursor", None)
+            mapping = item.get("mapping")
+            try:
+                self.save_source(
+                    row,
+                    source_id=new_id,
+                    table_key=str(item.get("table_key") or MAIN_TABLE_KEY),
+                    kind=str(item.get("kind") or ""),
+                    mode=str(item.get("mode") or ""),
+                    # Recreated disabled; the schedule row carries the interval.
+                    schedule_seconds=0,
+                    params=clean_params,
+                    mapping=mapping if isinstance(mapping, Mapping) else {},
+                    created_by=row.owner_user_id,
+                )
+            except Exception:  # noqa: BLE001 - one bad source must not abort restore
+                logger.warning("restore skipped a data source for %s", row.app_id, exc_info=True)
+                continue
+            source_map[old_id] = new_id
+        return source_map
+
+    def _restore_schedules(
+        self, row: AppRecord, integrations: Mapping[str, Any], source_map: Mapping[str, str]
+    ) -> None:
+        raw = integrations.get("schedules")
+        restored = 0
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, Mapping):
+                    continue
+                if str(item.get("action") or "") != SCHEDULE_ACTION_SYNC_SOURCE:
+                    # Snapshot schedules need a restored publication, which is
+                    # intentionally not part of the archive.
+                    continue
+                target = item.get("target")
+                old_source = (
+                    str(target.get("source_id") or "") if isinstance(target, Mapping) else ""
+                )
+                new_source = source_map.get(old_source)
+                if not new_source:
+                    continue
+                try:
+                    self.save_schedule(
+                        row,
+                        action=SCHEDULE_ACTION_SYNC_SOURCE,
+                        interval_seconds=int(item.get("interval_seconds") or 0),
+                        created_by=row.owner_user_id,
+                        enabled=False,
+                        target={"source_id": new_source},
+                    )
+                    restored += 1
+                except Exception:  # noqa: BLE001 - keep restoring the rest
+                    logger.warning("restore skipped a schedule for %s", row.app_id, exc_info=True)
+        if restored:
+            return
+        # Compatibility: v3 backups from before schedules were recorded still
+        # carry schedule_seconds on the source declaration.
+        raw_sources = integrations.get("sources")
+        if not isinstance(raw_sources, list):
+            return
+        for item in raw_sources:
+            if not isinstance(item, Mapping):
+                continue
+            old_id = str(item.get("source_id") or "")
+            new_id = source_map.get(old_id)
+            interval = int(item.get("schedule_seconds") or 0)
+            if not new_id or interval <= 0:
+                continue
+            try:
+                self.save_schedule(
+                    row,
+                    action=SCHEDULE_ACTION_SYNC_SOURCE,
+                    interval_seconds=interval,
+                    created_by=row.owner_user_id,
+                    enabled=False,
+                    target={"source_id": new_id},
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "restore skipped a fallback schedule for %s",
+                    row.app_id,
+                    exc_info=True,
+                )
+
+    async def _restore_integrations(self, row: AppRecord, manifest: Mapping[str, Any]) -> None:
+        """Recreate integration declarations disabled; secrets are never archived."""
+        raw = manifest.get("integrations")
+        if not isinstance(raw, Mapping):
+            return
+        source_map = self._restore_sources(row, raw)
+        self._restore_schedules(row, raw, source_map)
+        webhooks = raw.get("webhooks")
+        if (
+            isinstance(webhooks, list)
+            and self._webhook_repo is not None
+            and self._external_source_repo is not None
+            and self._external_subscription_repo is not None
+            and self._secret_repo is not None
+        ):
+            from octop.infra.apps.webhooks import AppWebhookService  # noqa: PLC0415
+
+            service = AppWebhookService(
+                app_service=self,
+                webhook_repo=self._webhook_repo,
+                source_repo=self._external_source_repo,
+                subscription_repo=self._external_subscription_repo,
+                secret_repo=self._secret_repo,
+            )
+            for item in webhooks:
+                if not isinstance(item, Mapping):
+                    continue
+                try:
+                    await service.create(
+                        row,
+                        name=str(item.get("name") or "Restored webhook"),
+                        url=str(item.get("url") or ""),
+                        event_types=[str(value) for value in item.get("event_types") or []],
+                        enabled=False,
+                        actor_user_id=row.owner_user_id,
+                    )
+                except Exception:  # noqa: BLE001 - one bad declaration must not abort restore
+                    logger.warning(
+                        "restore skipped an outbound webhook for %s", row.app_id, exc_info=True
+                    )
+
+        ingress = raw.get("ingress")
+        if (
+            isinstance(ingress, list)
+            and self._ingress_repo is not None
+            and self._external_source_repo is not None
+            and self._external_subscription_repo is not None
+            and self._secret_repo is not None
+        ):
+            from octop.infra.apps.ingress import AppIngressService  # noqa: PLC0415
+
+            ingress_service = AppIngressService(
+                app_service=self,
+                app_repo=self._app_repo,
+                ingress_repo=self._ingress_repo,
+                source_repo=self._external_source_repo,
+                subscription_repo=self._external_subscription_repo,
+                secret_repo=self._secret_repo,
+            )
+            for item in ingress:
+                if not isinstance(item, Mapping):
+                    continue
+                raw_mapping = item.get("mapping")
+                mapping = dict(raw_mapping) if isinstance(raw_mapping, Mapping) else {}
+                for key in ("source_id", "app_source_id"):
+                    old_source = str(mapping.get(key) or "")
+                    if old_source in source_map:
+                        mapping[key] = source_map[old_source]
+                try:
+                    await ingress_service.create(
+                        row,
+                        name=str(item.get("name") or "Restored ingress"),
+                        mode=str(item.get("mode") or "app.inbox"),
+                        event_type=str(item.get("event_type") or ""),
+                        mapping=mapping,
+                        max_per_minute=int(item.get("max_per_minute") or 0),
+                        enabled=False,
+                        actor_user_id=row.owner_user_id,
+                    )
+                except Exception:  # noqa: BLE001 - one bad declaration must not abort restore
+                    logger.warning(
+                        "restore skipped an inbound ingress for %s", row.app_id, exc_info=True
+                    )
+
+        services = raw.get("services")
+        if isinstance(services, list):
+            for item in services:
+                if not isinstance(item, Mapping):
+                    continue
+                try:
+                    self.save_service(
+                        row,
+                        name=str(item.get("name") or ""),
+                        provider=str(item.get("provider") or "external"),
+                        connector_instance_id=str(item.get("connector_instance_id") or ""),
+                        allowed_tools=[str(value) for value in item.get("allowed_tools") or []],
+                        allowed_url_prefixes=[
+                            str(value) for value in item.get("allowed_url_prefixes") or []
+                        ],
+                        request_headers=(
+                            item.get("request_headers")
+                            if isinstance(item.get("request_headers"), Mapping)
+                            else None
+                        ),
+                        cache_ttl_seconds=int(item.get("cache_ttl_seconds") or 300),
+                        max_calls_per_minute=int(item.get("max_calls_per_minute") or 30),
+                        public_live=bool(item.get("public_live", False)),
+                        enabled=False,
+                        actor_user_id=row.owner_user_id,
+                        is_admin=self.is_admin(row.owner_user_id),
+                    )
+                except Exception:  # noqa: BLE001 - e.g. connector missing on this host
+                    logger.warning(
+                        "restore skipped an external service for %s", row.app_id, exc_info=True
+                    )
+
+    async def preflight_restore(
+        self,
+        *,
+        agent_id: str,
+        owner_user_id: int,
+        data: bytes,
+    ) -> dict[str, Any]:
+        """Scan a backup's dependencies before creating any rows.
+
+        Structural archive errors block restore; missing connectors/components
+        and declarations that will be skipped are returned as warnings so the
+        caller can show them and let the owner decide.
+        """
+        errors: list[dict[str, str]] = []
+        warnings: list[dict[str, str]] = []
+
+        def issue(
+            bucket: list[dict[str, str]],
+            *,
+            severity: str,
+            code: str,
+            component: str,
+            message: str,
+            action: str = "",
+            name: str = "",
+        ) -> None:
+            bucket.append(
+                {
+                    "severity": severity,
+                    "code": code,
+                    "component": component,
+                    "name": name,
+                    "message": message,
+                    "action": action,
+                }
+            )
+
+        agent = self._agent_repo.get(agent_id)
+        if agent is None:
+            issue(
+                errors,
+                severity="error",
+                code="agent_missing",
+                component="workspace",
+                name=agent_id,
+                message="target agent does not exist",
+                action="choose an existing agent before restoring",
+            )
+        else:
+            try:
+                workspace = await asyncio.to_thread(self._workspaces.workspace_for_agent, agent_id)
+            except Exception as exc:  # noqa: BLE001 - dependency probe failure
+                issue(
+                    errors,
+                    severity="error",
+                    code="workspace_unavailable",
+                    component="workspace",
+                    name=agent_id,
+                    message=f"target agent workspace could not be opened: {exc}",
+                    action="check the agent's storage backend, then retry",
+                )
+            else:
+                if workspace is None:
+                    issue(
+                        errors,
+                        severity="error",
+                        code="workspace_unavailable",
+                        component="workspace",
+                        name=agent_id,
+                        message="target agent workspace is not available on this host",
+                        action="start the agent or check its storage backend, then retry",
+                    )
+        if len(data) > MAX_BACKUP_BYTES:
+            issue(
+                errors,
+                severity="error",
+                code="archive_too_large",
+                component="archive",
+                message=f"backup exceeds the {MAX_BACKUP_BYTES // (1024 * 1024)} MB limit",
+            )
+            return _preflight_result(errors, warnings, {})
+        try:
+            manifest, tables, _html, _preview, _assets = await asyncio.to_thread(
+                _read_backup_zip, data
+            )
+        except (zipfile.BadZipFile, ValueError, OctopError) as exc:
+            issue(
+                errors,
+                severity="error",
+                code="archive_invalid",
+                component="archive",
+                message=f"invalid app backup: {exc}",
+            )
+            return _preflight_result(errors, warnings, {})
+        if MAIN_TABLE_KEY not in tables:
+            issue(
+                errors,
+                severity="error",
+                code="missing_main_table",
+                component="archive",
+                message="backup has no main table",
+            )
+            return _preflight_result(errors, warnings, {})
+        schemas: dict[str, Schema] = {}
+        for key, (_label, schema_bytes, _csv, _row_ids) in tables.items():
+            try:
+                payload = json.loads(schema_bytes.decode("utf-8"))
+                schemas[key] = parse_schema_payload(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError, OctopError) as exc:
+                issue(
+                    errors,
+                    severity="error",
+                    code="table_schema_invalid",
+                    component="table",
+                    name=key,
+                    message=f"table schema is invalid: {exc}",
+                )
+        if MAIN_TABLE_KEY not in schemas:
+            return _preflight_result(errors, warnings, {})
+        if len(schemas) > MAX_TABLES_PER_APP:
+            issue(
+                errors,
+                severity="error",
+                code="tables_limit",
+                component="archive",
+                message=f"backup has more than {MAX_TABLES_PER_APP} tables",
+            )
+        if errors:
+            return _preflight_result(errors, warnings, {})
+
+        # Validate data and row-id pairing up front: restore cleans up an app
+        # on late failures, but a preflight should keep it from being created.
+        table_rows: dict[str, list[dict[str, str]]] = {}
+        table_ids: dict[str, list[str]] = {}
+        for key, (_label, _schema_bytes, csv_bytes, row_ids_bytes) in tables.items():
+            try:
+                records = parse_import_file(f"{key}.csv", csv_bytes) if csv_bytes.strip() else []
+            except (OctopError, ValueError) as exc:
+                issue(
+                    errors,
+                    severity="error",
+                    code="table_rows_invalid",
+                    component="table",
+                    name=key,
+                    message=f"table data cannot be read: {exc}",
+                )
+                continue
+            if len(records) > MAX_ROWS:
+                issue(
+                    errors,
+                    severity="error",
+                    code="table_rows_limit",
+                    component="table",
+                    name=key,
+                    message=f"table exceeds the {MAX_ROWS}-row restore limit",
+                )
+                continue
+            ids: list[str] = []
+            if row_ids_bytes:
+                try:
+                    parsed_ids = json.loads(row_ids_bytes.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    issue(
+                        errors,
+                        severity="error",
+                        code="row_ids_invalid",
+                        component="table",
+                        name=key,
+                        message="row_ids.json is not valid JSON",
+                    )
+                    continue
+                if not isinstance(parsed_ids, list) or not all(
+                    isinstance(item, str) and item for item in parsed_ids
+                ):
+                    issue(
+                        errors,
+                        severity="error",
+                        code="row_ids_invalid",
+                        component="table",
+                        name=key,
+                        message="row_ids.json must be a list of non-empty strings",
+                    )
+                    continue
+                ids = list(parsed_ids)
+                if len(ids) != len(records):
+                    issue(
+                        errors,
+                        severity="error",
+                        code="row_ids_mismatch",
+                        component="table",
+                        name=key,
+                        message="row ids do not match the number of data rows",
+                    )
+                    continue
+                if len(set(ids)) != len(ids):
+                    issue(
+                        errors,
+                        severity="error",
+                        code="row_ids_duplicate",
+                        component="table",
+                        name=key,
+                        message="row ids are not unique",
+                    )
+                    continue
+            normalized: list[dict[str, str]] = []
+            for index, record in enumerate(records):
+                try:
+                    normalized.append(validate_row(schemas[key], record))
+                except OctopError as exc:
+                    issue(
+                        errors,
+                        severity="error",
+                        code="table_row_invalid",
+                        component="table",
+                        name=key,
+                        message=f"row {index + 1} does not fit the schema: {exc.message}",
+                    )
+                    break
+            else:
+                total_bytes = sum(
+                    len(json.dumps(item, ensure_ascii=False).encode("utf-8")) for item in normalized
+                )
+                if total_bytes > MAX_CSV_BYTES:
+                    issue(
+                        errors,
+                        severity="error",
+                        code="table_bytes_limit",
+                        component="table",
+                        name=key,
+                        message=(
+                            f"table exceeds the {MAX_CSV_BYTES // (1024 * 1024)} MB restore limit"
+                        ),
+                    )
+                    continue
+                table_rows[key] = normalized
+                table_ids[key] = ids
+
+        for key, schema in schemas.items():
+            for column in schema.columns:
+                if not column.ref_table:
+                    continue
+                if column.ref_table not in schemas:
+                    issue(
+                        errors,
+                        severity="error",
+                        code="reference_table_missing",
+                        component="table",
+                        name=key,
+                        message=f"column {column.name!r} references missing table {column.ref_table!r}",
+                    )
+                    continue
+                target_rows = table_rows.get(column.ref_table)
+                if target_rows is None:
+                    continue
+                target_ids = table_ids.get(column.ref_table) or []
+                if not target_ids and target_rows:
+                    issue(
+                        warnings,
+                        severity="warning",
+                        code="references_not_verifiable",
+                        component="table",
+                        name=key,
+                        message=f"column {column.name!r} references a table without row ids",
+                        action="check reference values after restore",
+                    )
+                    continue
+                known = set(target_ids)
+                for index, record in enumerate(table_rows.get(key, [])):
+                    value = str(record.get(column.name) or "").strip()
+                    if value and value not in known:
+                        issue(
+                            errors,
+                            severity="error",
+                            code="reference_broken",
+                            component="table",
+                            name=key,
+                            message=(
+                                f"row {index + 1} column {column.name!r} references "
+                                f"missing row {value!r} in {column.ref_table!r}"
+                            ),
+                        )
+                        break
+
+        app_meta = manifest.get("app")
+        if isinstance(app_meta, Mapping):
+            try:
+                validate_name(str(app_meta.get("name") or "").strip() or "Restored app")
+                validate_description(str(app_meta.get("description") or ""))
+            except OctopError as exc:
+                issue(
+                    errors,
+                    severity="error",
+                    code="app_metadata_invalid",
+                    component="app",
+                    message=exc.message,
+                )
+        raw_capabilities = manifest.get("capabilities")
+        if isinstance(raw_capabilities, list):
+            try:
+                app_capabilities.validate(raw_capabilities)
+            except OctopError as exc:
+                issue(
+                    errors,
+                    severity="error",
+                    code="capabilities_invalid",
+                    component="app",
+                    message=exc.message,
+                )
+        if _html:
+            try:
+                validate_html(_html)
+            except OctopError as exc:
+                issue(
+                    errors,
+                    severity="error",
+                    code="html_invalid",
+                    component="app",
+                    message=exc.message,
+                )
+        if _preview:
+            try:
+                validate_preview_svg(_preview)
+            except ValueError as exc:
+                issue(
+                    errors,
+                    severity="error",
+                    code="preview_invalid",
+                    component="app",
+                    message=str(exc),
+                )
+        for asset_name, asset_data in _assets:
+            if (
+                not ASSET_NAME_RE.match(asset_name.strip())
+                or ".." in asset_name
+                or not asset_data
+                or len(asset_data) > MAX_ASSET_BYTES
+                or _sniff_asset_mime(asset_data) is None
+            ):
+                issue(
+                    errors,
+                    severity="error",
+                    code="asset_invalid",
+                    component="app",
+                    name=asset_name,
+                    message="asset name, size or image format is not restorable",
+                )
+        if errors:
+            return _preflight_result(errors, warnings, {})
+
+        integrations = manifest.get("integrations")
+        if not isinstance(integrations, Mapping):
+            integrations = {}
+        summary = {
+            "tables": len(tables),
+            "sources": 0,
+            "ingress": 0,
+            "webhooks": 0,
+            "services": 0,
+            "schedules": 0,
+        }
+
+        def connector_check(
+            instance_id: str,
+            *,
+            component: str,
+            name: str,
+            required: bool = False,
+        ) -> None:
+            if not instance_id:
+                return
+            if self._connector_repo is None:
+                issue(
+                    warnings if not required else errors,
+                    severity="error" if required else "warning",
+                    code="connectors_unavailable",
+                    component=component,
+                    name=name,
+                    message="this host has no connector repository",
+                    action="configure connectors on the target host",
+                )
+                return
+            instance = self._connector_repo.get(instance_id)
+            if instance is None:
+                issue(
+                    warnings,
+                    severity="warning",
+                    code="missing_connector",
+                    component=component,
+                    name=name,
+                    message=f"connector instance {instance_id!r} does not exist on this host",
+                    action=(
+                        "re-create this service with a target-host connector after restore"
+                        if component == "service"
+                        else "rebind this data source to a target-host connector after restore"
+                    ),
+                )
+                return
+            if not (instance.user_id == owner_user_id or instance.shared):
+                issue(
+                    warnings,
+                    severity="warning",
+                    code="connector_not_accessible",
+                    component=component,
+                    name=name,
+                    message=f"connector instance {instance_id!r} is not owned by the restoring user",
+                    action=(
+                        "re-create this service with an accessible connector after restore"
+                        if component == "service"
+                        else "rebind this data source to an accessible connector after restore"
+                    ),
+                )
+
+        raw_sources = integrations.get("sources")
+        if isinstance(raw_sources, list):
+            summary["sources"] = len(raw_sources)
+            for item in raw_sources:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("source_id") or "")
+                table_key = str(item.get("table_key") or MAIN_TABLE_KEY)
+                if table_key not in schemas:
+                    issue(
+                        warnings,
+                        severity="warning",
+                        code="source_table_missing",
+                        component="source",
+                        name=name,
+                        message=f"data source targets missing table {table_key!r}",
+                        action="remove or re-target this source after restore",
+                    )
+                kind = str(item.get("kind") or "")
+                if kind == SOURCE_KIND_WORKSPACE_FILE:
+                    params = item.get("params")
+                    try:
+                        _safe_import_path(
+                            str(params.get("path") or "") if isinstance(params, Mapping) else ""
+                        )
+                    except OctopError as exc:
+                        issue(
+                            warnings,
+                            severity="warning",
+                            code="source_path_invalid",
+                            component="source",
+                            name=name,
+                            message=exc.message,
+                            action="fix the workspace file source after restore",
+                        )
+                elif kind == SOURCE_KIND_EXTERNAL:
+                    params = item.get("params")
+                    connector_check(
+                        str(params.get("instance_id") or "") if isinstance(params, Mapping) else "",
+                        component="source",
+                        name=name,
+                    )
+                else:
+                    issue(
+                        warnings,
+                        severity="warning",
+                        code="source_kind_invalid",
+                        component="source",
+                        name=name,
+                        message=f"unknown data source kind {kind!r}",
+                        action="remove or recreate this source after restore",
+                    )
+
+        raw_schedules = integrations.get("schedules")
+        if isinstance(raw_schedules, list):
+            summary["schedules"] = len(raw_schedules)
+            source_ids = {
+                str(item.get("source_id") or "")
+                for item in (raw_sources or [])
+                if isinstance(item, Mapping)
+            }
+            for item in raw_schedules:
+                if not isinstance(item, Mapping):
+                    continue
+                action = str(item.get("action") or "")
+                if action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
+                    issue(
+                        warnings,
+                        severity="warning",
+                        code="snapshot_schedule_skipped",
+                        component="schedule",
+                        name=action,
+                        message="snapshot refresh schedules need a restored public link",
+                        action="re-create the public link and its schedule after restore",
+                    )
+                elif action == SCHEDULE_ACTION_SYNC_SOURCE:
+                    target = item.get("target")
+                    source_id = (
+                        str(target.get("source_id") or "") if isinstance(target, Mapping) else ""
+                    )
+                    if source_id not in source_ids:
+                        issue(
+                            warnings,
+                            severity="warning",
+                            code="schedule_source_missing",
+                            component="schedule",
+                            name=action,
+                            message=f"schedule references missing source {source_id!r}",
+                            action="recreate the source/schedule after restore",
+                        )
+
+        raw_webhooks = integrations.get("webhooks")
+        if isinstance(raw_webhooks, list):
+            summary["webhooks"] = len(raw_webhooks)
+            for item in raw_webhooks:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("name") or "")
+                try:
+                    await asyncio.to_thread(_validate_webhook_url, str(item.get("url") or ""))
+                except Exception as exc:  # noqa: BLE001 - bad config becomes a warning
+                    issue(
+                        warnings,
+                        severity="warning",
+                        code="webhook_url_invalid",
+                        component="webhook",
+                        name=name,
+                        message=f"webhook URL is invalid on this host: {exc}",
+                        action="fix the URL after restore; the declaration will be disabled",
+                    )
+
+        raw_ingress = integrations.get("ingress")
+        if isinstance(raw_ingress, list):
+            summary["ingress"] = len(raw_ingress)
+            source_ids = {
+                str(item.get("source_id") or "")
+                for item in (raw_sources or [])
+                if isinstance(item, Mapping)
+            }
+            for item in raw_ingress:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("name") or "")
+                mode = str(item.get("mode") or "")
+                if mode not in {"app.inbox", "app.import", "app.refresh"}:
+                    issue(
+                        warnings,
+                        severity="warning",
+                        code="ingress_mode_invalid",
+                        component="ingress",
+                        name=name,
+                        message=f"unknown ingress mode {mode!r}",
+                        action="remove or recreate this ingress after restore",
+                    )
+                    continue
+                mapping = item.get("mapping")
+                if mode == "app.import" and isinstance(mapping, Mapping):
+                    table_key = str(mapping.get("table") or MAIN_TABLE_KEY)
+                    if table_key not in schemas:
+                        issue(
+                            warnings,
+                            severity="warning",
+                            code="ingress_table_missing",
+                            component="ingress",
+                            name=name,
+                            message=f"ingress mapping targets missing table {table_key!r}",
+                            action="fix the mapping after restore",
+                        )
+                    columns = mapping.get("columns")
+                    if isinstance(columns, Mapping) and table_key in schemas:
+                        missing = sorted(
+                            {str(value) for value in columns.values()}
+                            - set(schemas[table_key].names)
+                        )
+                        if missing:
+                            issue(
+                                warnings,
+                                severity="warning",
+                                code="ingress_columns_missing",
+                                component="ingress",
+                                name=name,
+                                message="ingress mapping targets missing columns: "
+                                + ", ".join(missing),
+                                action="fix the mapping after restore",
+                            )
+                if mode == "app.refresh":
+                    source_id = (
+                        str(mapping.get("source_id") or mapping.get("app_source_id") or "")
+                        if isinstance(mapping, Mapping)
+                        else ""
+                    )
+                    if not source_id:
+                        issue(
+                            warnings,
+                            severity="warning",
+                            code="ingress_source_missing",
+                            component="ingress",
+                            name=name,
+                            message="ingress refresh has no source_id in its mapping",
+                            action="fix the mapping after restore; this ingress will be skipped",
+                        )
+                    elif source_id not in source_ids:
+                        issue(
+                            warnings,
+                            severity="warning",
+                            code="ingress_source_missing",
+                            component="ingress",
+                            name=name,
+                            message=f"ingress refresh references missing source {source_id!r}",
+                            action="recreate the source or fix the mapping after restore",
+                        )
+
+        raw_services = integrations.get("services")
+        if isinstance(raw_services, list):
+            summary["services"] = len(raw_services)
+            for item in raw_services:
+                if not isinstance(item, Mapping):
+                    continue
+                name = str(item.get("name") or "")
+                connector_check(
+                    str(item.get("connector_instance_id") or ""),
+                    component="service",
+                    name=name,
+                )
+
+        if summary["ingress"] or summary["webhooks"]:
+            issue(
+                warnings,
+                severity="warning",
+                code="secrets_require_rotation",
+                component="integration",
+                message="signing secrets are never archived; restored endpoints are disabled",
+                action="rotate/copy the new secrets and enable the endpoints after restore",
+            )
+        return _preflight_result(errors, warnings, summary)
+
     async def restore_archive(
         self,
         *,
@@ -4647,6 +5642,17 @@ class AppService:
             raise _invalid(
                 ErrorCode.APP_SOURCE_INVALID,
                 f"backup exceeds the {MAX_BACKUP_BYTES // (1024 * 1024)} MB limit",
+            )
+        preflight = await self.preflight_restore(
+            agent_id=agent_id,
+            owner_user_id=owner_user_id,
+            data=data,
+        )
+        if not preflight["can_restore"]:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "backup failed dependency checks",
+                restore_preflight=preflight,
             )
         try:
             manifest, tables, html, preview, assets = await asyncio.to_thread(
@@ -4732,6 +5738,15 @@ class AppService:
                         row_ids=row_ids or None,
                     )
             await self._remap_restored_references(row, id_maps)
+            raw_table_meta = manifest.get("tables")
+            if isinstance(raw_table_meta, list):
+                for meta in raw_table_meta:
+                    if not isinstance(meta, dict):
+                        continue
+                    key = str(meta.get("table_key") or "")
+                    if key:
+                        await self._apply_restored_table_config(row, key, meta)
+            await self._restore_integrations(row, manifest)
             await self._validate_restored_references(row)
             if html:
                 await self.write_html(row, html)

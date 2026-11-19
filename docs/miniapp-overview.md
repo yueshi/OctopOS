@@ -20,7 +20,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 
 | 维度 | 状态 |
 |---|---|
-| 数据底座 | ✅ 多表、行级 CAS、幂等、懒迁移、导入/导出、备份/恢复 v2、行级变更历史、服务端分组聚合、引用列 |
+| 数据底座 | ✅ 多表、行级 CAS、幂等、懒迁移、导入/导出、备份/恢复 v3、行级变更历史、服务端分组聚合、引用列 |
 | 创建 | ✅ Agent 工具、Excel/CSV 快速模式（确定性渲染，不走 LLM）、系统模板 + 专家模板 |
 | 界面 | ✅ 单文件 HTML、`window.octopApp` SDK、能力清单、双层沙箱、CSP、WebRTC 冻结 |
 | 协作 | ✅ owner / admin / `edit_data` / `view`，协作者、应用交接、删除守卫 |
@@ -34,7 +34,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 
 关键数字：
 
-- 31 个 `app_*` Agent 工具（3 个只读 + 4 个 HITL 入站运维工具）；约 87 个 HTTP 路由 + 1 个公开宿主页。
+- 35 个 `app_*` Agent 工具（3 个只读 + 8 个 HITL 集成运维工具）；约 87 个 HTTP 路由 + 1 个公开宿主页。
 - 每个用户最多 50 个应用；每个应用最多 12 张表、每表 50 列、2 万行、5 MB。
 - 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB。
 - 11 个应用能力位：10 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
@@ -108,7 +108,8 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - **Schema 演进**：`app_alter_schema` / `PATCH /schema` 支持改名、删除、改类型；整表先校验，失败整次拒绝。
 - **导入**：CSV/TSV/JSON/xlsx/xls；`sheet`、`header_row`、`dry_run`、`upsert_key`、多文件 `paths`、列映射、失败行回传；合计/小计行在检查与直接导入两条路径都会跳过，快速创建未显式传 `header_row` 时使用检查报告检测到的表头行。
 - **导出**：`GET /api/apps/{id}/export` 从 DB 渲染 CSV 快照。
-- **备份/恢复**：zip（manifest + app.html + preview.svg + tables/*/schema.json + tables/*/data.csv + tables/*/row_ids.json + assets/*）；`GET /backup` 与 `POST /restore`，格式 v2，解压上限 256 MB。v2 用 `row_ids.json` 记录原始行 id；恢复时生成新 id 并按表重映射引用列，因此引用关系在恢复后仍然有效。v1 归档仍可恢复，但没有行 id，引用列会拒绝恢复。
+- **备份/恢复**：zip（manifest + app.html + preview.svg + tables/*/schema.json + tables/*/data.csv + tables/*/row_ids.json + assets/*）；`GET /backup`、`POST /restore/preflight` 与 `POST /restore`，格式 v3，解压上限 256 MB。v2 用 `row_ids.json` 记录原始行 id；v3 的 manifest 还带表可见性/`row_scope`/规则和 `integrations` 声明（入站入口、出站 Webhook、外部服务、应用数据源、`sync_source` 调度），但不含任何 secret。恢复时生成新 id 并按表重映射引用与 `source_id`；集成声明重建为 disabled，Owner 重新轮换/绑定密钥后启用。`snapshot_publication` 调度依赖公开链接，不在归档内，恢复时跳过。v1/v2 归档仍可恢复。
+- **恢复预检**：`POST /restore/preflight` 在写入任何行之前检查归档结构、表 schema、CSV 行与 `row_ids` 配对、行内引用完整性、HTML/预览、入口映射目标、connector 实例、数据源/调度引用和 Webhook URL；错误会阻断恢复，缺失 connector 或会被禁用的声明以 warning + 处理建议返回，Dashboard 展示后再确认导入。`POST /restore` 内部复用同一预检，错误时不会创建应用。
 - **PII**：列级 `pii` 标记 + 值级检测；导入默认跳过敏感列（必填敏感列拒绝并要求显式 `include_pii=true`）；viewer / 公开链接 / 助手 / 导出统一脱敏。
 
 限额：
@@ -284,7 +285,8 @@ owner/admin 可以让 Agent 使用两组工具：
 
 **受控写操作（强制 HITL）**
 
-- `app_integration_create_ingress` / `update_ingress` / `delete_ingress` / `test_ingress`：创建/修改/删除 app-owned 入站入口，或发送测试事件；用户批准后才执行。
+- `app_integration_create_ingress` / `update_ingress` / `delete_ingress` / `test_ingress`：创建/修改/删除 app-owned 入站入口，或发送测试事件；
+- `app_integration_create_webhook` / `update_webhook` / `delete_webhook` / `test_webhook`：创建/修改/删除出站 Webhook，或发送出站测试事件。出站 Webhook 的 secret 不返回 Agent，由 Owner 在应用详情复制。
 
 创建入口的结果包含 `hook_url` 和一次性 secret；Agent 应只展示一次，后续消息不重复。团队 host 不挂这组工具。
 
@@ -426,7 +428,7 @@ owner/admin 可以让 Agent 使用两组工具：
 | `infra/apps/models.py` | Schema/Column/行校验、CSV 序列化、HTML 写入校验、外链/导航扫描 |
 | `infra/apps/capabilities.py` | 能力目录、解析、校验、新应用默认集 |
 | `infra/apps/sandbox.py` | 服务端 CSP、wrapper 文档、WebRTC 冻结、静态 frame 检查、违规 URL 脱敏 |
-| `infra/apps/tools.py` | 31 个 `app_*` LangChain 工具、看板/分享链接载荷 |
+| `infra/apps/tools.py` | 35 个 `app_*` LangChain 工具、看板/分享链接载荷 |
 | `infra/apps/assistant.py` | 只读数据助手（SSE、工具循环、图表、历史） |
 | `infra/apps/generation.py` | 一次性文本生成 |
 | `infra/apps/charts.py` | 图表请求校验与后端聚合 |
@@ -681,7 +683,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 数据 | Schema 改名/删除/改类型 | ✅ | `app_alter_schema` |
 | 数据 | CSV/Excel/JSON 导入 | ✅ | sheet/header/dry-run/upsert/多文件/失败行 |
 | 数据 | CSV 导出 | ✅ | 从 DB 渲染 |
-| 数据 | 备份/恢复 | ✅ | zip v2（含 `row_ids.json`，恢复重映射引用），64 MB / 256 MB 上限 |
+| 数据 | 备份/恢复 | ✅ | zip v3（`row_ids.json` + 表配置 + 集成声明；无 secret；恢复后 disabled），导入前依赖预检，64 MB / 256 MB 上限 |
 | 数据 | 引用列 | ✅ | `reference` + 写入校验 + 删除/replace 守卫 + `expand_refs` label |
 | 数据 | 工作区文件数据源 | ✅ | 手动/定时 |
 | 数据 | 只读连接器数据源 | ✅ | 外部 MCP 工具 + 游标 + 退避 |
@@ -720,7 +722,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 运维 | 审计 | ✅ | 快速创建、分享、发布、导出、备份/恢复、游戏、CSP/沙箱、生成；行写入进 `light_app_row_history`（v40），schema/HTML 写入仍只靠版本与备份 |
 | 运维 | 限流 | ✅ | 每进程；非全局 |
 
-### 4.2 Agent 工具（31 个）
+### 4.2 Agent 工具（35 个）
 
 | 工具 | 权限 | 作用 |
 |---|---|---|
@@ -754,6 +756,10 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | `app_integration_update_ingress` | owner/admin | 改入口模式/事件类型/mapping/限流/启停（**强制 HITL**） |
 | `app_integration_delete_ingress` | owner/admin | 删除入口及其 source/subscription（**强制 HITL**） |
 | `app_integration_test_ingress` | owner/admin | 发送测试事件并交给 worker（**强制 HITL**） |
+| `app_integration_create_webhook` | owner/admin | 创建出站 Webhook；secret 不返回 Agent（**强制 HITL**） |
+| `app_integration_update_webhook` | owner/admin | 改出站 Webhook 名称/URL/事件类型/启停（**强制 HITL**） |
+| `app_integration_delete_webhook` | owner/admin | 删除出站 Webhook 及其 source/subscription（**强制 HITL**） |
+| `app_integration_test_webhook` | owner/admin | 发送出站测试事件并交给 worker（**强制 HITL**） |
 | `app_delete` | owner/admin | 删除应用（**强制 HITL**） |
 
 说明：团队 host 不挂这组工具；它们只挂普通 Agent（`if not team_host`）。
@@ -805,7 +811,8 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | PATCH/DELETE | `/apps/{id}/rows/{row_id}` | 改行/删行（CAS） |
 | GET | `/apps/{id}/export` | CSV 导出 |
 | GET | `/apps/{id}/backup` | 备份 zip |
-| POST | `/apps/restore` | 恢复备份 |
+| POST | `/apps/restore/preflight` | 恢复前扫描依赖与归档，返回阻断错误/警告 |
+| POST | `/apps/restore` | 恢复备份（内部先做预检） |
 | PATCH | `/apps/{id}/schema` | 结构变更 |
 | PATCH | `/apps/{id}` | 改名/描述 |
 | PUT | `/apps/{id}/capabilities` | 能力清单 |
@@ -868,7 +875,7 @@ R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `even
 | `miniapp-sandbox-hardening.md` | P0/P1/WebRTC 已实施 | ✅ 一致；12 个浏览器回归通过 |
 | `miniapp-platform-roadmap.md` | R1 / R2.0 已实施；R2.1–R2.3 部分/核心实施 | ◐ 部分一致；以 roadmap 状态行为准 |
 | `miniapp-event-api-design.md` | 收件箱 + 出站 Webhook 已实施 | ◐ 部分一致；`app.inbox` + 游标/ack、`events.emit` + outbound webhook 已落地，CloudEvents/ordering 未做；已知缺口见 [event-model.md](./event-model.md) |
-| `docs/architecture-overview.md` | 已同步为 31 个工具，并链接本文 | ✅ 一致 |
+| `docs/architecture-overview.md` | 已同步为 35 个工具，并链接本文 | ✅ 一致 |
 
 > 已删除两份已实施且被本文覆盖的设计稿：`light-apps-multi-table-design.md`、`light-apps-assistant-and-import-design.md`；多表、助手与导入内容见 §2.2、§2.6、§2.7。
 

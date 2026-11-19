@@ -26,7 +26,7 @@ from octop.infra.apps.service import (
     AppTableView,
     app_path,
 )
-from octop.infra.apps.wiring import build_ingress_service
+from octop.infra.apps.wiring import build_ingress_service, build_webhook_service
 from octop.infra.db.repos.apps import PERMISSION_RANK, LightAppRow
 from octop.infra.db.services import RepoBundle
 
@@ -63,6 +63,10 @@ APP_TOOL_NAMES: tuple[str, ...] = (
     "app_integration_update_ingress",
     "app_integration_delete_ingress",
     "app_integration_test_ingress",
+    "app_integration_create_webhook",
+    "app_integration_update_webhook",
+    "app_integration_delete_webhook",
+    "app_integration_test_webhook",
     APP_DELETE_TOOL_NAME,
 )
 """Names of the built-in light-app tools, in the order they are registered."""
@@ -1536,6 +1540,9 @@ def build_app_tools(
     def _ingress_service() -> Any:
         return build_ingress_service(repos=_integration_repos(), app_service=service)
 
+    def _webhook_service() -> Any:
+        return build_webhook_service(repos=_integration_repos(), app_service=service)
+
     def _hook_url(source_id: str) -> str:
         base = public_base_url.strip().rstrip("/")
         path = f"/api/hooks/{source_id}"
@@ -1694,6 +1701,147 @@ def build_app_tools(
                     "event_type": result.event.event_type,
                     "deliveries": result.delivery_count,
                     "rate_limited": result.rate_limited,
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_create_webhook(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        name: Annotated[str, Field(description="Human-readable webhook name.")],
+        url: Annotated[str, Field(description="http(s) destination URL.")],
+        event_types: Annotated[
+            list[str],
+            Field(description="Exact types, prefix patterns like order.*, or *."),
+        ],
+        enabled: Annotated[bool, Field(description="Enable immediately.")] = True,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            view, _secret = await _webhook_service().create(
+                row,
+                name=name,
+                url=url,
+                event_types=event_types,
+                enabled=enabled,
+                actor_user_id=user_id,
+            )
+            return _ok(
+                {
+                    "webhook_id": view.webhook_id,
+                    "name": view.name,
+                    "url": view.url,
+                    "event_types": list(view.event_types),
+                    "enabled": view.enabled,
+                    "secret_note": (
+                        "The signing secret is intentionally not returned to the agent. "
+                        "Ask the owner to open the app's Outbound Webhooks section and "
+                        "rotate/copy the secret."
+                    ),
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_update_webhook(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        webhook_id: Annotated[str, Field(description="Webhook id from list/health.")],
+        name: Annotated[str | None, Field(default=None)] = None,
+        url: Annotated[str | None, Field(default=None)] = None,
+        event_types: Annotated[list[str] | None, Field(default=None)] = None,
+        enabled: Annotated[bool | None, Field(default=None)] = None,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            view, _secret = await _webhook_service().update(
+                row,
+                webhook_id,
+                name=name,
+                url=url,
+                event_types=event_types,
+                enabled=enabled,
+            )
+            return _ok(
+                {
+                    "webhook_id": view.webhook_id,
+                    "name": view.name,
+                    "url": view.url,
+                    "event_types": list(view.event_types),
+                    "enabled": view.enabled,
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_delete_webhook(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        webhook_id: Annotated[str, Field(description="Webhook id from list/health.")],
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            deleted = _webhook_service().delete(row, webhook_id)
+            return _ok({"deleted": deleted, "webhook_id": webhook_id})
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_integration_test_webhook(
+        app_id: Annotated[
+            str,
+            Field(description="App id returned by app_list/app_create."),
+        ],
+        webhook_id: Annotated[str, Field(description="Webhook id from list/health.")],
+        event_type: Annotated[
+            str,
+            Field(
+                default="",
+                description="Optional type; defaults to the webhook's first pattern.",
+            ),
+        ] = "",
+        payload: Annotated[
+            dict[str, Any] | None,
+            Field(default=None, description="Test event payload."),
+        ] = None,
+    ) -> str:
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            _require_manager(service, row, user_id)
+            repos_value = _integration_repos()
+            from octop.infra.events.service import ExternalEventService  # noqa: PLC0415
+
+            events = ExternalEventService(repos=repos_value, secret_repo=repos_value.secret_repo)
+            result = await _webhook_service().test(
+                row,
+                webhook_id,
+                events,
+                event_type=event_type,
+                payload=payload or {},
+            )
+            return _ok(
+                {
+                    "event_id": result.event.event_id,
+                    "event_type": result.event.event_type,
+                    "deliveries": result.delivery_count,
+                    "rate_limited": result.rate_limited,
+                    "note": (
+                        "The delivery worker will POST this event to the webhook URL. "
+                        "Use app_integration_health to check the delivery result."
+                    ),
                 }
             )
         except Exception as exc:
@@ -1969,6 +2117,39 @@ def build_app_tools(
                 "Send one test event through an app-owned inbound endpoint and "
                 "let the worker deliver it. Use it after creating/updating an "
                 "ingress. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_create_webhook,
+            name="app_integration_create_webhook",
+            description=(
+                "Create an app-owned outbound webhook. The signing secret is not "
+                "returned to the agent; the owner copies it from the app's "
+                "Outbound Webhooks section. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_update_webhook,
+            name="app_integration_update_webhook",
+            description=(
+                "Update an outbound webhook's name, URL, event types or enabled "
+                "state. Secret rotation stays in the Dashboard. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_delete_webhook,
+            name="app_integration_delete_webhook",
+            description=(
+                "Delete an outbound webhook and its source/subscription. Requires user approval."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_integration_test_webhook,
+            name="app_integration_test_webhook",
+            description=(
+                "Ingest one test event for an outbound webhook and let the worker "
+                "POST it. Check app_integration_health for the delivery result. "
+                "Requires user approval."
             ),
         ),
         StructuredTool.from_function(

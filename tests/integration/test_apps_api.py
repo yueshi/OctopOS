@@ -1610,12 +1610,25 @@ async def test_backup_download_and_restore_api(
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "application/zip"
     assert r.content.startswith(b"PK")
+    archive = r.content
+
+    r = await client.post(
+        "/api/apps/restore/preflight",
+        params={"agent_id": agent_id},
+        headers=alice_auth,
+        files={"file": ("backup.zip", archive, "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    preflight = r.json()
+    assert preflight["can_restore"] is True
+    assert preflight["error_count"] == 0
+    assert preflight["summary"]["tables"] == 1
 
     r = await client.post(
         "/api/apps/restore",
         params={"agent_id": agent_id},
         headers=alice_auth,
-        files={"file": ("backup.zip", r.content, "application/zip")},
+        files={"file": ("backup.zip", archive, "application/zip")},
     )
     assert r.status_code == 201, r.text
     restored = r.json()
@@ -1628,6 +1641,16 @@ async def test_backup_download_and_restore_api(
     r = await client.get(f"/api/apps/{restored['app_id']}/rows", headers=alice_auth)
     assert r.status_code == 200, r.text
     assert r.json()["rows"] == [{"title": "A", "status": "new"}]
+
+    r = await client.post(
+        "/api/apps/restore/preflight",
+        params={"agent_id": agent_id},
+        headers=alice_auth,
+        files={"file": ("backup.zip", b"not a zip", "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["can_restore"] is False
+    assert r.json()["issues"][0]["code"] == "archive_invalid"
 
     r = await client.post(
         "/api/apps/restore",

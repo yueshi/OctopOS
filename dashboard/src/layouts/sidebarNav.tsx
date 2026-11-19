@@ -165,7 +165,7 @@ export function buildNavSections(
     },
     {
       key: "apps",
-      path: "/apps",
+      path: "/apps/all",
       icon: <AppWindow size={iconSize} strokeWidth={iconStroke} />,
       labelKey: "nav.apps",
     },

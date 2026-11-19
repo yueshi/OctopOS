@@ -36,6 +36,10 @@ def test_sensitive_tools_require_hitl() -> None:
         "app_set_capabilities",
         "app_share_link",
         "app_integration_create_ingress",
+        "app_integration_create_webhook",
+        "app_integration_update_webhook",
+        "app_integration_delete_webhook",
+        "app_integration_test_webhook",
     } <= APP_HITL_TOOL_NAMES
     assert "app_update_row" not in APP_HITL_TOOL_NAMES
 

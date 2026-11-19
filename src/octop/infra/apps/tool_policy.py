@@ -66,6 +66,10 @@ APP_TOOL_RISKS: dict[str, str] = {
     "app_integration_update_ingress": RISK_SENSITIVE,
     "app_integration_delete_ingress": RISK_SENSITIVE,
     "app_integration_test_ingress": RISK_SENSITIVE,
+    "app_integration_create_webhook": RISK_SENSITIVE,
+    "app_integration_update_webhook": RISK_SENSITIVE,
+    "app_integration_delete_webhook": RISK_SENSITIVE,
+    "app_integration_test_webhook": RISK_SENSITIVE,
     "app_delete": RISK_SENSITIVE,
 }
 
@@ -100,6 +104,10 @@ APP_TOOL_CATEGORIES: dict[str, str] = {
     "app_integration_update_ingress": GROUP_INTEGRATION,
     "app_integration_delete_ingress": GROUP_INTEGRATION,
     "app_integration_test_ingress": GROUP_INTEGRATION,
+    "app_integration_create_webhook": GROUP_INTEGRATION,
+    "app_integration_update_webhook": GROUP_INTEGRATION,
+    "app_integration_delete_webhook": GROUP_INTEGRATION,
+    "app_integration_test_webhook": GROUP_INTEGRATION,
     "app_delete": GROUP_LIFECYCLE,
 }
 

@@ -23,6 +23,13 @@ describe("sidebarNav", () => {
     expect(isGroupedNavKey("experts")).toBe(false);
   });
 
+  it("opens the workbench on the all-apps page", () => {
+    const apps = buildNavSections(adminUser, { mobileEnabled: true })
+      .flatMap((section) => section.items)
+      .find((item) => item.key === "apps");
+    expect(apps?.path).toBe("/apps/all");
+  });
+
   it("places grouped keys only under sections with groupKey", () => {
     const sections = buildNavSections(adminUser, { mobileEnabled: true });
     const flatKeys = new Set(

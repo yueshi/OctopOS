@@ -33,6 +33,10 @@ def build_app_service(
         connector_repo=repos.connector_repo,
         event_repo=repos.app_event_repo,
         schedule_repo=repos.app_schedule_repo,
+        webhook_repo=repos.app_webhook_repo,
+        ingress_repo=repos.app_ingress_repo,
+        external_source_repo=repos.external_source_repo,
+        external_subscription_repo=repos.external_subscription_repo,
         external_tool_runner=external_tool_runner,
     )
 

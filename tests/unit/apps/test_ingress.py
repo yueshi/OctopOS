@@ -220,3 +220,107 @@ async def test_test_event_and_app_delete_cleanup(world: World) -> None:
     assert world.repos.app_ingress_repo.get(view.ingress_id) is None
     assert world.repos.external_source_repo.get(row.source_id) is None
     assert world.repos.external_subscription_repo.get(row.subscription_id) is None
+
+
+async def test_backup_restores_integration_declarations_without_secrets(
+    world: World,
+) -> None:
+    import io
+    import zipfile
+
+    from octop.infra.apps.wiring import build_webhook_service
+
+    app = world.service.get(world.app_id)
+    ingress, ingress_secret = await world.ingress.create(
+        app,
+        name="Orders",
+        mode="app.inbox",
+        event_type="order.created",
+        actor_user_id=world.alice_id,
+    )
+    webhook_service = build_webhook_service(repos=world.repos, app_service=world.service)
+    webhook, webhook_secret = await webhook_service.create(
+        app,
+        name="ERP",
+        url="https://93.184.216.34/hook",
+        event_types=["order.*"],
+        enabled=True,
+        actor_user_id=world.alice_id,
+    )
+    world.service.save_service(
+        app,
+        name="books",
+        provider="external",
+        connector_instance_id="",
+        allowed_tools=["fetch_json"],
+        allowed_url_prefixes=["https://api.example.com"],
+        cache_ttl_seconds=300,
+        max_calls_per_minute=5,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+    )
+    await world.service.set_table_row_scope(app, table="main", row_scope="user")
+    source = world.service.save_source(
+        app,
+        source_id="src_old",
+        table_key="main",
+        kind="workspace_file",
+        mode="append",
+        schedule_seconds=120,
+        params={"path": "inbound/data.csv"},
+        mapping={},
+        created_by=world.alice_id,
+    )
+    refresh_ingress, _refresh_secret = await world.ingress.create(
+        app,
+        name="Refresh",
+        mode="app.refresh",
+        mapping={"source_id": source.source_id},
+        actor_user_id=world.alice_id,
+    )
+
+    _filename, archive = await world.service.backup_archive(app)
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        raw = archive
+    assert manifest["version"] == 3
+    assert manifest["integrations"]["ingress"][0]["name"] == "Orders"
+    assert manifest["integrations"]["webhooks"][0]["name"] == "ERP"
+    assert manifest["integrations"]["services"][0]["name"] == "books"
+    assert manifest["integrations"]["sources"][0]["source_id"] == "src_old"
+    assert manifest["integrations"]["schedules"][0]["action"] == "sync_source"
+    assert manifest["tables"][0]["row_scope"] == "user"
+    assert ingress_secret.encode() not in raw
+    assert webhook_secret.encode() not in raw
+
+    restored = await world.service.restore_archive(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        data=archive,
+    )
+    restored_view = world.service.get(restored.app_id)
+    ingress_views = world.ingress.list(restored_view)
+    assert {item.name for item in ingress_views} == {"Orders", "Refresh"}
+    orders = next(item for item in ingress_views if item.name == "Orders")
+    refresh = next(item for item in ingress_views if item.name == "Refresh")
+    assert orders.enabled is False
+    assert orders.source_id != ingress.source_id
+    assert refresh.enabled is False
+    restored_sources = world.service.list_sources(restored_view)
+    assert [item.table_key for item in restored_sources] == ["main"]
+    assert refresh.mapping["source_id"] == restored_sources[0].source_id
+    schedules = world.service.list_schedules(restored_view)
+    assert [(item.action, item.enabled) for item in schedules] == [("sync_source", False)]
+    assert schedules[0].target["source_id"] == restored_sources[0].source_id
+    assert schedules[0].interval_seconds == 120
+
+    webhooks = world.repos.app_webhook_repo.list_for_app(restored.app_id)
+    assert [item.name for item in webhooks] == ["ERP"]
+    assert webhooks[0].enabled is False
+    services = world.service.list_services(restored_view)
+    assert [item.name for item in services] == ["books"]
+    assert services[0].enabled is False
+    table = world.repos.light_app_repo.get_table(restored.app_id, "main")
+    assert table is not None and table.row_scope == "user"

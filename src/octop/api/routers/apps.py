@@ -90,6 +90,37 @@ class AppColumn(BaseModel):
     )
 
 
+class RestoreIssueOut(BaseModel):
+    severity: Literal["error", "warning"] = Field(
+        description="Errors block restore; warnings mark checks that will be skipped or need follow-up."
+    )
+    code: str = Field(description="Stable machine-readable issue code.")
+    component: str = Field(
+        description="Archive part that failed the check: archive, table, source, schedule, "
+        "webhook, ingress, service or integration."
+    )
+    name: str = Field(default="", description="Declaration name, when the component has one.")
+    message: str = Field(description="Human-readable description of the problem.")
+    action: str = Field(default="", description="What the owner should do about it.")
+
+
+class RestorePreflightOut(BaseModel):
+    ok: bool = Field(description="True when no errors or warnings were found.")
+    can_restore: bool = Field(
+        description="Whether the archive may be imported without blocking errors."
+    )
+    error_count: int = Field(default=0, description="Number of blocking issues.")
+    warning_count: int = Field(default=0, description="Number of non-blocking issues.")
+    issues: list[RestoreIssueOut] = Field(
+        default_factory=list,
+        description="Blocking errors first, then warnings, each with an owner action.",
+    )
+    summary: dict[str, int] = Field(
+        default_factory=dict,
+        description="Counts of scanned tables, sources, ingress, webhooks, services and schedules.",
+    )
+
+
 class AppSummary(BaseModel):
     app_id: str
     name: str
@@ -1450,14 +1481,60 @@ async def create_app_game_session(
 
 
 @router.post(
+    "/restore/preflight",
+    response_model=RestorePreflightOut,
+    summary="Check an app backup before restoring",
+    description=(
+        "Scans a zip produced by GET /apps/{app_id}/backup without writing any "
+        "rows: archive structure, table schemas/data/row ids, reference "
+        "integrity, HTML/preview, mapping targets, connector instances, "
+        "source/schedule references and webhook URLs. Blocking errors prevent "
+        "POST /apps/restore; warnings list declarations that will be disabled "
+        "or skipped and follow-up actions. Requires access to the target agent."
+    ),
+)
+async def preflight_restore_app(
+    file: UploadFile = File(...),  # noqa: B008
+    agent_id: str = Query(description="Agent whose workspace will host the restored app."),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> RestorePreflightOut:
+    service = _service(server)
+    _assert_agent_access(service, user, agent_id)
+    data = await read_upload_capped(
+        file,
+        max_bytes=MAX_BACKUP_BYTES,
+        code=ErrorCode.APP_SOURCE_INVALID,
+    )
+    report = await service.preflight_restore(
+        agent_id=agent_id,
+        owner_user_id=user.id,
+        data=data,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.restore_preflight",
+        target=agent_id,
+        payload={
+            "bytes": len(data),
+            "error_count": report["error_count"],
+            "warning_count": report["warning_count"],
+        },
+    )
+    return RestorePreflightOut(**report)
+
+
+@router.post(
     "/restore",
     response_model=AppDetail,
     status_code=201,
     summary="Restore an app from a backup",
     description=(
         "Creates a new app from a zip produced by GET /apps/{app_id}/backup. "
-        "The archive is validated before anything is written; ids are not "
-        "reused. Requires access to the target agent."
+        "The archive and its dependencies are checked before anything is "
+        "written (blocking errors reject the restore); ids are not reused. "
+        "Requires access to the target agent."
     ),
 )
 async def restore_app(

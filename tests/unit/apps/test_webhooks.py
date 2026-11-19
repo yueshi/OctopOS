@@ -333,3 +333,29 @@ async def test_app_delete_removes_webhook_artifacts(world: World) -> None:
     assert world.repos.app_webhook_repo.get(view.webhook_id) is None
     assert world.repos.external_source_repo.get(row.source_id) is None
     assert world.repos.external_subscription_repo.get(row.subscription_id) is None
+
+
+async def test_webhook_test_event_uses_pattern(world: World) -> None:
+    view, _secret = await _create(world, event_types=["order.*"])
+
+    result = await world.service.test(
+        world.app,  # type: ignore[arg-type]
+        view.webhook_id,
+        world.events,
+    )
+    assert result.event.event_type == "order.test"
+    assert result.delivery_count == 1
+
+    await world.service.update(
+        world.app,  # type: ignore[arg-type]
+        view.webhook_id,
+        enabled=False,
+    )
+    with pytest.raises(OctopError) as exc:
+        await world.service.test(
+            world.app,  # type: ignore[arg-type]
+            view.webhook_id,
+            world.events,
+        )
+    _assert_code(exc, ErrorCode.EXTERNAL_EVENT_INVALID)
+    assert "disabled" in exc.value.message

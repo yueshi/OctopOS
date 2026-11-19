@@ -90,6 +90,24 @@ export interface AppDetail extends AppSummary {
   tables: AppTable[];
 }
 
+export interface RestoreIssue {
+  severity: "error" | "warning";
+  code: string;
+  component: string;
+  name: string;
+  message: string;
+  action: string;
+}
+
+export interface RestorePreflight {
+  ok: boolean;
+  can_restore: boolean;
+  error_count: number;
+  warning_count: number;
+  issues: RestoreIssue[];
+  summary: Record<string, number>;
+}
+
 export interface AppPublication {
   active: boolean;
   url?: string | null;
@@ -962,6 +980,15 @@ export const appsApi = {
     ),
 
   backup: (appId: string) => requestBlob(`/apps/${encodeId(appId)}/backup`),
+
+  preflightRestore: (agentId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestUpload<RestorePreflight>(
+      `/apps/restore/preflight?agent_id=${encodeURIComponent(agentId)}`,
+      form,
+    );
+  },
 
   restore: (agentId: string, file: File) => {
     const form = new FormData();

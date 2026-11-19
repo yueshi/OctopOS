@@ -33,7 +33,7 @@ from octop.infra.utils.ulid import new_short_id
 
 if TYPE_CHECKING:
     from octop.infra.apps.service import AppRecord, AppService
-    from octop.infra.events.service import ExternalEventService
+    from octop.infra.events.service import ExternalEventService, IngestResult
 
 SOURCE_KIND_APP_OUTBOUND = "app_outbound"
 MODE_WEBHOOK_POST = "webhook.post"
@@ -180,6 +180,9 @@ class AppWebhookService:
         except Exception:
             self._source_repo.delete(source.source_id)
             raise
+        if not enabled:
+            self._source_repo.update(source.source_id, enabled=False)
+            self._subscription_repo.update(subscription.subscription_id, enabled=False)
         return WebhookView.from_row(stored), secret
 
     async def update(
@@ -290,6 +293,51 @@ class AppWebhookService:
             "rate_limited": sum(int(item["rate_limited"]) for item in emitted),
             "webhooks": emitted,
         }
+
+    async def test(
+        self,
+        row: AppRecord,
+        webhook_id: str,
+        event_service: ExternalEventService,
+        *,
+        event_type: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> IngestResult:
+        """Ingest one owner-triggered test event into a single webhook."""
+        hook = self._webhook_repo.get(webhook_id)
+        if hook is None or hook.app_id != row.app_id:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, "webhook not found")
+        if not hook.enabled:
+            raise _invalid("webhook is disabled")
+        source = self._source_repo.get(hook.source_id)
+        if source is None:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, "webhook source missing")
+        clean_type = event_type.strip()
+        if clean_type:
+            if not EVENT_TYPE_RE.fullmatch(clean_type):
+                raise _invalid("event_type must match [A-Za-z0-9_.*-] and be at most 100 chars")
+        else:
+            pattern = hook.event_types[0] if hook.event_types else "*"
+            if pattern == "*":
+                clean_type = "webhook.test"
+            elif pattern.endswith(".*"):
+                clean_type = f"{pattern[:-1]}test"
+            else:
+                clean_type = pattern
+        if payload is not None and not isinstance(payload, dict):
+            raise _invalid("payload must be an object")
+        body = dict(payload or {})
+        body.setdefault("summary", "Webhook test event")
+        raw = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+        if len(raw.encode("utf-8")) > MAX_PAYLOAD_BYTES:
+            raise _invalid(f"event payload exceeds {MAX_PAYLOAD_BYTES // 1024} KB")
+        return event_service.ingest(
+            source=source,
+            event_type=clean_type,
+            external_id=f"test-{new_short_id(20)}",
+            occurred_at=None,
+            payload=body,
+        )
 
 
 __all__ = ["AppWebhookService", "WebhookView"]

@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Alert,
   Button,
   Drawer,
   Dropdown,
@@ -51,6 +52,7 @@ import {
   appsApi,
   appPreviewPath,
   type AppSummary,
+  type RestorePreflight,
 } from "../../api/modules/apps";
 import {
   boardsApi,
@@ -231,6 +233,9 @@ export default function AppsPage() {
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreFiles, setRestoreFiles] = useState<UploadFile[]>([]);
   const [restoreSaving, setRestoreSaving] = useState(false);
+  const [restoreReport, setRestoreReport] = useState<RestorePreflight | null>(
+    null,
+  );
   const [restoreForm] = Form.useForm<{ agent_id: string }>();
   const [dialog, setDialog] = useState<BoardDialog | null>(null);
   const [dialogSaving, setDialogSaving] = useState(false);
@@ -732,6 +737,7 @@ export default function AppsPage() {
   const openRestore = () => {
     setRestoreOpen(true);
     setRestoreFiles([]);
+    setRestoreReport(null);
     restoreForm.resetFields();
     const first = agents[0]?.agent_id;
     if (first) restoreForm.setFieldsValue({ agent_id: first });
@@ -745,10 +751,57 @@ export default function AppsPage() {
       return;
     }
     setRestoreSaving(true);
+    setRestoreReport(null);
     try {
-      const detail = await appsApi.restore(values.agent_id, file);
-      setRestoreOpen(false);
-      navigate(`/apps/${detail.app_id}`);
+      const report = await appsApi.preflightRestore(values.agent_id, file);
+      setRestoreReport(report);
+      if (!report.can_restore) {
+        message.error(
+          t("apps.restoreCheckBlocked", { count: report.error_count }),
+        );
+        return;
+      }
+      const finish = async () => {
+        setRestoreSaving(true);
+        try {
+          const detail = await appsApi.restore(values.agent_id, file);
+          setRestoreOpen(false);
+          navigate(`/apps/${detail.app_id}`);
+        } catch (err) {
+          message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
+        } finally {
+          setRestoreSaving(false);
+        }
+      };
+      if (report.warning_count > 0) {
+        setRestoreSaving(false);
+        Modal.confirm({
+          title: t("apps.restoreWarningsConfirmTitle"),
+          content: (
+            <div>
+              <p>
+                {t("apps.restoreWarningsConfirm", {
+                  count: report.warning_count,
+                })}
+              </p>
+              <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                {report.issues.map((issue, index) => (
+                  <li key={`${issue.code}-${issue.name}-${index}`}>
+                    {issue.component}
+                    {issue.name ? ` / ${issue.name}` : ""}: {issue.message}
+                    {issue.action ? ` — ${issue.action}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ),
+          okText: t("apps.restoreAnyway"),
+          cancelText: t("common.cancel", "Cancel"),
+          onOk: finish,
+        });
+        return;
+      }
+      await finish();
     } catch (err) {
       message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
     } finally {
@@ -1190,6 +1243,7 @@ export default function AppsPage() {
                 value: agent.agent_id,
                 label: agent.name,
               }))}
+              onChange={() => setRestoreReport(null)}
             />
           </Form.Item>
           <Form.Item label={t("apps.restoreFile", "Backup file")}>
@@ -1198,7 +1252,10 @@ export default function AppsPage() {
               maxCount={1}
               fileList={restoreFiles}
               beforeUpload={() => false}
-              onChange={({ fileList }) => setRestoreFiles(fileList)}
+              onChange={({ fileList }) => {
+                setRestoreFiles(fileList);
+                setRestoreReport(null);
+              }}
             >
               <Button>{t("apps.chooseFile", "Choose file")}</Button>
             </Upload>
@@ -1206,6 +1263,42 @@ export default function AppsPage() {
               {t("apps.restoreHint", "Restores the MiniApp as a new app.")}
             </Text>
           </Form.Item>
+          {restoreReport && (
+            <Alert
+              type={
+                !restoreReport.can_restore
+                  ? "error"
+                  : restoreReport.warning_count > 0
+                  ? "warning"
+                  : "success"
+              }
+              showIcon
+              message={
+                !restoreReport.can_restore
+                  ? t("apps.restoreCheckBlocked", {
+                      count: restoreReport.error_count,
+                    })
+                  : restoreReport.warning_count > 0
+                  ? t("apps.restoreCheckWarnings", {
+                      count: restoreReport.warning_count,
+                    })
+                  : t("apps.restoreCheckPassed")
+              }
+              description={
+                restoreReport.issues.length > 0 ? (
+                  <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                    {restoreReport.issues.map((issue, index) => (
+                      <li key={`${issue.code}-${issue.name}-${index}`}>
+                        {issue.component}
+                        {issue.name ? ` / ${issue.name}` : ""}: {issue.message}
+                        {issue.action ? ` — ${issue.action}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : undefined
+              }
+            />
+          )}
         </Form>
       </Modal>
     </PageShell>
