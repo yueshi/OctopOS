@@ -1,0 +1,1376 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="OctopOS 功能与架构导览：单节点、多用户、多 Agent 的自托管 AI 工作平台。">
+<meta name="theme-color" content="#071722">
+<title>OctopOS · 功能与架构导览</title>
+<style>
+  :root{
+    --ink:#12212f;
+    --muted:#5d6b7a;
+    --faint:#8c99a7;
+    --line:#dde5ed;
+    --paper:#f8fafc;
+    --brand:#0f766e;
+    --brand-soft:#e6f4f1;
+    --blue:#0369a1;
+    --blue-soft:#e7f2fa;
+    --amber:#b45309;
+    --amber-soft:#fdf1df;
+    --violet:#6d28d9;
+    --violet-soft:#f0eafd;
+    --green:#047857;
+    --green-soft:#e8f6f0;
+    --red:#b91c1c;
+    --red-soft:#fdeeee;
+    --stage-w:1280px;
+    --stage-h:720px;
+    --font:"Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"SFMono-Regular","Cascadia Code","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    overflow:hidden;
+    color:var(--ink);
+    background:
+      radial-gradient(800px 500px at 15% 0%,rgba(15,118,110,.08),transparent 60%),
+      radial-gradient(800px 500px at 90% 100%,rgba(3,105,161,.08),transparent 60%),
+      #dde5ed;
+    font-family:var(--font);
+    -webkit-font-smoothing:antialiased;
+  }
+  #viewport{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:14px}
+  #stage{width:var(--stage-w);height:var(--stage-h);position:relative;transform-origin:center center;flex:none}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden;
+    padding:36px 54px 43px;border-radius:16px;background:#fff;
+    box-shadow:0 22px 64px rgba(12,31,47,.18);
+    --sec:var(--brand);--sec-soft:var(--brand-soft);
+  }
+  .slide.active{display:flex;animation:rise .42s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){.slide.active{animation:none}}
+  .slide::before{
+    content:"";position:absolute;left:0;right:0;top:0;height:4px;z-index:0;
+    background:linear-gradient(90deg,var(--sec),transparent 74%);
+  }
+  .slide::after{
+    content:"";position:absolute;right:-120px;top:-140px;width:360px;height:360px;border-radius:50%;
+    background:radial-gradient(circle,var(--sec-soft) 0%,transparent 68%);opacity:.9;pointer-events:none;z-index:0;
+  }
+  .slide>*{position:relative;z-index:1}
+  .theme-product{--sec:var(--brand);--sec-soft:var(--brand-soft)}
+  .theme-arch{--sec:var(--blue);--sec-soft:var(--blue-soft)}
+  .theme-ops{--sec:var(--amber);--sec-soft:var(--amber-soft)}
+  .theme-road{--sec:var(--violet);--sec-soft:var(--violet-soft)}
+
+  .kicker{display:flex;align-items:center;gap:9px;font-size:10.5px;font-weight:800;letter-spacing:.17em;color:var(--sec);text-transform:uppercase}
+  .kicker .num{display:inline-flex;align-items:center;justify-content:center;min-width:27px;height:20px;padding:0 6px;border:1px solid var(--sec);border-radius:6px;background:var(--sec-soft);font-size:9.5px;letter-spacing:.04em}
+  h2{margin:7px 0 4px;font-size:31px;line-height:1.22;letter-spacing:-.018em;font-weight:850}
+  .sub{margin:0 0 15px;max-width:1080px;color:var(--muted);font-size:13.8px;line-height:1.56}
+  .body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-start;padding-top:2px}
+  .footer{position:absolute;left:54px;right:54px;bottom:14px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding-top:8px;color:var(--faint);font-size:10.4px;letter-spacing:.02em;z-index:2}
+  .footer b{color:var(--sec)}
+  .footer .pg{font-variant-numeric:tabular-nums}
+
+  .card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:13px 15px;box-shadow:0 1px 2px rgba(16,32,46,.035)}
+  .card h3{margin:0 0 6px;font-size:14.2px;font-weight:800;line-height:1.3}
+  .card p{margin:0;color:var(--muted);font-size:12.2px;line-height:1.55}
+  .ic{width:30px;height:30px;border-radius:9px;background:var(--sec-soft);color:var(--sec);display:inline-flex;align-items:center;justify-content:center;flex:none}
+  .ic svg{width:16px;height:16px}
+  .ic.sm{width:24px;height:24px;border-radius:7px}
+  .ic.sm svg{width:13px;height:13px}
+
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+
+  ul.clean{list-style:none;margin:0;padding:0}
+  ul.clean li{position:relative;padding:3.5px 0 3.5px 15px;color:var(--muted);font-size:12.2px;line-height:1.52}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:10px;width:5px;height:5px;border-radius:2px;background:var(--sec);opacity:.72}
+  ul.clean li b{color:var(--ink)}
+  ul.checks{list-style:none;margin:0;padding:0}
+  ul.checks li{position:relative;padding:5px 0 5px 22px;color:var(--muted);font-size:12.2px;line-height:1.5}
+  ul.checks li::before{content:"✓";position:absolute;left:0;top:4px;width:15px;height:15px;border-radius:50%;background:var(--green-soft);color:var(--green);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center}
+  ul.warns{list-style:none;margin:0;padding:0}
+  ul.warns li{position:relative;padding:5px 0 5px 22px;color:var(--muted);font-size:12.2px;line-height:1.5}
+  ul.warns li::before{content:"!";position:absolute;left:0;top:5px;width:15px;height:15px;border-radius:50%;background:var(--amber-soft);color:var(--amber);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center}
+
+  .chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid var(--line);border-radius:999px;background:#f8fafc;color:var(--muted);font-size:10.8px;white-space:nowrap}
+  .chip.strong{background:var(--sec-soft);border-color:transparent;color:var(--sec);font-weight:750}
+  .chip.green{background:var(--green-soft);border-color:transparent;color:var(--green);font-weight:750}
+  .chip.amber{background:var(--amber-soft);border-color:transparent;color:var(--amber);font-weight:750}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+
+  code{font-family:var(--mono);font-size:.9em;background:#f1f5f9;border:1px solid #e4ebf2;border-radius:5px;padding:1px 5px;color:#334155;white-space:nowrap}
+  .note{display:flex;align-items:flex-start;gap:9px;margin-top:12px;padding:9px 12px;border:1px solid var(--line);border-left:3px solid var(--sec);border-radius:0 9px 9px 0;background:#fbfcfe;color:var(--muted);font-size:11.4px;line-height:1.55}
+  .note b{color:var(--ink)}
+  .phint{margin:0 0 5px;color:var(--faint);font-size:9.8px}
+  .mini-card{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:#fbfcfe;min-width:0}
+  .mini-card b{display:block;font-size:11.3px;line-height:1.3;margin-bottom:2px}
+  .mini-card span{display:block;color:var(--muted);font-size:10.1px;line-height:1.42}
+  .mini-flow{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:9px;border-top:1px dashed #e3eaf1;color:#a9b6c2;font-size:10px}
+  .mini-flow .chip{font-size:10px;padding:2px 8px}
+  .takeaway{display:flex;align-items:flex-start;gap:9px;margin-top:auto;padding:9px 12px;border:1px solid var(--line);border-left:3px solid var(--sec);border-radius:0 8px 8px 0;background:#fbfcfe;color:var(--muted);font-size:11px;line-height:1.5}
+  .takeaway .tk{flex:none;color:var(--sec);font-size:8.8px;font-weight:850;letter-spacing:.12em;text-transform:uppercase;padding-top:1px}
+  .takeaway b{color:var(--ink)}
+
+  /* ---------- cover ---------- */
+  .cover{
+    padding:0;color:#eaf4f7;
+    background:
+      radial-gradient(920px 560px at 86% 4%,rgba(20,184,166,.26),transparent 60%),
+      radial-gradient(720px 520px at 2% 108%,rgba(245,158,11,.14),transparent 62%),
+      linear-gradient(146deg,#071722 0%,#0a1f2e 54%,#0c2b3a 100%);
+  }
+  .cover::before{background:linear-gradient(90deg,#2dd4bf,#f59e0b 42%,transparent 90%);height:6px}
+  .cover::after{
+    right:0;top:0;width:100%;height:100%;border-radius:0;opacity:1;
+    background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(circle at 72% 42%,#000 12%,transparent 72%);
+    mask-image:radial-gradient(circle at 72% 42%,#000 12%,transparent 72%);
+  }
+  .cover-inner{position:relative;z-index:2;display:grid;grid-template-columns:1.08fr .92fr;gap:28px;height:100%;padding:52px 60px 66px}
+  .cover-left{display:flex;flex-direction:column;min-width:0}
+  .brandline{display:flex;align-items:center;gap:12px;color:#8ee7dc;font-size:11px;font-weight:800;letter-spacing:.3em;text-transform:uppercase}
+  .brandline .mark{width:30px;height:30px;color:#5eead4}
+  .brandline .sep{width:26px;height:1px;background:rgba(94,234,212,.4)}
+  .cover h1{margin:28px 0 8px;font-size:66px;line-height:1.02;letter-spacing:-.03em;font-weight:900;color:#fff}
+  .cover h1 em{font-style:normal;background:linear-gradient(92deg,#fff 18%,#8ee7dc 70%,#5eead4 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .cover .tagline{margin:0;color:#c3d3dc;font-size:20px;line-height:1.48;font-weight:600}
+  .cover .lede{margin:12px 0 0;max-width:590px;color:#8fa8b6;font-size:13.4px;line-height:1.65}
+  .cover-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-top:auto;padding-top:26px;max-width:620px}
+  .cstat{border:1px solid rgba(255,255,255,.13);border-radius:11px;padding:9px 11px;background:rgba(255,255,255,.055);backdrop-filter:blur(6px)}
+  .cstat b{display:block;font-size:22px;line-height:1.1;font-weight:850;color:#8ee7dc;font-variant-numeric:tabular-nums}
+  .cstat span{display:block;margin-top:3px;color:#93aab8;font-size:10.4px;line-height:1.3}
+  .cover-meta{display:flex;align-items:center;gap:18px;margin-top:18px;color:#7f99a8;font-size:11px}
+  .cover-meta b{color:#d7e5ec;font-weight:650}
+  .cover .footer{left:60px;right:60px;bottom:16px;border-top-color:rgba(255,255,255,.13);color:#75909f}
+  .cover .footer b{color:#5eead4}
+
+  .orbit-wrap{display:flex;align-items:center;justify-content:center;min-width:0}
+  .orbit-grid{
+    position:relative;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
+    gap:10px;width:100%;max-width:470px;aspect-ratio:1;align-items:center;justify-items:stretch;
+  }
+  .orbit-grid::before,.orbit-grid::after{content:"";position:absolute;left:50%;top:50%;border-radius:50%;border:1px solid rgba(94,234,212,.16);transform:translate(-50%,-50%);pointer-events:none}
+  .orbit-grid::before{width:66%;height:66%}
+  .orbit-grid::after{width:96%;height:96%;border-color:rgba(255,255,255,.07)}
+  .sat{
+    display:flex;align-items:center;gap:7px;min-width:0;border:1px solid rgba(255,255,255,.12);
+    border-radius:10px;padding:9px 10px;background:rgba(255,255,255,.05);backdrop-filter:blur(7px);
+    color:#c9d9e1;font-size:10.7px;font-weight:650;line-height:1.2;min-height:42px;
+  }
+  .sat .dot{width:6px;height:6px;border-radius:50%;background:#5eead4;flex:none;box-shadow:0 0 0 3px rgba(94,234,212,.1)}
+  .sat:nth-child(2n) .dot{background:#fbbf24;box-shadow:0 0 0 3px rgba(251,191,36,.1)}
+  .sat:nth-child(3n) .dot{background:#93c5fd;box-shadow:0 0 0 3px rgba(147,197,253,.1)}
+  .core{
+    grid-area:2/2;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+    border:1px solid rgba(94,234,212,.32);border-radius:20px;
+    background:radial-gradient(circle at 50% 25%,rgba(45,212,191,.2),rgba(8,27,39,.88) 70%);
+    box-shadow:0 0 50px rgba(45,212,191,.12) inset,0 16px 40px rgba(0,0,0,.22);
+    color:#fff;
+  }
+  .core .core-mark{width:34px;height:34px;color:#5eead4;margin-bottom:7px}
+  .core b{font-size:12.4px;font-weight:800;letter-spacing:.02em}
+  .core span{margin-top:3px;color:#8fa8b6;font-size:9.4px;letter-spacing:.12em;text-transform:uppercase}
+  .p1{grid-area:1/1}.p2{grid-area:1/2}.p3{grid-area:1/3}
+  .p4{grid-area:2/1}.p5{grid-area:2/3}
+  .p6{grid-area:3/1}.p7{grid-area:3/2}.p8{grid-area:3/3}
+
+  /* ---------- positioning ---------- */
+  .positioning{display:flex;flex-direction:column;gap:14px;height:100%}
+  .statement{border-left:3px solid var(--sec);padding:2px 0 2px 18px}
+  .statement p{margin:0;max-width:1020px;font-size:19.5px;line-height:1.5;font-weight:750;letter-spacing:-.01em}
+  .statement p em{font-style:normal;color:var(--sec)}
+  .boundary-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .boundary{border:1px dashed #cfdae4;border-radius:10px;padding:9px 12px;background:#fbfcfe}
+  .boundary b{display:block;font-size:11.6px;line-height:1.3}
+  .boundary span{display:block;margin-top:3px;color:var(--muted);font-size:10.6px;line-height:1.4}
+  .persona{display:flex;flex-direction:column;gap:8px}
+  .persona .top{display:flex;align-items:center;gap:9px}
+  .persona .top h3{margin:0;font-size:14px}
+  .persona .label{color:var(--sec);font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+  .persona p{font-size:12.1px;line-height:1.5}
+  .persona .out{margin-top:4px;color:var(--faint);font-size:10.3px;line-height:1.45}
+  .persona .chips{margin-top:7px}
+
+  /* ---------- capability grid ---------- */
+  .cap-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);gap:12px}
+  .cap-card{display:flex;flex-direction:column;gap:7px;border:1px solid var(--line);border-radius:13px;padding:12px 13px;background:linear-gradient(180deg,#fff,#fbfcfe);min-height:0}
+  .cap-card .hd{display:flex;align-items:center;gap:9px}
+  .cap-card .hd h3{margin:0;font-size:13.6px;line-height:1.25}
+  .cap-card p{margin:0;color:var(--muted);font-size:11.3px;line-height:1.5}
+  .cap-card .cap-detail{border-top:1px dashed #e8eef4;padding-top:6px;color:var(--faint);font-size:10.2px;line-height:1.45}
+  .cap-card .chips{margin-top:auto}
+  .cap-card .chip{font-size:9.8px;padding:2px 7px}
+  /* ---------- generic flow ---------- */
+  .flow{display:flex;flex-direction:column}
+  .flow-step{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:8px 11px;background:#fff}
+  .flow-step .n{width:20px;height:20px;border-radius:50%;background:var(--sec-soft);color:var(--sec);font-size:9.6px;font-weight:850;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .flow-step b{display:block;font-size:11.8px;line-height:1.35}
+  .flow-step span{display:block;margin-top:2px;color:var(--muted);font-size:10.6px;line-height:1.4}
+  .flow-arrow{height:13px;display:flex;align-items:center;justify-content:center;color:#a9b6c2;font-size:11px}
+
+  .facts{display:flex;flex-direction:column}
+  .fact{display:flex;gap:9px;padding:7px 0;border-bottom:1px dashed #e5ebf1}
+  .fact:last-child{border-bottom:none}
+  .fact .ic{width:24px;height:24px;border-radius:7px}
+  .fact .ic svg{width:13px;height:13px}
+  .fact b{display:block;font-size:11.6px;line-height:1.35}
+  .fact span{display:block;margin-top:1px;color:var(--muted);font-size:10.6px;line-height:1.4}
+
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .panel{border:1px solid var(--line);border-radius:13px;padding:12px 14px;background:#fff;min-width:0}
+  .panel .ph{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .panel .ph h3{margin:0;font-size:13.4px}
+  .panel .ph .tag{margin-left:auto;color:var(--faint);font-size:9.6px;letter-spacing:.08em;text-transform:uppercase}
+  .panel p{color:var(--muted);font-size:11.5px;line-height:1.5;margin:0 0 6px}
+
+  /* ---------- expert / team ---------- */
+  .expert-top{display:grid;grid-template-columns:.92fr 1.08fr;gap:14px}
+  .expert-card{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fff}
+  .expert-card h3{margin:0 0 6px;font-size:14px}
+  .expert-card p{margin:0 0 7px;color:var(--muted);font-size:11.5px;line-height:1.5}
+  .pipe{display:flex;align-items:stretch;margin-top:11px}
+  .pipe-node{flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:8px 9px;background:#fff}
+  .pipe-node .pn{color:var(--sec);font-size:8.8px;font-weight:850;letter-spacing:.1em;text-transform:uppercase}
+  .pipe-node h4{margin:2px 0 3px;font-size:11.9px;line-height:1.3}
+  .pipe-node p{margin:0;color:var(--muted);font-size:10.1px;line-height:1.4}
+  .pipe-arrow{display:flex;align-items:center;padding:0 4px;color:#a9b6c2;font-size:12px;flex:none}
+  .status-strip{display:flex;align-items:center;gap:8px;margin-top:11px;padding:8px 11px;border:1px solid var(--line);border-radius:10px;background:#fbfcfe;color:var(--muted);font-size:10.8px;line-height:1.45}
+  .status-strip b{color:var(--ink)}
+
+  /* ---------- miniapp ---------- */
+  .app-layout{display:grid;grid-template-columns:1.02fr .98fr;gap:16px}
+  .stack-flow{display:flex;flex-direction:column}
+  .stack-node{border:1px solid var(--line);border-radius:10px;padding:8px 11px;background:#fff}
+  .stack-node.accent{border-color:var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft))}
+  .stack-node b{display:block;font-size:11.8px;line-height:1.3}
+  .stack-node span{display:block;margin-top:2px;color:var(--muted);font-size:10.4px;line-height:1.4}
+  .stack-meta{display:flex;gap:7px;flex-wrap:wrap;margin-top:4px}
+  .stack-arrow{display:flex;justify-content:center;align-items:center;gap:6px;height:17px;color:#a9b6c2;font-size:10px}
+  .app-features{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .app-feature{border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fff}
+  .app-feature b{display:block;font-size:11.4px;margin-bottom:2px}
+  .app-feature span{display:block;color:var(--muted);font-size:10.2px;line-height:1.42}
+  .app-feature ul.clean li{font-size:9.9px;padding:2px 0 2px 12px}
+  .app-feature ul.clean li::before{top:7px;width:4px;height:4px}
+  .stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
+  .stat{border:1px solid var(--line);border-radius:9px;padding:7px 9px;background:var(--sec-soft)}
+  .stat b{display:block;color:var(--sec);font-size:15.5px;line-height:1.1;font-weight:850;font-variant-numeric:tabular-nums}
+  .stat span{display:block;margin-top:2px;color:var(--muted);font-size:9.6px;line-height:1.3}
+
+  /* ---------- channels ---------- */
+  .channel-layout{display:grid;grid-template-columns:.98fr 1.02fr;gap:16px}
+  .channel-groups{display:flex;flex-direction:column;gap:12px}
+  .channel-group .gl{font-size:9.6px;font-weight:850;letter-spacing:.13em;color:var(--faint);text-transform:uppercase;margin-bottom:6px}
+  .channel-group .chips{gap:6px}
+  .channel-group .chip{font-size:10.4px;padding:3px 8px}
+  .session-card{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fbfcfe}
+  .session-tier{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+  .session-arrow{text-align:center;color:#a9b6c2;font-size:11px;height:15px;line-height:15px}
+  .session-box{border:1px solid var(--line);border-radius:9px;background:#fff;padding:7px 10px;font-size:10.8px;font-weight:750}
+  .session-box.strong{border-color:var(--sec);background:var(--sec-soft);color:var(--sec)}
+  .session-card ul.clean li{font-size:11.2px}
+  .session-card code{font-size:.88em}
+
+  /* ---------- knowledge ---------- */
+  .know-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px}
+  .know-card{border:1px solid var(--line);border-radius:13px;padding:12px 14px;background:#fff;display:flex;flex-direction:column;min-height:0}
+  .know-card .hd{display:flex;align-items:center;gap:9px;margin-bottom:5px}
+  .know-card .hd h3{margin:0;font-size:13.4px}
+  .know-card p{margin:0 0 4px;color:var(--muted);font-size:11.2px;line-height:1.5}
+  .know-card ul.clean li{font-size:10.3px;padding:2.5px 0 2.5px 13px}
+  .know-card ul.clean li::before{top:8px;width:4px;height:4px}
+  .know-card .chips{margin-top:auto}
+
+  /* ---------- connectors ---------- */
+  .conn-layout{display:grid;grid-template-columns:1.02fr .98fr;gap:16px}
+  .conn-flow{display:flex;flex-direction:column}
+  .conn-node{border:1px solid var(--line);border-radius:10px;padding:8px 11px;background:#fff}
+  .conn-node b{display:block;font-size:11.6px}
+  .conn-node span{display:block;margin-top:2px;color:var(--muted);font-size:10.4px;line-height:1.4}
+  .conn-node.hot{border-color:var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft))}
+  .conn-arrow{display:flex;align-items:center;gap:7px;height:17px;color:#a9b6c2;font-size:9.8px;padding-left:10px}
+
+  /* ---------- automation ---------- */
+  .auto-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .auto-card{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fff}
+  .auto-card .hd{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+  .auto-card .hd h3{margin:0;font-size:13.4px}
+  .auto-card .hd .tag{margin-left:auto;font-size:9.4px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase}
+  .planes{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:11px}
+  .plane{border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fbfcfe}
+  .plane b{display:block;font-size:10.2px;line-height:1.3}
+  .plane span{display:block;margin-top:2px;color:var(--muted);font-size:9.3px;line-height:1.35}
+
+  /* ---------- layers ---------- */
+  .arch-layout{display:grid;grid-template-columns:1.12fr .88fr;gap:16px}
+  .layers{display:flex;flex-direction:column;justify-content:center}
+  .layer{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:7px 10px;background:#fff}
+  .layer .ll{width:84px;flex:none;color:var(--sec);font-size:8.8px;font-weight:850;letter-spacing:.09em;text-transform:uppercase}
+  .layer .lc{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+  .layer .lc .chip{font-size:9.4px;padding:2px 6px;background:#f8fafc}
+  .layer-arrow{height:13px;display:flex;align-items:center;justify-content:center;color:#a9b6c2;font-size:10px}
+  .constraints{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fbfcfe}
+  .constraints h3{margin:0 0 8px;font-size:13.2px}
+  .constraint{display:flex;gap:9px;padding:6px 0;border-bottom:1px dashed #e3eaf1}
+  .constraint:last-child{border-bottom:none}
+  .constraint .n{width:18px;height:18px;border-radius:50%;background:var(--sec);color:#fff;font-size:9px;font-weight:850;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .constraint b{display:block;font-size:11.2px}
+  .constraint span{display:block;color:var(--muted);font-size:10.2px;line-height:1.4}
+
+  /* ---------- boot ---------- */
+  .boot-layout{display:grid;grid-template-columns:1.08fr .92fr;gap:16px}
+  .boot{display:flex;flex-direction:column;gap:5px}
+  .boot-step{display:flex;gap:9px;align-items:flex-start}
+  .boot-step .n{width:19px;height:19px;border-radius:50%;background:var(--sec-soft);color:var(--sec);font-size:9px;font-weight:850;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .boot-step b{display:block;font-size:11.4px;line-height:1.35}
+  .boot-step span{display:block;margin-top:1px;color:var(--muted);font-size:10.2px;line-height:1.38}
+  .runtime-card{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fbfcfe}
+  .runtime-card h3{margin:0 0 7px;font-size:13px}
+  .runtime-card .kv{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed #e3eaf1;font-size:10.4px}
+  .runtime-card .kv:last-child{border-bottom:none}
+  .runtime-card .kv span{color:var(--muted)}
+  .runtime-card .kv b{font-weight:700;text-align:right}
+
+  /* ---------- journey ---------- */
+  .journey{display:flex;align-items:stretch}
+  .jstep{flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fff}
+  .jstep .jn{width:18px;height:18px;border-radius:50%;background:var(--sec);color:#fff;font-size:9px;font-weight:850;display:flex;align-items:center;justify-content:center;margin-bottom:4px}
+  .jstep b{display:block;font-size:11.2px;line-height:1.3}
+  .jstep span{display:block;margin-top:2px;color:var(--muted);font-size:9.9px;line-height:1.4}
+  .jarrow{display:flex;align-items:center;padding:0 4px;color:#a9b6c2;font-size:12px;flex:none}
+  .lanes{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:11px}
+  .lane{border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:#fbfcfe}
+  .lane b{display:block;font-size:10.8px}
+  .lane span{display:block;margin-top:2px;color:var(--muted);font-size:9.9px;line-height:1.4}
+
+  /* ---------- data ---------- */
+  .data-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .data-card{border:1px solid var(--line);border-radius:13px;padding:13px 14px;background:#fff;display:flex;flex-direction:column;min-height:0}
+  .data-card .hd{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .data-card .hd h3{margin:0;font-size:13.2px}
+  .data-card .hd .tag{margin-left:auto;font-size:9.2px;color:var(--faint);letter-spacing:.07em;text-transform:uppercase}
+  .data-card p{margin:0 0 5px;color:var(--muted);font-size:10.9px;line-height:1.5}
+  .data-card code{font-size:9.6px;word-break:break-all;white-space:normal}
+  .data-card ul.clean li{font-size:10.2px;padding:2.5px 0 2.5px 13px}
+  .data-card ul.clean li::before{top:8px;width:4px;height:4px}
+  .data-card .chips{margin-top:auto}
+
+  /* ---------- module map ---------- */
+  .module-layout{display:grid;grid-template-columns:1.04fr .96fr;gap:16px}
+  .dep-box{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fbfcfe}
+  .dep-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:10.8px}
+  .dep-row .node{border:1px solid var(--line);border-radius:7px;padding:4px 8px;background:#fff;font-weight:700;font-size:10.5px}
+  .dep-row .node.hot{border-color:var(--sec);background:var(--sec-soft);color:var(--sec)}
+  .dep-arrow{color:#a9b6c2;font-size:11px}
+  .bans{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#fff}
+  .bans h3{margin:0 0 7px;font-size:13px}
+  .ban{display:flex;gap:7px;align-items:flex-start;padding:4px 0;color:var(--muted);font-size:10.5px;line-height:1.42}
+  .ban .x{width:14px;height:14px;border-radius:50%;background:var(--red-soft);color:var(--red);font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .module-table{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:11px}
+  .module-cell{border:1px solid var(--line);border-radius:9px;padding:7px 9px;background:#fff}
+  .module-cell b{display:block;font-size:10.4px;font-family:var(--mono)}
+  .module-cell span{display:block;margin-top:2px;color:var(--muted);font-size:9.5px;line-height:1.35}
+
+  /* ---------- security ---------- */
+  .sec-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:9px}
+  .sec-card{border:1px solid var(--line);border-radius:11px;padding:11px 11px;background:#fff;min-width:0}
+  .sec-card .ic{width:26px;height:26px;border-radius:8px;margin-bottom:7px}
+  .sec-card .ic svg{width:14px;height:14px}
+  .sec-card h3{margin:0 0 4px;font-size:11.8px}
+  .sec-card p{margin:0;color:var(--muted);font-size:9.9px;line-height:1.45}
+  .sec-card ul.clean li{font-size:9.9px;padding:2px 0 2px 12px}
+  .sec-card ul.clean li::before{top:8px;width:4px;height:4px}
+
+  /* ---------- ops ---------- */
+  .ops-layout{display:grid;grid-template-columns:1.02fr .98fr;gap:16px}
+  pre.code{margin:0;padding:12px 14px;border-radius:10px;background:#0f2230;color:#d7e5ee;font-family:var(--mono);font-size:11.3px;line-height:1.7;overflow:hidden;border:1px solid #173447}
+  pre.code .c{color:#7f9aab}
+  pre.code .k{color:#5eead4}
+  .tree{margin:0;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:#fbfcfe;color:#334155;font-family:var(--mono);font-size:10.7px;line-height:1.65;white-space:pre}
+  .ops-list{display:flex;flex-direction:column;gap:5px;margin-top:9px}
+  .ops-item{display:flex;gap:7px;align-items:flex-start;color:var(--muted);font-size:10.6px;line-height:1.4}
+  .ops-item .ok{width:14px;height:14px;border-radius:50%;background:var(--green-soft);color:var(--green);font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .ops-item b{color:var(--ink)}
+
+  /* ---------- boundary ---------- */
+  .promise{display:grid;grid-template-columns:1fr 1fr;gap:13px}
+  .promise-card{border:1px solid var(--line);border-radius:13px;padding:12px 15px;background:#fff}
+  .promise-card.good{border-top:3px solid var(--green)}
+  .promise-card.careful{border-top:3px solid var(--amber)}
+  .promise-card h3{margin:0 0 4px;font-size:13.2px}
+  .promise-card .hint{margin:0 0 5px;color:var(--faint);font-size:9.8px}
+  .roadmap{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .roadmap .chip{background:#f8fafc;font-size:9.8px}
+  .quote{margin-top:10px;padding:9px 13px;border-radius:9px;background:var(--violet-soft);color:#4c1d95;font-size:11.2px;font-weight:700;text-align:center}
+
+  /* ---------- closing ---------- */
+  .closing{
+    padding:0;color:#eaf4f7;
+    background:
+      radial-gradient(800px 560px at 78% 16%,rgba(45,212,191,.22),transparent 60%),
+      radial-gradient(600px 460px at 8% 108%,rgba(245,158,11,.12),transparent 62%),
+      linear-gradient(145deg,#071722 0%,#0a2030 58%,#0d2b3b 100%);
+  }
+  .closing::before{background:linear-gradient(90deg,#2dd4bf,#f59e0b 46%,transparent 92%);height:6px}
+  .closing::after{
+    right:0;top:0;width:100%;height:100%;opacity:1;border-radius:0;
+    background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(circle at 74% 40%,#000 10%,transparent 72%);
+    mask-image:radial-gradient(circle at 74% 40%,#000 10%,transparent 72%);
+  }
+  .closing-inner{position:relative;z-index:2;display:grid;grid-template-columns:1.08fr .92fr;gap:30px;height:100%;padding:52px 60px 66px}
+  .closing-left{display:flex;flex-direction:column;height:100%;min-width:0}
+  .closing .kicker{color:#5eead4}
+  .closing h2{margin:18px 0 8px;font-size:40px;line-height:1.2;color:#fff;letter-spacing:-.02em}
+  .closing .sub{color:#a9c2cf;font-size:14.5px;max-width:610px}
+  .closing pre.code{margin-top:12px;max-width:560px;background:rgba(4,18,28,.72);border-color:rgba(94,234,212,.14)}
+  .closing-links{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+  .closing-links .chip{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12);color:#b7ccd7;font-size:9.8px}
+  .closing .footer{left:60px;right:60px;bottom:16px;border-top-color:rgba(255,255,255,.13);color:#75909f}
+  .closing .footer b{color:#5eead4}
+  .closing-mark{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0}
+  .big-mark{width:170px;height:170px;color:#5eead4;opacity:.92;filter:drop-shadow(0 0 38px rgba(45,212,191,.24))}
+  .closing-mark .qa{margin-top:18px;font-size:46px;font-weight:900;letter-spacing:.06em;color:#fff}
+  .closing-mark .qa-sub{margin-top:4px;color:#8fa8b6;font-size:11px;letter-spacing:.22em;text-transform:uppercase}
+  .closing-values{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:auto;padding-top:26px;max-width:620px}
+  .closing-value{border:1px solid rgba(255,255,255,.11);border-radius:9px;padding:8px 10px;background:rgba(255,255,255,.045)}
+  .closing-value b{display:block;color:#d7e5ec;font-size:11.4px}
+  .closing-value span{display:block;margin-top:2px;color:#7f99a8;font-size:9.6px}
+
+  /* ---------- hud ---------- */
+  .progress{position:fixed;left:0;right:0;top:0;height:3px;background:rgba(18,33,47,.08);z-index:50}
+  .progress #bar{height:100%;width:0;background:linear-gradient(90deg,#0f766e,#2dd4bf);transition:width .25s ease}
+  .hint{position:fixed;left:50%;bottom:7px;transform:translateX(-50%);color:rgba(50,70,86,.62);font-size:10px;letter-spacing:.04em;z-index:40;pointer-events:none;white-space:nowrap}
+  .hud{position:fixed;right:16px;bottom:14px;display:flex;align-items:center;gap:5px;z-index:60;background:rgba(255,255,255,.86);border:1px solid rgba(190,205,218,.8);border-radius:10px;padding:4px;box-shadow:0 4px 16px rgba(16,32,46,.1);backdrop-filter:blur(8px)}
+  .hud button{border:0;background:transparent;color:#4b5f70;width:26px;height:24px;border-radius:6px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .hud button:hover{background:#eef3f7;color:#0f766e}
+  .hud #pageno{min-width:44px;text-align:center;color:#5d6b7a;font-size:10px;font-variant-numeric:tabular-nums}
+
+  @media print{
+    @page{size:1280px 720px;margin:0}
+    html,body{overflow:visible;background:#fff}
+    #viewport{position:static;display:block;padding:0}
+    #stage{width:1280px;height:auto;transform:none!important}
+    .slide{position:relative;inset:auto;display:flex!important;width:1280px;height:720px;border-radius:0;box-shadow:none;page-break-after:always;break-after:page}
+    .slide::before,.slide::after{display:none}
+    .progress,.hint,.hud{display:none!important}
+  }
+</style>
+</head>
+<body>
+
+<svg aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8 9h8M8 12.2h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.8 19c.4-3 2.5-4.8 5.2-4.8s4.8 1.8 5.2 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="17" cy="9.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16.4 14.5c2.1.1 3.6 1.6 3.9 3.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 8.5h17" stroke="currentColor" stroke-width="1.6"/><circle cx="6.5" cy="6.5" r=".8" fill="currentColor"/><circle cx="9" cy="6.5" r=".8" fill="currentColor"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M8.5 3.5v5M15.5 3.5v5M6 8.5h12v3.2a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 17.7v2.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5c3.2-1 5.8-.4 8 1.2 2.2-1.6 4.8-2.2 8-1.2v13c-3.2-1-5.8-.4-8 1.2-2.2-1.6-4.8-2.2-8-1.2v-13Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 6.7v13" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2.8 5.5 13h5.3l-1.3 8.2L18 10.6h-5.4L13 2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.2 19 6v5.4c0 4.2-2.8 7.3-7 9.4-4.2-2.1-7-5.2-7-9.4V6l7-2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.8 12.1 2.1 2.1 4.4-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="10" y="10" width="4" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 3.5v3M15 3.5v3M9 17.5v3M15 17.5v3M3.5 9h3M3.5 15h3M17.5 9h3M17.5 15h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.7" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 6v12c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7V6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 12c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-flow" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="18" cy="6" r="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="18" r="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8.2 6h7.6M7 8l4 7.8M17 8l-4 7.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M11.4 12H21l-2 2M17 14l-2 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.8 12h16.4M12 3.5c2.3 2.3 3.4 5.1 3.4 8.5s-1.1 6.2-3.4 8.5c-2.3-2.3-3.4-5.1-3.4-8.5S9.7 5.8 12 3.5Z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3.5 8.5 4.6L12 12.7 3.5 8.1 12 3.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m3.8 12.2 8.2 4.4 8.2-4.4M3.8 16.2l8.2 4.4 8.2-4.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7 9 3 3-3 3M12.5 15h4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.6 4.8 2.7 6.9 7.5 7.5-4.8.6-6.9 2.7-7.5 7.5-.6-4.8-2.7-6.9-7.5-7.5 4.8-.6 6.9-2.7 7.5-7.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M18.5 15.5c.2 1.8 1 2.6 2.8 2.8-1.8.2-2.6 1-2.8 2.8-.2-1.8-1-2.6-2.8-2.8 1.8-.2 2.6-1 2.8-2.8Z" fill="currentColor" opacity=".8"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="15" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7v5.4l3.5 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.5 14.5 14.5 9.5M8 17.5l-1.2 1.2a3.6 3.6 0 0 1-5.1-5.1l3.2-3.2a3.6 3.6 0 0 1 5.1 0M16 6.5l1.2-1.2a3.6 3.6 0 0 1 5.1 5.1l-3.2 3.2a3.6 3.6 0 0 1-5.1 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-hub" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="4" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="20" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="4" cy="12" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="20" cy="12" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 5.8v3.8M12 14.4v3.8M5.8 12h3.8M14.4 12h3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7.8 12.2 2.8 2.8 5.6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-octopus" viewBox="0 0 64 64"><circle cx="32" cy="25" r="12" fill="none" stroke="currentColor" stroke-width="4.5"/><path d="M20 34c-6 4-8 10-6.5 16.5M28 38c-3 6-3 12 0 18M36 38c3 6 3 12 0 18M44 34c6 4 8 10 6.5 16.5" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/><circle cx="27" cy="24" r="2.2" fill="currentColor"/><circle cx="37" cy="24" r="2.2" fill="currentColor"/></symbol>
+</svg>
+
+<div class="progress"><div id="bar"></div></div>
+
+<div id="viewport"><div id="stage">
+
+  <!-- 01 cover -->
+  <section class="slide cover active" data-title="OctopOS">
+    <div class="cover-inner">
+      <div class="cover-left">
+        <div class="brandline">
+          <svg class="mark"><use href="#i-octopus"/></svg>
+          <span>OctopOS</span><span class="sep"></span><span>Product &amp; Architecture</span>
+        </div>
+        <h1><em>OctopOS</em></h1>
+        <p class="tagline">自托管 · 多用户 · 多 Agent<br>的 AI 工作平台</p>
+        <p class="lede">一个 Python 进程，统一 Web 控制台、CLI、IM 通道、定时任务与 Agent 运行时。除你配置的 LLM 供应商外，不依赖外部队列或必需服务。</p>
+        <div class="cover-stats">
+          <div class="cstat"><b>10</b><span>IM 通道</span></div>
+          <div class="cstat"><b>31</b><span>内置连接器</span></div>
+          <div class="cstat"><b>24</b><span>专家模板</span></div>
+          <div class="cstat"><b>31</b><span>MiniApp 工具</span></div>
+        </div>
+        <div class="cover-meta"><span><b>2026.11</b> · 功能与架构导览</span><span><b>MIT</b> License</span><span><b>包名 / CLI</b> · octop</span><span>单进程 · 数据留在本机</span></div>
+      </div>
+      <div class="orbit-wrap">
+        <div class="orbit-grid">
+          <div class="sat p1"><span class="dot"></span>AgentManager</div>
+          <div class="sat p2"><span class="dot"></span>Gateway</div>
+          <div class="sat p3"><span class="dot"></span>Cron</div>
+          <div class="sat p4"><span class="dot"></span>Events</div>
+          <div class="core"><svg class="core-mark"><use href="#i-octopus"/></svg><b>OctopServer</b><span>one process</span></div>
+          <div class="sat p5"><span class="dot"></span>MiniApps</div>
+          <div class="sat p6"><span class="dot"></span>Connectors</div>
+          <div class="sat p7"><span class="dot"></span>Knowledge</div>
+          <div class="sat p8"><span class="dot"></span>Users</div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span><b>OctopOS</b> · 功能与架构导览</span><span class="pg">01 / 19</span></div>
+  </section>
+
+  <!-- 02 positioning -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">01</span> Product / 定位</div>
+    <h2>不是另一个聊天机器人，而是可自托管的 AI 工作平台</h2>
+    <p class="sub">把「对话」升级为「可交付的工作」：Agent 有工作区、有工具、有记忆，产出能被人直接使用。</p>
+    <div class="body positioning">
+      <div class="statement">
+        <p>OctopOS 的目标不是让 AI 更会聊天，而是让 Agent <em>在你的服务器上完成工作</em>：查资料、写文件、跑流程、生成应用，并把结果交付给人。</p>
+      </div>
+      <div class="grid-3">
+        <div class="card persona">
+          <div class="top"><span class="ic" style="width:32px;height:32px"><svg><use href="#i-users"/></svg></span><div><div class="label">For individuals</div><h3>对个人</h3></div></div>
+          <p>一个记得你、能动手的长期助理。聊天、记忆、定时任务、IM 入口，都在自己的机器上。</p>
+          <div class="out">典型产出：日报、提醒、资料整理、自动化脚本。</div>
+          <div class="chips"><span class="chip">长期记忆</span><span class="chip">定时任务</span><span class="chip">IM 直达</span></div>
+        </div>
+        <div class="card persona">
+          <div class="top"><span class="ic" style="width:32px;height:32px"><svg><use href="#i-flow"/></svg></span><div><div class="label">For teams</div><h3>对团队</h3></div></div>
+          <p>多用户、多专家、可编排的数字同事。共享知识、工作台、审批和决策账本。</p>
+          <div class="out">典型产出：任务看板、评审记录、经营报表、客户回复。</div>
+          <div class="chips"><span class="chip">专家库</span><span class="chip">团队编排</span><span class="chip">审批</span></div>
+        </div>
+        <div class="card persona">
+          <div class="top"><span class="ic" style="width:32px;height:32px"><svg><use href="#i-shield"/></svg></span><div><div class="label">For business</div><h3>对企业</h3></div></div>
+          <p>可私有化、可接业务系统、可交付 MiniApp。数据不离开自己的节点，权限与审计留在内部。</p>
+          <div class="out">典型产出：业务台账、审批流、公开数据页、私有知识助手。</div>
+          <div class="chips"><span class="chip">私有化</span><span class="chip">OAuth / MCP</span><span class="chip">审计</span></div>
+        </div>
+      </div>
+      <div class="boundary-strip">
+        <div class="boundary"><b>单节点 AgentOS</b><span>每个团队 / 客户一个实例，部署与责任边界清晰</span></div>
+        <div class="boundary"><b>不是 SaaS 集群</b><span>不做多租户进程隔离，不引入外部队列</span></div>
+        <div class="boundary"><b>MiniApp 是投影层</b><span>承载人可用的界面，不是权威业务数据库</span></div>
+        <div class="boundary"><b>默认可信内网</b><span>强隔离用 Docker 沙箱 / 账号与网络边界</span></div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>OctopOS 卖的是一块<b>可交付的工作台</b>，而不是一个更聪明的聊天窗口。</span></div>
+    </div>
+    <div class="footer"><span><b>01</b> · 定位</span><span class="pg">02 / 19</span></div>
+  </section>
+
+  <!-- 03 capability map -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">02</span> Product / 能力地图</div>
+    <h2>八块能力，拼成一个完整的 AI 工作平台</h2>
+    <p class="sub">从对话入口到交付物，从个人助理到团队编排，从外部系统到自托管运维，都在同一套运行时里。</p>
+    <div class="body">
+      <div class="cap-grid">
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-chat"/></svg></span><h3>对话与 Agent</h3></div>
+          <p>多 provider、工具循环、流式回复、HITL 审批、steering 与执行轨迹。</p>
+          <div class="cap-detail">Web / CLI / IM 共享线程与工具；同一个 thread 可继续。</div>
+          <div class="chips"><span class="chip">30+ 模型预设</span><span class="chip">LangGraph</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-users"/></svg></span><h3>专家与团队</h3></div>
+          <p>24 个专家模板、人格与工作区；团队目标、任务、依赖、审批与决策账本。</p>
+          <div class="cap-detail">专家可发布、共享；团队目标可挂交付物。</div>
+          <div class="chips"><span class="chip">数字员工</span><span class="chip">bounded agentic</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-window"/></svg></span><h3>MiniApp 工作台</h3></div>
+          <p>带 schema 的数据表 + 单文件 HTML，沙箱运行、可发布、可嵌入桌面与对话。</p>
+          <div class="cap-detail">看板、桌面窗口、聊天侧栏、只读公开链接。</div>
+          <div class="chips"><span class="chip">零后端</span><span class="chip">31 个 app_* 工具</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-globe"/></svg></span><h3>全通道入口</h3></div>
+          <p>10 类 IM、Web、CLI、HTTP/WS、ACP、MCP，共享同一个 Agent 与会话模型。</p>
+          <div class="cap-detail">同一会话可从 Web 接管 IM，审批与未读同步。</div>
+          <div class="chips"><span class="chip">一个运行时</span><span class="chip">多入口</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-plug"/></svg></span><h3>连接器与 MCP</h3></div>
+          <p>31 个内置连接器、OAuth 授权、MCP 网关；凭据不进入 Agent 工作区。</p>
+          <div class="cap-detail">办公 / 知识 / 出行 / 生活 / 专业服务 / 自托管。</div>
+          <div class="chips"><span class="chip">remote / gateway / internal</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-book"/></svg></span><h3>知识与记忆</h3></div>
+          <p>私有文档 RAG、长期记忆、技能包、插件与子智能体，让 Agent 越用越懂业务。</p>
+          <div class="cap-detail">文档、记忆、技能、插件、子代理，挂在 Agent 上。</div>
+          <div class="chips"><span class="chip">RAG</span><span class="chip">SkillHub</span><span class="chip">Memory</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-bolt"/></svg></span><h3>自动化与事件</h3></div>
+          <p>Cron、外部 Webhook、连接器轮询与主动关怀；工作可以自己发生。</p>
+          <div class="cap-detail">Cron、Webhook、轮询汇入同一条执行链路。</div>
+          <div class="chips"><span class="chip">at-least-once</span><span class="chip">outbox</span></div>
+        </div>
+        <div class="cap-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-shield"/></svg></span><h3>安全与自托管</h3></div>
+          <p>JWT、资源 ACL、审批、PII 脱敏、审计；TLS、备份、服务安装与原地升级。</p>
+          <div class="cap-detail">JWT、ACL、审批、PII、审计、TLS、备份。</div>
+          <div class="chips"><span class="chip">单进程</span><span class="chip">数据本机</span></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>八块能力共享<b>同一套运行时、同一份数据、同一套权限</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>02</b> · 能力地图</span><span class="pg">03 / 19</span></div>
+  </section>
+
+  <!-- 04 agent runtime -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">03</span> Product / Agent 运行时</div>
+    <h2>一个 Agent = 工作区 + 记忆 + 工具 + 一条可恢复的会话</h2>
+    <p class="sub">Agent 不是一段 prompt，而是一个有文件、有记忆、有工具、有审计边界的长期运行体。</p>
+    <div class="body">
+      <div class="two-col">
+        <div>
+          <div class="flow">
+            <div class="flow-step"><span class="n">1</span><div><b>输入</b><span>Web / CLI / IM / Cron / API / ACP</span></div></div>
+            <div class="flow-arrow">↓</div>
+            <div class="flow-step"><span class="n">2</span><div><b>上下文装配</b><span>SOUL.md · 记忆 · 技能 · 知识库 · 工具清单</span></div></div>
+            <div class="flow-arrow">↓</div>
+            <div class="flow-step"><span class="n">3</span><div><b>模型循环</b><span>推理 ↔ 工具调用；LangGraph 驱动，可中断、可恢复</span></div></div>
+            <div class="flow-arrow">↓</div>
+            <div class="flow-step"><span class="n">4</span><div><b>边界校验</b><span>HITL 审批 · Shell guard · PII 脱敏 · 权限检查</span></div></div>
+            <div class="flow-arrow">↓</div>
+            <div class="flow-step"><span class="n">5</span><div><b>输出与落库</b><span>流式回复 · 附件 · MiniApp 卡片 · thread / trajectory / usage</span></div></div>
+          </div>
+          <div class="note"><span>↳</span><span><b>thread_id 不编码来源。</b>来源是 <code>chat_sessions</code> / <code>threads</code> 的一列；同一个 thread 可以从 Web、CLI 或 IM 继续。</span></div>
+          <div class="chips" style="margin-top:9px"><span class="chip strong">一次回合的四种去向</span><span class="chip">直接回复</span><span class="chip">请求审批</span><span class="chip">委派子智能体</span><span class="chip">产出 MiniApp</span></div>
+        </div>
+        <div class="panel">
+          <div class="ph"><h3>运行时能力</h3><span class="tag">runtime surface</span></div>
+          <div class="facts">
+            <div class="fact"><span class="ic"><svg><use href="#i-cpu"/></svg></span><div><b>30+ 模型供应商预设</b><span>OpenAI / Anthropic / Gemini / DeepSeek / Kimi / 通义 / 火山 / Ollama 本地</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-db"/></svg></span><div><b>可插拔工作区</b><span>本地磁盘 / Docker 沙箱 / COS / S3，统一走 <code>BackendWorkspace</code></span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-spark"/></svg></span><div><b>记忆与人格</b><span><code>octop-memory</code> · <code>USER.md</code> / <code>MEMORY.md</code> · MBTI / SOUL.md</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-plug"/></svg></span><div><b>工具生态</b><span>内置工具 · MCP · 连接器 · 技能 · 插件 · 子智能体</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-clock"/></svg></span><div><b>会话与历史</b><span><code>threads</code> + 版本化历史 + <code>trajectory_events</code></span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-terminal"/></svg></span><div><b>交互控制</b><span>WebSocket 流式 · steering · slash · HITL resume · ACP</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-shield"/></svg></span><div><b>审批与边界</b><span>高风险工具走 HITL；审批结果可恢复回合，也可推送到 IM</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-users"/></svg></span><div><b>多 Agent 协作</b><span><code>ask_agent</code> / <code>@Agent</code> / 子智能体 / 团队编排</span></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>Agent 的长期性来自<b>工作区、记忆与可恢复会话</b>，而不是更长的 prompt。</span></div>
+    </div>
+    <div class="footer"><span><b>03</b> · Agent 运行时</span><span class="pg">04 / 19</span></div>
+  </section>
+
+  <!-- 05 experts and teams -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">04</span> Product / 专家与团队</div>
+    <h2>从「一个专家」到「一组数字同事」</h2>
+    <p class="sub">专家是装配好的 Agent；团队是在边界内协作的专家集合。模型表达意图，代码决定效果。</p>
+    <div class="body">
+      <div class="expert-top">
+        <div class="expert-card">
+          <h3>专家库：24 个开箱模板</h3>
+          <p>通用助手、办公自动化、工程、设计、运维、内容、行业专家……安装即用，也可以发布、共享或从市场获取。</p>
+          <div class="chips"><span class="chip strong">SOUL.md</span><span class="chip">manifest</span><span class="chip">skills</span><span class="chip">connectors</span><span class="chip">独立工作区</span></div>
+        </div>
+        <div class="expert-card">
+          <h3>一个专家 = 四层装配</h3>
+          <p>人格与行为（SOUL / MBTI）、能力（技能 / 工具 / 连接器）、记忆（长期 / 会话）、资产（工作区 / MiniApp）彼此独立，可替换、可迁移。</p>
+          <div class="chips"><span class="chip">问答 / 规划 / 动手</span><span class="chip">共享与发布</span><span class="chip">按专家分配通道</span><span class="chip">独立记忆</span></div>
+        </div>
+      </div>
+      <div class="pipe">
+        <div class="pipe-node"><div class="pn">Goal</div><h4>目标</h4><p>老板给出目标、边界与预期产物</p></div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-node"><div class="pn">Planner</div><h4>Planner</h4><p>无工具，只输出结构化计划 JSON</p></div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-node"><div class="pn">Dispatch</div><h4>Dispatcher</h4><p>依赖、并发、优先级、预算校验</p></div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-node"><div class="pn">Execute</div><h4>成员 Agent</h4><p>隔离工作区执行任务，回传结果</p></div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-node"><div class="pn">Verify</div><h4>验收 / 审批</h4><p>人工或独立评审，不通过则返工</p></div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-node"><div class="pn">Ledger</div><h4>账本</h4><p>决策、事件、状态与审计可回放</p></div>
+      </div>
+      <div class="grid-3" style="margin-top:10px">
+        <div class="mini-card"><b>团队看板</b><span>6 个状态泳道：待处理 / 进行中 / 阻塞 / 待审核 / 已完成 / 已关闭；可拖状态、审批、暂停。</span></div>
+        <div class="mini-card"><b>审批与收件箱</b><span><code>hitl_pending</code> 持久化；频道内审批；异常收件箱让例外先找人。</span></div>
+        <div class="mini-card"><b>决策账本</b><span><code>team_decisions</code> + <code>team_events</code>；可回放、可审计、崩溃后可恢复。</span></div>
+      </div>
+      <div class="status-strip">
+        <span class="chip green">当前 L2 可运行</span><span><b>目标 / 任务 / 依赖 / 派发 / 等待 / 审批 / 崩溃恢复 / 决策审计</b>已可用。</span>
+        <span class="chip amber">L3 推进中</span><span>独立验收、预算结算与计费、容量路由、端到端可观测。</span>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>模型只表达意图；<b>派发、预算、验收与账本</b>由确定性代码兜底。</span></div>
+    </div>
+    <div class="footer"><span><b>04</b> · 专家与团队</span><span class="pg">05 / 19</span></div>
+  </section>
+
+  <!-- 06 miniapp -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">05</span> Product / MiniApp</div>
+    <h2>把 Agent 的产出，变成人能直接用的应用</h2>
+    <p class="sub">一张带 schema 的表 + 一份单文件 HTML = 一个零后端小应用。页面在沙箱里运行，读写由宿主代调。</p>
+    <div class="body">
+      <div class="app-layout">
+        <div>
+          <div class="stack-flow">
+            <div class="stack-node accent"><b>页面 iframe</b><span>单文件 HTML · 无 JWT · 无网络 · CSP 限制</span><div class="stack-meta"><span class="chip strong">window.octopApp</span><span class="chip">能力清单</span></div></div>
+            <div class="stack-arrow">⇅ <span>postMessage</span></div>
+            <div class="stack-node"><b>宿主 Bridge</b><span>按 <code>capabilities_json</code> 裁剪：数据读写 / 外链 / AI 生成 / 事件 / 外部服务</span></div>
+            <div class="stack-arrow">⇅ <span>HTTP /api/apps</span></div>
+            <div class="stack-node"><b>FastAPI · AppService</b><span>权限判定 · 行级 CAS · PII 脱敏 · 发布快照 · 审计</span></div>
+            <div class="stack-arrow">⇅</div>
+            <div class="stack-node"><b>控制面 DB + Agent 工作区</b><span>表 / 行 / 历史 / 事件 · HTML / 素材 / 备份</span></div>
+          </div>
+          <div class="stats-row">
+            <div class="stat"><b>31</b><span>app_* 工具</span></div>
+            <div class="stat"><b>50</b><span>应用 / 用户</span></div>
+            <div class="stat"><b>12</b><span>表 / 应用</span></div>
+            <div class="stat"><b>2万</b><span>行 / 表</span></div>
+            <div class="stat"><b>512K</b><span>HTML 上限</span></div>
+          </div>
+          <div class="note"><span>↳</span><span><b>公开链接：</b>只读宿主 + 发布快照 + 表级可见性 + PII 脱敏；页面写能力支持 <code>updateRow</code> / <code>deleteRow</code>，公开页不开放写入。</span></div>
+        </div>
+        <div class="app-features">
+          <div class="app-feature"><b>创建</b><ul class="clean"><li>Agent <code>app_*</code> 工具</li><li>Excel / CSV 快速模式（不走 LLM）</li><li>系统 / 专家模板</li></ul></div>
+          <div class="app-feature"><b>数据</b><ul class="clean"><li>多表 / 行级 CAS</li><li>引用列 / 服务端聚合</li><li>PII / 行级变更历史</li></ul></div>
+          <div class="app-feature"><b>交付</b><ul class="clean"><li>工作台看板 / 桌面窗口</li><li>聊天侧栏 / 公开链接</li><li>只读发布快照</li></ul></div>
+          <div class="app-feature"><b>治理</b><ul class="clean"><li>能力清单 / 协作者</li><li>发布快照 / 备份恢复</li><li>审计 / 限流</li></ul></div>
+          <div class="app-feature"><b>扩展</b><ul class="clean"><li>外部服务 / 事件收件箱</li><li>出站 Webhook</li><li>应用级调度</li></ul></div>
+          <div class="app-feature"><b>桌面 Shell</b><ul class="clean"><li>窗口 / Dock / Mission Control</li><li>命令面板 / 通知中心</li><li>多 Board / 全屏演示</li></ul></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>MiniApp 的边界：<b>单表 / 少表、读多写少、可嵌入、可发布</b>；复杂流程交给原生表与事件。</span></div>
+    </div>
+    <div class="footer"><span><b>05</b> · MiniApp</span><span class="pg">06 / 19</span></div>
+  </section>
+
+  <!-- 07 channels -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">06</span> Product / 全通道</div>
+    <h2>一个 Agent，出现在用户已经在的地方</h2>
+    <p class="sub">不是「接了很多机器人」，而是同一个 Agent 有多个入口：同一会话、同一记忆、同一审批。</p>
+    <div class="body">
+      <div class="channel-layout">
+        <div class="channel-groups">
+          <div class="channel-group">
+            <div class="gl">IM Channels · 10</div>
+            <div class="chips">
+              <span class="chip strong">飞书</span><span class="chip strong">钉钉</span><span class="chip strong">企业微信</span><span class="chip strong">微信</span><span class="chip strong">QQ</span><span class="chip strong">Telegram</span><span class="chip strong">Discord</span><span class="chip">MQTT</span><span class="chip">小艺</span><span class="chip">元宝</span>
+            </div>
+          </div>
+          <div class="channel-group">
+            <div class="gl">Web &amp; Desktop</div>
+            <div class="chips"><span class="chip">Dashboard 对话</span><span class="chip">MiniApp 桌面</span><span class="chip">PWA</span><span class="chip">远程桌面 / 浏览器 / 手机</span><span class="chip">语音 STT / TTS</span></div>
+          </div>
+          <div class="channel-group">
+            <div class="gl">Developer &amp; Integration</div>
+            <div class="chips"><span class="chip">CLI</span><span class="chip">HTTP / SSE / WebSocket</span><span class="chip">ACP · 双向</span><span class="chip">MCP</span><span class="chip">Webhook</span></div>
+          </div>
+          <div class="channel-group">
+            <div class="gl">Instance to Instance</div>
+            <div class="chips"><span class="chip">Bridge · Octop ↔ Octop</span><span class="chip">共享专家</span><span class="chip">跨实例文件</span></div>
+          </div>
+          <div class="note"><span>↳</span><span><b>统一入口的价值：</b>用户在 IM 里发起，在 Web 里接管；审批、未读、历史与工具过程都同步，不需要维护两套机器人。</span></div>
+          <div class="grid-2" style="margin-top:9px">
+            <div class="mini-card"><b>IM 绑定</b><span>通道身份 → 用户映射；群聊按 session 隔离。</span></div>
+            <div class="mini-card"><b>Web JWT</b><span>登录态 → 用户；资源归属逐行校验。</span></div>
+            <div class="mini-card"><b>CLI 本地</b><span>信任文件系统；<code>--user</code> / <code>--agent</code> 可固定身份。</span></div>
+            <div class="mini-card"><b>ACP 双向</b><span>把 Agent 暴露给 IDE / 终端，或委派 Claude Code / OpenCode。</span></div>
+          </div>
+        </div>
+        <div class="session-card">
+          <div class="gl" style="font-size:9.6px;font-weight:850;letter-spacing:.13em;color:var(--faint);text-transform:uppercase;margin-bottom:7px">Session Model</div>
+          <div class="session-tier"><span class="chip">IM</span><span class="chip">Web</span><span class="chip">CLI</span><span class="chip">API</span><span class="chip">Cron</span></div>
+          <div class="session-arrow">↓</div>
+          <div class="session-tier"><span class="session-box" style="flex:1;text-align:center">Gateway · ChannelManager / WS Hub / Slash / HITL</span></div>
+          <div class="session-arrow">↓</div>
+          <div class="session-tier"><span class="session-box strong" style="flex:1;text-align:center">Agent Runtime · 同一 Agent / 同一 Thread</span></div>
+          <div style="margin-top:10px">
+            <ul class="clean">
+              <li><b>session key</b>：<code>&lt;agent&gt;:&lt;surface&gt;:&lt;session&gt;:&lt;dm|group&gt;</code></li>
+              <li><b>同一 thread</b> 可从 Web 接管 IM 会话，历史 / 未读 / 审批实时同步</li>
+              <li><b>slash / steering / HITL</b> 在各入口保持一致</li>
+              <li><b>IM 回合</b>开始 / 结束、排队与超时都会回传 Web 侧栏</li>
+            </ul>
+          </div>
+          <div class="mini-flow"><span class="chip">IM 发起</span>→<span class="chip">Gateway 记录 thread</span>→<span class="chip">Web 打开同一 thread</span>→<span class="chip">审批 / 回复回传 IM</span></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>入口是壳；<b>会话、记忆与权限</b>才是内核。</span></div>
+    </div>
+    <div class="footer"><span><b>06</b> · 全通道入口</span><span class="pg">07 / 19</span></div>
+  </section>
+
+  <!-- 08 knowledge -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">07</span> Product / 知识与扩展</div>
+    <h2>让 Agent 越用越懂你的业务</h2>
+    <p class="sub">知识、记忆、技能、插件都挂在 Agent 上；换入口不丢能力，换模型不丢上下文。</p>
+    <div class="body">
+      <div class="know-grid">
+        <div class="know-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-book"/></svg></span><h3>知识库 · RAG</h3></div>
+          <p>私有文档入库、分段、索引与引用；按文件夹浏览；支持 OCR 与本地 / 远程 embedding。</p>
+          <ul class="clean"><li>入库：PDF / Word / 表格 / 网页</li><li>索引：分段 / embedding / OCR</li><li>使用：引用溯源 / 增量更新</li></ul>
+          <div class="chips"><span class="chip">PDF / Word / 表格</span><span class="chip">文件夹</span><span class="chip">引用溯源</span></div>
+        </div>
+        <div class="know-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-spark"/></svg></span><h3>记忆 · Memory</h3></div>
+          <p>长期记忆与会话记忆分层；<code>USER.md</code> / <code>MEMORY.md</code> 可手改；冲突先审核，不悄悄覆盖。</p>
+          <ul class="clean"><li>长期记忆 vs 会话记忆分层</li><li><code>USER.md</code> / <code>MEMORY.md</code> 可手改</li><li>冲突先审核 / 可备份恢复</li></ul>
+          <div class="chips"><span class="chip">octop-memory</span><span class="chip">强记忆</span><span class="chip">用户档案</span></div>
+        </div>
+        <div class="know-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-grid"/></svg></span><h3>技能 · Skills</h3></div>
+          <p>以 <code>SKILL.md</code> 为载体的可安装能力；按专家启用；技能包可打包、导出、导入与分享。</p>
+          <ul class="clean"><li><code>SKILL.md</code> 包 / 按专家启用</li><li>SkillHub / ZIP 迁移</li><li>技能包可关闭打包下载</li></ul>
+          <div class="chips"><span class="chip">SkillHub</span><span class="chip">ZIP 迁移</span><span class="chip">按专家授权</span></div>
+        </div>
+        <div class="know-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-plug"/></svg></span><h3>插件与子智能体</h3></div>
+          <p>内置 + 上传插件；插件可注册工具与 IM 通道；子智能体把复杂任务拆给专门角色。</p>
+          <ul class="clean"><li>工具 / IM 通道 / UI 卡片</li><li>内置 + 上传安装</li><li>子智能体 / 专家市场</li></ul>
+          <div class="chips"><span class="chip">插件通道</span><span class="chip">Subagent</span><span class="chip">专家市场</span></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>扩展挂在 <b>Agent</b> 上，而不是挂在某个入口上；换入口不丢能力。</span></div>
+    </div>
+    <div class="footer"><span><b>07</b> · 知识与扩展</span><span class="pg">08 / 19</span></div>
+  </section>
+
+  <!-- 09 connectors -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">08</span> Product / 连接器</div>
+    <h2>接业务系统，但不把凭据交给 Agent</h2>
+    <p class="sub">连接器把外部服务变成可调用的工具；OAuth、密钥与 CLI 登录态留在平台侧，工作区与 MiniApp 页面都拿不到。</p>
+    <div class="body">
+      <div class="conn-layout">
+        <div>
+          <div class="conn-flow">
+            <div class="conn-node hot"><b>外部服务</b><span>办公 / 知识 / 出行 / 生活 / 专业服务 / 自托管</span></div>
+            <div class="conn-arrow">↓ <span>OAuth · API Key · CLI 设备码</span></div>
+            <div class="conn-node"><b>加密凭据库</b><span>secrets 表 · 按 owner / connector 隔离 · 不进入工作区</span></div>
+            <div class="conn-arrow">↓</div>
+            <div class="conn-node"><b>Connector / MCP Gateway</b><span>31 个内置连接器 · 自定义 MCP · 工具白名单</span></div>
+            <div class="conn-arrow">↓</div>
+            <div class="conn-node"><b>Agent 工具 / MiniApp 外部服务</b><span>read-only 工具 · URL 前缀 · TTL 缓存 · 限流</span></div>
+            <div class="conn-arrow">↓</div>
+            <div class="conn-node"><b>审计 / 用量 / 限流</b><span>每次调用可追踪；按 owner / 工具 / 时间统计</span></div>
+          </div>
+          <div class="chips" style="margin-top:9px"><span class="chip">办公</span><span class="chip">知识</span><span class="chip">出行</span><span class="chip">生活</span><span class="chip">专业服务</span><span class="chip">自托管</span></div>
+        </div>
+        <div class="panel">
+          <div class="ph"><h3>三种 MCP 模式</h3><span class="tag">mcp modes</span></div>
+          <div class="facts">
+            <div class="fact"><span class="ic"><svg><use href="#i-globe"/></svg></span><div><b>remote</b><span>Harness 直连厂商 MCP 地址</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-cpu"/></svg></span><div><b>gateway</b><span>进程内 Python 适配器，harness 配置只占位</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-hub"/></svg></span><div><b>internal</b><span>Octop 在 <code>/api/internal/mcp</code> 托管 HTTP MCP</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-plug"/></svg></span><div><b>31 个内置连接器</b><span>覆盖办公、知识、出行、生活、专业服务与自托管</span></div></div>
+            <div class="fact"><span class="ic"><svg><use href="#i-lock"/></svg></span><div><b>凭据隔离</b><span>加密存储，不进入 Agent 工作区或 MiniApp 页面</span></div></div>
+          </div>
+          <div class="note" style="margin-top:9px"><span>↳</span><span><b>双向能力：</b>Agent 可以调用外部 MCP；内部 MCP 网关也可以把 Agent 暴露给其他程序。</span></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>凭据只在平台侧；Agent 与页面拿到的只是<b>工具</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>08</b> · 连接器与 MCP</span><span class="pg">09 / 19</span></div>
+  </section>
+
+  <!-- 10 automation -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">09</span> Product / 自动化与事件</div>
+    <h2>让工作自己发生：调度、事件与主动执行</h2>
+    <p class="sub">定时任务负责「什么时候做」，外部事件负责「发生了什么」，两者都汇入同一个 Agent 运行时。</p>
+    <div class="body">
+      <div class="auto-grid">
+        <div class="auto-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-clock"/></svg></span><h3>Cron · 定时任务</h3><span class="tag">scheduler</span></div>
+          <ul class="clean">
+            <li>进程内 APScheduler，无外部 worker / 队列</li>
+            <li><b>text</b> 直接推送，<b>agent</b> 先跑 AI 再推送</li>
+            <li>周期 / 一次性 / 立即执行；服务器时区</li>
+            <li>结果推送 Dashboard / IM；失败与超时可见</li>
+            <li>聊天进行中可补一句 steering，不必等本轮结束</li>
+          </ul>
+        </div>
+        <div class="auto-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-bolt"/></svg></span><h3>Events · 外部事件</h3><span class="tag">inbox / outbox</span></div>
+          <ul class="clean">
+            <li>Webhook（HMAC）+ connector poll（30 秒扫描）</li>
+            <li><code>external_events</code> → <code>external_deliveries</code> → expert / team / app inbox / webhook</li>
+            <li>去重、合并窗口、限流、指数退避、死信、30 天保留</li>
+            <li><b>at-least-once</b>；消费方必须幂等</li>
+            <li>payload 不能决定 target / mode / table</li>
+          </ul>
+        </div>
+      </div>
+      <div class="planes">
+        <div class="plane"><b>外部 in/outbox</b><span>跨重启 · fan-out · 独立重试</span></div>
+        <div class="plane"><b>Team ledger</b><span>每团队 seq · 严格顺序</span></div>
+        <div class="plane"><b>App inbox</b><span>按游标读 · ack · 500 条 / 30 天</span></div>
+        <div class="plane"><b>Trajectory</b><span>执行轨迹 · 调试与回放</span></div>
+        <div class="plane"><b>WS / SSE</b><span>只加速 UI · 不是真相</span></div>
+      </div>
+      <div class="note"><span>↳</span><span><b>没有平台级 EventBus。</b>按用途选事件平面：要恢复选 outbox，要顺序选账本，要消费选 inbox，要刷新选 WS。</span></div>
+      <div class="grid-3" style="margin-top:9px">
+        <div class="mini-card"><b>每日经营日报</b><span>Cron 08:30 → Agent 汇总 → 推送飞书 / 钉钉</span></div>
+        <div class="mini-card"><b>订单触发审核</b><span>支付 Webhook → 事件 → 专家审核 → MiniApp 台账</span></div>
+        <div class="mini-card"><b>连接器增量同步</b><span>企查查 / OpenAlex → 轮询 → 应用数据源</span></div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>定时与事件不是两套系统，而是同一个 Agent 的<b>两种唤醒方式</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>09</b> · 自动化与事件</span><span class="pg">10 / 19</span></div>
+  </section>
+
+  <!-- 11 architecture layers -->
+  <section class="slide theme-arch">
+    <div class="kicker"><span class="num">10</span> Architecture / 分层</div>
+    <h2>单进程、分层、可重建</h2>
+    <p class="sub">一个 Python wheel 同时提供 API、SPA、CLI 与 Agent 运行时；重启时从控制面数据库重建整棵运行时树。</p>
+    <div class="body">
+      <div class="arch-layout">
+        <div class="layers">
+          <div class="layer"><div class="ll">Surface</div><div class="lc"><span class="chip">Dashboard · React</span><span class="chip">CLI · Click</span><span class="chip">HTTP API</span><span class="chip">IM / WebSocket</span></div></div>
+          <div class="layer-arrow">↓</div>
+          <div class="layer"><div class="ll">API</div><div class="lc"><span class="chip">FastAPI routers</span><span class="chip">JWT</span><span class="chip">SSE / WS</span><span class="chip">OpenAPI</span></div></div>
+          <div class="layer-arrow">↓</div>
+          <div class="layer"><div class="ll">Compose</div><div class="lc"><span class="chip">launch.py</span><span class="chip">OctopServer</span><span class="chip">build_app</span><span class="chip">uvicorn</span></div></div>
+          <div class="layer-arrow">↓</div>
+          <div class="layer"><div class="ll">Domain</div><div class="lc"><span class="chip">AgentManager</span><span class="chip">Gateway</span><span class="chip">Cron</span><span class="chip">Events</span><span class="chip">Apps</span><span class="chip">Connectors</span><span class="chip">Knowledge</span><span class="chip">Users</span></div></div>
+          <div class="layer-arrow">↓</div>
+          <div class="layer"><div class="ll">Runtime</div><div class="lc"><span class="chip">octop-harness</span><span class="chip">octop-gateway</span><span class="chip">octop-memory</span><span class="chip">octop-browser</span></div></div>
+          <div class="layer-arrow">↓</div>
+          <div class="layer"><div class="ll">Storage</div><div class="lc"><span class="chip">SQLite / PostgreSQL</span><span class="chip">per-agent workspace</span><span class="chip">local / Docker / COS / S3</span></div></div>
+          <div class="note" style="margin-top:9px"><span>↳</span><span><b>请求路径：</b><code>dashboard → /api → router → infra → repo → DB</code>；返回沿同一路径回到界面。</span></div>
+        </div>
+        <div class="constraints">
+          <h3>五项硬约束</h3>
+          <div class="constraint"><span class="n">1</span><div><b>依赖向内</b><span>api → infra → db / utils；infra 不 import api、cli、launch</span></div></div>
+          <div class="constraint"><span class="n">2</span><div><b>repo 只做 SQL</b><span>infra/db/repos 不 import 其它 infra 包</span></div></div>
+          <div class="constraint"><span class="n">3</span><div><b>单进程</b><span>无外部 worker / 队列；SharedServices 进程全局</span></div></div>
+          <div class="constraint"><span class="n">4</span><div><b>双 ID</b><span>整数 id 作 PK，字符串 public id 对外</span></div></div>
+          <div class="constraint"><span class="n">5</span><div><b>异步全链路</b><span>阻塞调用必须 run_in_executor</span></div></div>
+          <div class="note" style="margin-top:8px"><span>↳</span><span><code>launch.py</code> 是唯一同时 import <code>infra/server</code> 与 <code>api/app</code> 的模块。</span></div>
+          <div class="note" style="margin-top:6px"><span>↳</span><span><b>ADR：</b>001 单进程 / 无外部队列；002 SQLite 与 PostgreSQL 双栈同 schema。</span></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>单进程不是简化，是把<b>部署与运维复杂度</b>收回自己手里。</span></div>
+    </div>
+    <div class="footer"><span><b>10</b> · 架构分层</span><span class="pg">11 / 19</span></div>
+  </section>
+
+  <!-- 12 boot -->
+  <section class="slide theme-arch">
+    <div class="kicker"><span class="num">11</span> Architecture / 启动</div>
+    <h2>重启即重建：OctopServer.start() 的装配顺序</h2>
+    <p class="sub">没有外部状态机；启动顺序就是依赖顺序，任何一步失败都不会对外服务。</p>
+    <div class="body">
+      <div class="boot-layout">
+        <div class="boot">
+          <div class="boot-step"><span class="n">1</span><div><b>PathLayout + config.json + env</b><span>确定数据根、数据库、密钥目录与配置覆盖</span></div></div>
+          <div class="boot-step"><span class="n">2</span><div><b>Experts / Subagents / Plugins</b><span>加载专家库、子智能体目录与插件（含插件通道）</span></div></div>
+          <div class="boot-step"><span class="n">3</span><div><b>open_database + run_migrations</b><span>SQLite WAL 或 PostgreSQL；schema v44</span></div></div>
+          <div class="boot-step"><span class="n">4</span><div><b>SharedServices</b><span>RepoBundle + 工厂；进程级共享</span></div></div>
+          <div class="boot-step"><span class="n">5</span><div><b>AgentManager</b><span>全局 Agent 注册表；按需构建 HarnessAgentRuntime</span></div></div>
+          <div class="boot-step"><span class="n">6</span><div><b>Gateway</b><span>IM ChannelManager + WS Hub + HITL + slash + thread</span></div></div>
+          <div class="boot-step"><span class="n">7</span><div><b>Cron + ProactiveCare</b><span>进程内调度、自动备份、TLS 续期、主动关怀</span></div></div>
+          <div class="boot-step"><span class="n">8</span><div><b>Teams + Events + Source scheduler</b><span>团队 sweeper、外部事件 worker、MiniApp 数据源调度</span></div></div>
+          <div class="boot-step"><span class="n">9</span><div><b>Bridge + UserManager</b><span>实例互联自动重连；用户与权限服务就绪</span></div></div>
+          <div class="note" style="margin-top:9px"><span>↳</span><span><b>失败策略：</b>迁移失败不对外服务；插件失败只影响对应插件；Agent 按需启动、空闲回收。</span></div>
+        </div>
+        <div>
+          <div class="runtime-card">
+            <h3>AppRuntime · 活单例</h3>
+            <div class="kv"><span>agent_registry</span><b>AgentManager</b></div>
+            <div class="kv"><span>gateway</span><b>Gateway</b></div>
+            <div class="kv"><span>cron_manager</span><b>CronManager</b></div>
+            <div class="kv"><span>user_manager</span><b>UserManager</b></div>
+            <div class="kv"><span>proactive_scheduler</span><b>ProactiveCareScheduler</b></div>
+            <div class="kv"><span>source_scheduler</span><b>AppSourceScheduler</b></div>
+            <div class="kv"><span>trajectory_service</span><b>TrajectoryService</b></div>
+            <div class="kv"><span>bridge_manager</span><b>BridgeManager</b></div>
+            <div class="kv"><span>external_event_worker</span><b>ExternalEventWorker</b></div>
+          </div>
+          <div class="note"><span>↳</span><span><b>重启后状态从哪来？</b>Agent、通道、会话、任务、应用、事件都在控制面 DB；工作区文件在工作区后端；runtime 只是内存中的活单例。</span></div>
+        </div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>启动顺序就是依赖顺序；重启不是恢复现场，而是<b>从事实重建</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>11</b> · 启动装配</span><span class="pg">12 / 19</span></div>
+  </section>
+
+  <!-- 13 message journey -->
+  <section class="slide theme-arch">
+    <div class="kicker"><span class="num">12</span> Architecture / 消息链路</div>
+    <h2>一条消息的旅程</h2>
+    <p class="sub">入口不同，链路归一：Gateway 负责会话与路由，AgentManager 负责运行时，HarnessAgent 负责推理与工具循环。</p>
+    <div class="body">
+      <div class="journey">
+        <div class="jstep"><div class="jn">1</div><b>入口</b><span>IM / Web / CLI / API / Cron</span></div>
+        <div class="jarrow">→</div>
+        <div class="jstep"><div class="jn">2</div><b>Gateway</b><span>session key · thread · slash · HITL</span></div>
+        <div class="jarrow">→</div>
+        <div class="jstep"><div class="jn">3</div><b>AgentManager</b><span>解析 Agent · 校验归属 · 取工作区</span></div>
+        <div class="jarrow">→</div>
+        <div class="jstep"><div class="jn">4</div><b>HarnessAgent</b><span>上下文 → 模型 → 工具循环</span></div>
+        <div class="jarrow">→</div>
+        <div class="jstep"><div class="jn">5</div><b>边界</b><span>HITL · Shell guard · PII · ACL</span></div>
+        <div class="jarrow">→</div>
+        <div class="jstep"><div class="jn">6</div><b>输出 / 落库</b><span>流式回复 · 附件 · 卡片 · 轨迹</span></div>
+      </div>
+      <div class="lanes">
+        <div class="lane"><b>Web 通道</b><span>WS Hub → dashboard frames → 前端流式渲染</span></div>
+        <div class="lane"><b>IM 通道</b><span>ChannelManager → GlobalProcessor → 平台回复</span></div>
+        <div class="lane"><b>定时 / 事件</b><span>APScheduler / external_events → Gateway.push_text_from_session</span></div>
+      </div>
+      <div class="two-col" style="margin-top:11px;height:auto">
+        <div class="panel">
+          <div class="ph"><h3>流式聊天</h3><span class="tag">websocket</span></div>
+          <p>双向 WS：前端可在回合中发送 slash / <code>/compact</code> / steering；工具过程与思考流实时推送。</p>
+        </div>
+        <div class="panel">
+          <div class="ph"><h3>HITL 恢复</h3><span class="tag">sse</span></div>
+          <p>审批通过后，<code>POST /api/agents/{id}/chat/hitl/resume</code> 仍用 SSE 把恢复的回合流回客户端。</p>
+        </div>
+      </div>
+      <pre class="code" style="margin-top:9px;font-size:10.5px"><span class="c"># 会话键示例 / session keys</span>
+&lt;agent_id&gt;:dashboard:&lt;user_id&gt;:dm
+&lt;agent_id&gt;:feishu:&lt;chat_id&gt;:group
+&lt;agent_id&gt;:cli:&lt;user_id&gt;:dm</pre>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>入口不同，链路归一；所有回合最终都落到 <b>thread、轨迹与用量</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>12</b> · 消息链路</span><span class="pg">13 / 19</span></div>
+  </section>
+
+  <!-- 14 data -->
+  <section class="slide theme-arch">
+    <div class="kicker"><span class="num">13</span> Architecture / 数据</div>
+    <h2>控制面、工作区、记忆：三层数据各归其位</h2>
+    <p class="sub">业务实体进控制面数据库，文件进 Agent 工作区，长期记忆与轨迹独立演进；三层都可以单独备份与迁移。</p>
+    <div class="body">
+      <div class="data-cols">
+        <div class="data-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-db"/></svg></span><h3>控制面</h3><span class="tag">control plane</span></div>
+          <p>SQLite WAL（默认）或 PostgreSQL；用户、Agent、通道、会话、任务、应用、事件、用量与审计。</p>
+          <p>编号迁移 <code>00N_*.sql</code> + <code>00N_*.pg.sql</code> 同步演进；当前 <b>v44</b>。</p>
+          <ul class="clean"><li>双栈同 schema；迁移成对提交</li><li>资源表双 ID：<code>id</code> + <code>{entity}_id</code></li><li>usage / audit / events / cron 都在控制面</li></ul>
+          <div class="chips"><span class="chip">users</span><span class="chip">agents</span><span class="chip">threads</span><span class="chip">cron</span><span class="chip">apps</span><span class="chip">events</span><span class="chip">usage</span></div>
+        </div>
+        <div class="data-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-window"/></svg></span><h3>工作区</h3><span class="tag">workspace</span></div>
+          <p><code>~/.octop/agents/&lt;id&gt;/</code>：SOUL.md、技能、MiniApp HTML / 素材、inbound 附件。</p>
+          <p>统一走 <code>BackendWorkspace</code>：本地磁盘 / Docker 沙箱 / COS / S3；新 Agent 的系统文件在 <code>.octop/</code>。</p>
+          <ul class="clean"><li>SOUL / skills / app.html / assets</li><li>本地 / Docker / COS / S3 同一抽象</li><li>inbound 附件与 <code>.octop/</code> 系统文件</li></ul>
+          <div class="chips"><span class="chip">SOUL.md</span><span class="chip">skills/</span><span class="chip">app.html</span><span class="chip">inbound/</span></div>
+        </div>
+        <div class="data-card">
+          <div class="hd"><span class="ic"><svg><use href="#i-spark"/></svg></span><h3>记忆与历史</h3><span class="tag">memory / history</span></div>
+          <p><code>octop-memory</code> 管长期记忆；<code>MEMORY.md</code> / <code>USER.md</code> 可人工维护。</p>
+          <p>可选版本化历史（<code>history_v2.sqlite</code>）；<code>trajectory_events</code> 记录执行轨迹，供调试与回放。</p>
+          <ul class="clean"><li><code>octop-memory</code> 长期记忆</li><li><code>USER.md</code> / <code>MEMORY.md</code> 可手改</li><li><code>history_v2</code> 可选版本化历史</li><li><code>trajectory_events</code> 执行轨迹</li></ul>
+          <div class="chips"><span class="chip">memory</span><span class="chip">USER.md</span><span class="chip">history_v2</span><span class="chip">trajectory</span></div>
+        </div>
+      </div>
+      <div class="note"><span>↳</span><span><b>唯一数据根：</b>整个 <code>~/.octop/</code> 可以整体备份 / 迁移；应用级另有 zip 备份，资源表引用 public id 保证可恢复。</span></div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>控制面、工作区、记忆分层，才能<b>各自备份、各自演进</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>13</b> · 数据与存储</span><span class="pg">14 / 19</span></div>
+  </section>
+
+  <!-- 15 module map -->
+  <section class="slide theme-arch">
+    <div class="kicker"><span class="num">14</span> Architecture / 代码地图</div>
+    <h2>依赖向内：改哪里，不会牵一发动全身</h2>
+    <p class="sub">分层不是目录美学，而是可验证的 import 规则；新功能先问「属于哪一层」，再决定写在哪。</p>
+    <div class="body">
+      <div class="module-layout">
+        <div class="dep-box">
+          <div class="dep-row"><span class="node">dashboard</span><span class="dep-arrow">→</span><span class="node">api</span><span class="dep-arrow">→</span><span class="node hot">infra</span><span class="dep-arrow">→</span><span class="node">db / utils</span></div>
+          <div style="height:8px"></div>
+          <div class="dep-row"><span class="node">cli</span><span class="dep-arrow">→</span><span class="node hot">launch.py</span><span class="dep-arrow">→</span><span class="node">api + infra</span></div>
+          <div class="note" style="margin-top:10px"><span>↳</span><span><b>唯一例外：</b><code>launch.py</code> 可以同时 import <code>infra/server</code> 与 <code>api/app</code>；其它模块不允许双向依赖。</span></div>
+          <div class="module-table">
+            <div class="module-cell"><b>infra/agents</b><span>运行时 / 专家 / 团队 / 记忆</span></div>
+            <div class="module-cell"><b>infra/gateway</b><span>IM / WS / slash / HITL</span></div>
+            <div class="module-cell"><b>infra/apps</b><span>MiniApp 数据与沙箱</span></div>
+            <div class="module-cell"><b>infra/connectors</b><span>连接器 / OAuth / MCP</span></div>
+            <div class="module-cell"><b>api/routers</b><span>HTTP 适配，保持薄</span></div>
+            <div class="module-cell"><b>dashboard</b><span>React SPA，只走 /api</span></div>
+          </div>
+        </div>
+        <div class="bans">
+          <h3>硬性禁止</h3>
+          <div class="ban"><span class="x">×</span><span><code>infra/</code> import <code>api/</code>、<code>cli/</code> 或 <code>launch.py</code></span></div>
+          <div class="ban"><span class="x">×</span><span><code>api/</code> import <code>cli/</code> 或 <code>launch.py</code></span></div>
+          <div class="ban"><span class="x">×</span><span><code>cli/</code> import <code>api/</code>（用 <code>launch.py</code> 起服务）</span></div>
+          <div class="ban"><span class="x">×</span><span><code>infra/db/repos/</code> import 非 DB 的 <code>infra</code> 包</span></div>
+          <div class="ban"><span class="x">×</span><span><code>infra/utils/</code> import 非 utils 的 <code>infra</code> 包</span></div>
+          <div class="ban"><span class="x">×</span><span>在 router / CLI 里复制领域规则；规则应回到 <code>infra/</code></span></div>
+          <div class="ban"><span class="x">×</span><span>在异步函数里做阻塞 I/O；用 <code>run_in_executor</code></span></div>
+          <div class="note" style="margin-top:9px"><span>↳</span><span><b>验证：</b><code>make all</code> 是默认交付门槛：format + lint + typecheck + test。</span></div>
+        </div>
+      </div>
+      <div class="grid-3" style="margin-top:10px">
+        <div class="mini-card"><b>HTTP 入口</b><span><code>api/routers</code>：校验、鉴权、映射错误；不写领域规则。</span></div>
+        <div class="mini-card"><b>领域逻辑</b><span><code>infra/*</code>：业务规则、编排、持久化与外部调用。</span></div>
+        <div class="mini-card"><b>数据变更</b><span><code>migrations</code> + <code>repos</code>：双栈 SQL、编号成对、版本断言。</span></div>
+      </div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>边界不是限制，是让改动可以被<b>定位、测试、回退</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>14</b> · 代码地图</span><span class="pg">15 / 19</span></div>
+  </section>
+
+  <!-- 16 security -->
+  <section class="slide theme-ops">
+    <div class="kicker"><span class="num">15</span> Operations / 安全</div>
+    <h2>默认最小暴露：认证、授权、审批、隔离、脱敏</h2>
+    <p class="sub">安全不是单点开关，而是五层叠加；每一层都能单独验证，也都能在出问题时留下证据。</p>
+    <div class="body">
+      <div class="sec-grid">
+        <div class="sec-card">
+          <span class="ic"><svg><use href="#i-key"/></svg></span>
+          <h3>认证</h3>
+          <ul class="clean"><li>JWT</li><li>邀请码</li><li>OIDC SSO</li><li>LDAP</li></ul>
+        </div>
+        <div class="sec-card">
+          <span class="ic"><svg><use href="#i-users"/></svg></span>
+          <h3>授权</h3>
+          <ul class="clean"><li>用户级 ACL</li><li>Agent 归属校验</li><li>应用协作者</li><li>管理员绕过审计</li></ul>
+        </div>
+        <div class="sec-card">
+          <span class="ic"><svg><use href="#i-shield"/></svg></span>
+          <h3>审批</h3>
+          <ul class="clean"><li>HITL 工具审批</li><li><code>app_delete</code> 强制</li><li>Shell guard</li><li>频道内审批</li></ul>
+        </div>
+        <div class="sec-card">
+          <span class="ic"><svg><use href="#i-lock"/></svg></span>
+          <h3>隔离</h3>
+          <ul class="clean"><li>MiniApp 沙箱 iframe</li><li>无 JWT / 无网络</li><li>Docker 沙箱可选</li><li>按 Agent 工作区</li></ul>
+        </div>
+        <div class="sec-card">
+          <span class="ic"><svg><use href="#i-db"/></svg></span>
+          <h3>数据</h3>
+          <ul class="clean"><li>PII 检测 / 脱敏</li><li>secrets 加密</li><li>audit_log</li><li>备份 / 恢复</li></ul>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top:12px">
+        <div class="card">
+          <h3>MiniApp 的双层沙箱</h3>
+          <p>页面在无 JWT、无网络的 iframe 中运行；所有 I/O 经宿主 bridge，按能力清单裁剪。公开链接只读，PII 统一脱敏，发布快照冻结 HTML 与表结构。</p>
+        </div>
+        <div class="card">
+          <h3>部署边界要诚实</h3>
+          <p>默认是可信内网的单节点，Agent 工作区默认 host-rooted；插件是进程内 Python，与 MiniApp 是两套信任模型。生产建议 Docker / 独立账号 + TLS + 最小权限。</p>
+        </div>
+      </div>
+      <div class="note"><span>↳</span><span><b>审计现状：</b>管理动作已进 <code>audit_log</code>；工具级「谁 → 何时 → 什么权限 → 调了什么 → 结果」将随能力合约补齐。</span></div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>安全的目标不是零信任一切，而是让每次越界都<b>可解释、可阻断、可追责</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>15</b> · 安全与隐私</span><span class="pg">16 / 19</span></div>
+  </section>
+
+  <!-- 17 ops -->
+  <section class="slide theme-ops">
+    <div class="kicker"><span class="num">16</span> Operations / 部署</div>
+    <h2>一个 wheel，一条命令，一套数据目录</h2>
+    <p class="sub">安装脚本会准备隔离的 Python 3.12 环境；首启向导完成账号、数据库与 TLS 配置，之后交给系统服务。</p>
+    <div class="body">
+      <div class="ops-layout">
+        <div>
+          <pre class="code"><span class="c"># 安装并初始化</span>
+pip install octop
+octop init
+
+<span class="c"># 启动（默认 http://127.0.0.1:8088）</span>
+octop run
+
+<span class="c"># 作为系统服务</span>
+octop service start
+
+<span class="c"># 备份 / 原地升级</span>
+octop backup
+octop update</pre>
+          <div class="chips" style="margin-top:9px"><span class="chip">Docker Compose</span><span class="chip">Windows / macOS / Linux</span><span class="chip">FnOS</span><span class="chip">PWA</span><span class="chip">SQLite / PostgreSQL</span></div>
+        </div>
+        <div>
+          <pre class="tree">~/.octop/
+├── config.json          <span class="c"># 进程配置（可选 database 段）</span>
+├── octop.db             <span class="c"># SQLite 控制面</span>
+├── secrets/             <span class="c"># JWT / 通道 token</span>
+├── agents/&lt;agent_id&gt;/   <span class="c"># 每 Agent 工作区</span>
+├── security/tool_guard/ <span class="c"># Shell 防护规则</span>
+├── logs/                <span class="c"># 运行日志</span>
+├── venv/                <span class="c"># 安装器管理的 Python</span>
+└── bin/octop            <span class="c"># PATH 包装</span></pre>
+          <div class="ops-list">
+            <div class="ops-item"><span class="ok">✓</span><span><b>首启向导</b>：账号、数据库、模型一次配好</span></div>
+            <div class="ops-item"><span class="ok">✓</span><span><b>TLS</b>：Let's Encrypt 自动签发与续期</span></div>
+            <div class="ops-item"><span class="ok">✓</span><span><b>服务</b>：systemd / launchd 安装与托管</span></div>
+            <div class="ops-item"><span class="ok">✓</span><span><b>备份</b>：手动 / 自动；应用级 zip 备份</span></div>
+            <div class="ops-item"><span class="ok">✓</span><span><b>升级</b>：原地更新 wheel 并重启服务</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="note"><span>↳</span><span><b>运行前提：</b>SQLite 默认，PostgreSQL 可选；除 LLM provider 外无必需外部服务；备份覆盖控制面与工作区，恢复后重启服务。</span></div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>交付不是把服务跑起来，而是把<b>升级、备份与恢复</b>也交给用户。</span></div>
+    </div>
+    <div class="footer"><span><b>16</b> · 部署与运维</span><span class="pg">17 / 19</span></div>
+  </section>
+
+  <!-- 18 boundary / roadmap -->
+  <section class="slide theme-road">
+    <div class="kicker"><span class="num">17</span> Roadmap / 边界</div>
+    <h2>能承诺什么，不能承诺什么</h2>
+    <p class="sub">把边界说清楚，比多列十个功能更能建立信任。单节点是部署选择，也是责任边界。</p>
+    <div class="body">
+      <div class="promise">
+        <div class="promise-card good">
+          <h3>现在可以承诺</h3>
+          <p class="phint">已交付、可验证、可演示</p>
+          <ul class="checks">
+            <li>单节点多用户、多 Agent；JWT + 资源 ACL</li>
+            <li>10 类 IM + Web + CLI + API 共享同一运行时</li>
+            <li>MiniApp 数据 / 界面 / 发布 / 备份 / 权限</li>
+            <li>31 个连接器 + MCP + 外部事件 + Cron</li>
+            <li>自托管运维全套：TLS / 备份 / 服务 / 升级</li>
+          </ul>
+        </div>
+        <div class="promise-card careful">
+          <h3>不要过度承诺</h3>
+          <p class="phint">能力边界与责任边界</p>
+          <ul class="warns">
+            <li>不是多租户 SaaS 集群；每客户 / 团队一个实例</li>
+            <li>不是分布式内核；跨节点用 Bridge 或外部协调层</li>
+            <li>MiniApp 不是权威业务库，单表 2 万行上限</li>
+            <li>团队自治是 bounded agentic，L3 仍在推进</li>
+            <li>默认 host workspace；强隔离需 Docker / 账号边界</li>
+          </ul>
+        </div>
+      </div>
+      <div class="roadmap">
+        <span class="chip strong">Roadmap</span><span class="chip">执行隔离 / 配额</span><span class="chip">能力合约 / 三态策略</span><span class="chip">统一调度 / 租约</span><span class="chip">预算 / 计费</span><span class="chip">可观测 / 成本归因</span><span class="chip">MiniApp 包版本化 / 市场</span>
+      </div>
+      <div class="grid-3" style="margin-top:9px">
+        <div class="mini-card"><b>要私有化？</b><span>每团队 / 客户一个实例，数据不出节点。</span></div>
+        <div class="mini-card"><b>要多入口？</b><span>IM + Web + CLI + API 共享同一运行时。</span></div>
+        <div class="mini-card"><b>要交付应用？</b><span>Agent 产出可直接变成 MiniApp 与公开链接。</span></div>
+      </div>
+      <div class="quote">单节点不是限制，是部署与责任边界：一个团队 / 客户一个实例，数据不出节点。</div>
+      <div class="takeaway"><span class="tk">Takeaway</span><span>把边界说清楚，比多列十个功能更能建立<b>信任</b>。</span></div>
+    </div>
+    <div class="footer"><span><b>17</b> · 边界与路线</span><span class="pg">18 / 19</span></div>
+  </section>
+
+  <!-- 19 closing -->
+  <section class="slide closing">
+    <div class="closing-inner">
+      <div class="closing-left">
+        <div class="kicker"><span class="num" style="border-color:rgba(94,234,212,.3);background:rgba(94,234,212,.1)">18</span> Get started</div>
+        <h2>一个进程，一套数据，<br>一群 Agent。</h2>
+        <p class="sub">从个人助理到团队数字员工，从对话到可交付的应用。OctopOS 让 Agent 在你的服务器上工作，而不是把你的数据交给别人的云。</p>
+        <pre class="code"><span class="c"># 三条命令开始</span>
+pip install octop
+octop init
+octop run   <span class="c"># http://127.0.0.1:8088</span></pre>
+        <div class="closing-links">
+          <span class="chip">GitHub · yueshi/OctopOS</span><span class="chip">PyPI · octop</span><span class="chip">docs/architecture.md</span><span class="chip">docs/miniapp-overview.md</span><span class="chip">docs/event-model.md</span><span class="chip">/api/docs</span>
+        </div>
+        <div class="closing-values">
+          <div class="closing-value"><b>单进程</b><span>部署简单</span></div>
+          <div class="closing-value"><b>数据本机</b><span>边界清晰</span></div>
+          <div class="closing-value"><b>多入口</b><span>同一运行时</span></div>
+          <div class="closing-value"><b>可交付</b><span>对话到应用</span></div>
+        </div>
+      </div>
+      <div class="closing-mark">
+        <svg class="big-mark"><use href="#i-octopus"/></svg>
+        <div class="qa">Q&amp;A</div>
+        <div class="qa-sub">Thanks for watching</div>
+      </div>
+    </div>
+    <div class="footer"><span><b>OctopOS</b> · 功能与架构导览 · 2026.11 · snapshot v44</span><span class="pg">19 / 19</span></div>
+  </section>
+
+</div></div>
+
+<div class="hint">← → 翻页 · Home / End 首尾 · F 全屏 · P 打印</div>
+<div class="hud">
+  <button id="prev" title="上一页" aria-label="上一页">‹</button>
+  <span id="pageno">1 / 19</span>
+  <button id="next" title="下一页" aria-label="下一页">›</button>
+  <button id="fs" title="全屏" aria-label="全屏">⛶</button>
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var cur = 0;
+  var bar = document.getElementById('bar');
+  var pageno = document.getElementById('pageno');
+  var stage = document.getElementById('stage');
+
+  function show(i){
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach(function(s, k){ s.classList.toggle('active', k === cur); });
+    pageno.textContent = (cur + 1) + ' / ' + slides.length;
+    bar.style.width = ((cur + 1) / slides.length * 100) + '%';
+    if (history.replaceState) history.replaceState(null, '', '#' + (cur + 1));
+  }
+  function fit(){
+    var pad = 28;
+    var s = Math.min((window.innerWidth - pad) / 1280, (window.innerHeight - pad) / 720);
+    s = Math.max(0.2, Math.min(s, 1.4));
+    stage.style.transform = 'scale(' + s + ')';
+  }
+  function fs(){
+    try{
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    }catch(e){}
+  }
+  document.getElementById('prev').addEventListener('click', function(){ show(cur - 1); });
+  document.getElementById('next').addEventListener('click', function(){ show(cur + 1); });
+  document.getElementById('fs').addEventListener('click', fs);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { show(cur + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { show(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') { show(0); e.preventDefault(); }
+    else if (e.key === 'End') { show(slides.length - 1); e.preventDefault(); }
+    else if (e.key === 'f' || e.key === 'F') { fs(); }
+    else if (e.key === 'p' || e.key === 'P') { window.print(); }
+  });
+  var tx = 0, ty = 0;
+  document.addEventListener('touchstart', function(e){
+    if (!e.touches || e.touches.length !== 1) return;
+    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+  }, {passive:true});
+  document.addEventListener('touchend', function(e){
+    if (!e.changedTouches || e.changedTouches.length !== 1) return;
+    var dx = e.changedTouches[0].clientX - tx;
+    var dy = e.changedTouches[0].clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) show(cur + (dx < 0 ? 1 : -1));
+  }, {passive:true});
+  window.addEventListener('resize', fit);
+  var h = parseInt((location.hash || '').replace('#', ''), 10);
+  show(isNaN(h) ? 0 : h - 1);
+  fit();
+})();
+</script>
+</body>
+</html>

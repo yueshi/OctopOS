@@ -1,0 +1,1090 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="OctopOS 用户向介绍：7 个真实场景、解决方案与功能全景。">
+<meta name="theme-color" content="#1b1411">
+<title>OctopOS · 场景与解决方案</title>
+<style>
+  :root{
+    --ink:#1f2933;
+    --muted:#5f6b7a;
+    --faint:#8a7665;
+    --line:#e9dfd3;
+    --paper:#fbf7f0;
+    --card:#fffdf9;
+    --coral:#c2410c;
+    --coral-soft:#fdeee5;
+    --coral-deep:#9a3412;
+    --teal:#0f766e;
+    --teal-soft:#e6f4f1;
+    --amber:#b45309;
+    --amber-soft:#fdf1df;
+    --blue:#0369a1;
+    --blue-soft:#e7f2fa;
+    --violet:#6d28d9;
+    --violet-soft:#f0eafd;
+    --green:#047857;
+    --green-soft:#e8f6f0;
+    --red:#b91c1c;
+    --red-soft:#fdeeee;
+    --stage-w:1280px;
+    --stage-h:720px;
+    --font:"Inter","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:"SFMono-Regular","Cascadia Code","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    overflow:hidden;color:var(--ink);
+    background:
+      radial-gradient(760px 480px at 8% 0%,rgba(194,65,12,.08),transparent 62%),
+      radial-gradient(760px 480px at 96% 100%,rgba(15,118,110,.09),transparent 62%),
+      #f2ece3;
+    font-family:var(--font);-webkit-font-smoothing:antialiased;
+  }
+  #viewport{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:14px}
+  #stage{width:var(--stage-w);height:var(--stage-h);position:relative;transform-origin:center center;flex:none}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden;
+    padding:36px 56px 44px;border-radius:18px;
+    background:
+      radial-gradient(760px 480px at 100% 0%,var(--sec-soft),transparent 58%),
+      radial-gradient(520px 340px at 0% 100%,rgba(15,118,110,.035),transparent 65%),
+      var(--paper);
+    box-shadow:0 22px 64px rgba(58,38,22,.17);
+    --sec:var(--coral);--sec-soft:var(--coral-soft);
+  }
+  .slide.active{display:flex;animation:rise .42s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){.slide.active{animation:none}}
+  .slide::before{
+    content:"";position:absolute;left:0;right:0;top:0;height:4px;z-index:0;
+    background:linear-gradient(90deg,var(--sec),transparent 74%);
+  }
+  .slide::after{
+    content:"";position:absolute;right:-150px;top:-160px;width:390px;height:390px;border-radius:50%;
+    background:radial-gradient(circle,var(--sec-soft) 0%,transparent 68%);opacity:.8;pointer-events:none;z-index:0;
+  }
+  .slide>*{position:relative;z-index:1}
+  .theme-scenario{--sec:var(--coral);--sec-soft:var(--coral-soft)}
+  .theme-product{--sec:var(--teal);--sec-soft:var(--teal-soft)}
+  .theme-plan{--sec:var(--blue);--sec-soft:var(--blue-soft)}
+  .theme-why{--sec:var(--amber);--sec-soft:var(--amber-soft)}
+  .theme-private{--sec:var(--violet);--sec-soft:var(--violet-soft)}
+
+  .kicker{display:flex;align-items:center;gap:9px;font-size:10.5px;font-weight:850;letter-spacing:.15em;color:var(--sec);text-transform:uppercase}
+  .kicker .num{display:inline-flex;align-items:center;justify-content:center;min-width:27px;height:20px;padding:0 6px;border:1px solid var(--sec);border-radius:6px;background:var(--sec-soft);font-size:9.3px;letter-spacing:.04em}
+  h2{margin:7px 0 4px;font-size:30px;line-height:1.22;letter-spacing:-.018em;font-weight:850}
+  .sub{margin:0 0 14px;max-width:1080px;color:var(--muted);font-size:13.4px;line-height:1.56}
+  .body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-start;padding-top:2px}
+  .footer{position:absolute;left:56px;right:56px;bottom:14px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line);padding-top:8px;color:var(--faint);font-size:10.2px;letter-spacing:.02em;z-index:2}
+  .footer b{color:var(--sec)}
+  .footer .pg{font-variant-numeric:tabular-nums}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:13px 15px;box-shadow:0 6px 18px rgba(80,55,35,.045)}
+  .card h3{margin:0 0 5px;font-size:13.5px;font-weight:800;line-height:1.3}
+  .card p{margin:0;color:var(--muted);font-size:11.3px;line-height:1.5}
+  .ic{width:31px;height:31px;border-radius:9px;background:var(--sec-soft);color:var(--sec);display:inline-flex;align-items:center;justify-content:center;flex:none}
+  .ic svg{width:16px;height:16px}
+  .ic.sm{width:24px;height:24px;border-radius:7px}
+  .ic.sm svg{width:13px;height:13px}
+
+  .chips{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border:1px solid #ece1d4;border-radius:999px;background:#f8f1e8;color:#6b5a4c;font-size:10.4px;white-space:nowrap}
+  .chip.strong{background:var(--sec-soft);border-color:transparent;color:var(--sec);font-weight:750}
+  .chip.green{background:var(--green-soft);border-color:transparent;color:var(--green);font-weight:750}
+  .chip.amber{background:var(--amber-soft);border-color:transparent;color:var(--amber);font-weight:750}
+  .chip.gray{background:#f3eee7;border-color:transparent;color:#8a7665}
+
+  ul.clean{list-style:none;margin:0;padding:0}
+  ul.clean li{position:relative;padding:3px 0 3px 14px;color:var(--muted);font-size:11.3px;line-height:1.5}
+  ul.clean li::before{content:"";position:absolute;left:1px;top:9px;width:4px;height:4px;border-radius:50%;background:var(--sec);opacity:.55}
+  ul.clean li b{color:var(--ink)}
+  ul.checks{list-style:none;margin:0;padding:0}
+  ul.checks li{position:relative;padding:4px 0 4px 21px;color:var(--muted);font-size:11.5px;line-height:1.5}
+  ul.checks li::before{content:"✓";position:absolute;left:0;top:4px;width:14px;height:14px;border-radius:50%;background:var(--green-soft);color:var(--green);font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center}
+  ul.warns{list-style:none;margin:0;padding:0}
+  ul.warns li{position:relative;padding:4px 0 4px 21px;color:var(--muted);font-size:11.5px;line-height:1.5}
+  ul.warns li::before{content:"!";position:absolute;left:0;top:4px;width:14px;height:14px;border-radius:50%;background:var(--amber-soft);color:var(--amber);font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center}
+
+  .note{display:flex;align-items:flex-start;gap:8px;margin-top:10px;padding:8px 11px;border:1px solid var(--line);border-left:3px solid var(--sec);border-radius:0 8px 8px 0;background:#fffdf9;color:var(--muted);font-size:10.6px;line-height:1.5}
+  .note b{color:var(--ink)}
+  .boundary{margin-top:8px;color:#8a7665;font-size:9.7px;line-height:1.5;border-top:1px dashed #e4d8ca;padding-top:6px}
+  .boundary b{color:#6b5a4c}
+  .insight{display:flex;align-items:flex-start;gap:8px;margin-top:auto;padding:9px 12px;border-radius:9px;background:var(--sec-soft);color:#7c2d12;font-size:11px;font-weight:650;line-height:1.45}
+  .insight b{color:var(--sec)}
+  .insight .tk{flex:none;font-size:8.8px;font-weight:850;letter-spacing:.12em;text-transform:uppercase;color:var(--sec);padding-top:1px}
+
+  /* ---------- cover ---------- */
+  .cover{
+    padding:0;color:#fff7ed;
+    background:
+      radial-gradient(820px 540px at 88% 0%,rgba(251,146,60,.24),transparent 60%),
+      radial-gradient(700px 540px at 0% 105%,rgba(13,148,136,.18),transparent 62%),
+      linear-gradient(145deg,#1b1411 0%,#2a1c15 52%,#35231a 100%);
+  }
+  .cover::before{background:linear-gradient(90deg,#fb923c,#2dd4bf 48%,transparent 92%);height:6px}
+  .cover::after{
+    right:0;top:0;width:100%;height:100%;border-radius:0;opacity:1;
+    background-image:linear-gradient(rgba(255,255,255,.032) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.032) 1px,transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(circle at 76% 42%,#000 10%,transparent 72%);
+    mask-image:radial-gradient(circle at 76% 42%,#000 10%,transparent 72%);
+  }
+  .cover-inner{position:relative;z-index:2;display:grid;grid-template-columns:1.04fr .96fr;gap:26px;height:100%;padding:54px 60px 66px}
+  .cover-left{display:flex;flex-direction:column;min-width:0}
+  .brandline{display:flex;align-items:center;gap:11px;color:#fdba74;font-size:10.8px;font-weight:850;letter-spacing:.28em;text-transform:uppercase}
+  .brandline .mark{width:29px;height:29px;color:#fbbf24}
+  .brandline .sep{width:24px;height:1px;background:rgba(251,191,36,.4)}
+  .cover h1{margin:26px 0 10px;font-size:53px;line-height:1.12;letter-spacing:-.03em;font-weight:900;color:#fff}
+  .cover h1 em{font-style:normal;background:linear-gradient(92deg,#fff 20%,#fdba74 65%,#fbbf24 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .cover .tagline{margin:0;color:#f1d8c6;font-size:19px;line-height:1.5;font-weight:600;max-width:560px}
+  .cover .lede{margin:12px 0 0;max-width:570px;color:#c8aa96;font-size:12.8px;line-height:1.65}
+  .cover-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:auto;padding-top:24px;max-width:600px}
+  .cstat{border:1px solid rgba(255,255,255,.13);border-radius:10px;padding:8px 10px;background:rgba(255,255,255,.055);backdrop-filter:blur(6px)}
+  .cstat b{display:block;font-size:21px;line-height:1.1;font-weight:850;color:#fdba74;font-variant-numeric:tabular-nums}
+  .cstat span{display:block;margin-top:3px;color:#b99e8c;font-size:10px;line-height:1.3}
+  .cover-meta{display:flex;align-items:center;gap:16px;margin-top:16px;color:#a98d7a;font-size:10.7px;flex-wrap:wrap}
+  .cover-meta b{color:#f3d9c7;font-weight:650}
+  .cover .footer{left:60px;right:60px;bottom:16px;border-top-color:rgba(255,255,255,.13);color:#9f8372}
+  .cover .footer b{color:#fdba74}
+
+  .hero-stack{position:relative;min-width:0;height:100%}
+  .hero-ring{position:absolute;left:50%;top:48%;width:360px;height:360px;border:1px solid rgba(251,191,36,.14);border-radius:50%;transform:translate(-50%,-50%)}
+  .hero-ring::after{content:"";position:absolute;inset:38px;border:1px solid rgba(45,212,191,.12);border-radius:50%}
+  .float-card{position:absolute;background:#fffaf3;color:#2b211a;border:1px solid rgba(255,255,255,.5);border-radius:14px;box-shadow:0 18px 42px rgba(0,0,0,.3);padding:11px 13px}
+  .fc-chat{left:0;top:34px;width:310px;transform:rotate(-2deg)}
+  .fc-app{right:0;top:196px;width:286px;transform:rotate(2deg)}
+  .fc-remind{left:34px;bottom:52px;width:286px;transform:rotate(-1deg)}
+  .hero-label{display:flex;align-items:center;gap:6px;font-size:8.6px;font-weight:850;letter-spacing:.1em;text-transform:uppercase;color:#c2410c;margin-bottom:6px}
+  .hero-label .dot{width:6px;height:6px;border-radius:50%;background:#fb923c}
+  .hero-msg{font-size:10.4px;line-height:1.5;color:#4a3a2e}
+  .hero-msg.user{background:#fdeee5;border-radius:8px;padding:6px 8px;margin-bottom:6px}
+  .hero-msg.bot{background:#f3faf7;border-radius:8px;padding:6px 8px;color:#1f4d45}
+  .hero-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:7px 0 6px}
+  .hero-kpi{background:#fdf6ef;border:1px solid #f0e2d3;border-radius:7px;padding:5px 6px}
+  .hero-kpi b{display:block;font-size:14px;color:#c2410c;line-height:1.1}
+  .hero-kpi span{display:block;font-size:7.6px;color:#8a7665;margin-top:1px}
+  .hero-bars{display:flex;align-items:flex-end;gap:4px;height:28px}
+  .hero-bars i{display:block;flex:1;background:#f7d5c2;border-radius:3px 3px 1px 1px}
+  .hero-bars i.hot{background:#ea580c}
+  .hero-remind .row{display:flex;align-items:center;gap:7px;font-size:10px;color:#4a3a2e;line-height:1.45}
+  .hero-remind .time{font-size:15px;font-weight:850;color:#0f766e}
+  .hero-remind .small{display:block;color:#8a7665;font-size:8.4px;margin-top:2px}
+
+  /* ---------- generic grids ---------- */
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+
+  /* ---------- day layout ---------- */
+  .day-layout{display:grid;grid-template-columns:1.22fr .78fr;gap:16px;height:100%}
+  .vtimeline{display:flex;flex-direction:column;gap:7px;justify-content:center}
+  .vday{display:grid;grid-template-columns:46px 12px 1fr;gap:8px;align-items:stretch;min-height:66px}
+  .vtime{font-size:10.4px;font-weight:850;color:var(--sec);padding-top:10px;text-align:right;font-variant-numeric:tabular-nums}
+  .vdot{position:relative;display:flex;justify-content:center}
+  .vdot::before{content:"";position:absolute;top:0;bottom:-7px;width:2px;background:#eadccd}
+  .vday:last-child .vdot::before{bottom:50%}
+  .vdot::after{content:"";position:absolute;top:11px;width:9px;height:9px;border-radius:50%;background:var(--sec);box-shadow:0 0 0 4px var(--sec-soft)}
+  .vcard{border:1px solid var(--line);border-radius:10px;padding:7px 10px;background:#fffdf9}
+  .vcard h3{font-size:11.2px;margin:0 0 2px;line-height:1.3}
+  .vcard p{font-size:9.5px;line-height:1.45;color:var(--muted);margin:0}
+  .vcard .chip{margin-top:3px;font-size:8.4px;padding:2px 6px}
+  .day-panel{border:1px solid var(--line);border-radius:14px;padding:14px 15px;background:linear-gradient(180deg,#fffdf9,#fdf6ee);display:flex;flex-direction:column;justify-content:space-between}
+  .dp-kicker{font-size:9.1px;font-weight:850;letter-spacing:.12em;text-transform:uppercase;color:var(--sec);margin-bottom:8px}
+  .day-stats{display:grid;grid-template-columns:1fr;gap:7px}
+  .day-stat{display:flex;align-items:baseline;gap:8px;border-bottom:1px dashed #e8dccd;padding-bottom:5px}
+  .day-stat b{font-size:23px;color:var(--sec);line-height:1;min-width:42px;font-variant-numeric:tabular-nums}
+  .day-stat span{font-size:10px;color:var(--muted);line-height:1.35}
+  .dp-quote{margin-top:9px;padding:9px 10px;border-left:3px solid var(--sec);background:var(--sec-soft);border-radius:0 8px 8px 0;font-size:11px;line-height:1.5;color:#6b3a20;font-weight:650}
+  .dp-deliver{padding-top:10px;border-top:1px dashed #e8dccd;display:flex;flex-direction:column;gap:5px}
+  .dp-row{display:flex;justify-content:space-between;gap:8px;font-size:9.6px;color:var(--muted);line-height:1.4}
+  .dp-row b{color:var(--ink);font-weight:750}
+
+  /* ---------- day timeline ---------- */
+  .dayline{position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding-top:18px}
+  .dayline::before{content:"";position:absolute;left:4px;right:4px;top:24px;height:2px;background:linear-gradient(90deg,var(--sec),#eadccd 72%,transparent)}
+  .day{position:relative;min-width:0}
+  .day .dot{width:11px;height:11px;border-radius:50%;background:var(--sec);border:2px solid var(--paper);margin:0 0 10px 4px;position:relative;z-index:1;box-shadow:0 0 0 4px var(--sec-soft)}
+  .day .time{font-size:11px;font-weight:850;color:var(--sec);margin-bottom:3px}
+  .day-card{background:#fffdf9;border:1px solid var(--line);border-radius:12px;padding:9px 10px;min-height:126px;box-shadow:0 4px 12px rgba(80,55,35,.04)}
+  .day-card h3{font-size:11.8px;margin:0 0 4px;line-height:1.3}
+  .day-card p{font-size:9.8px;line-height:1.45;color:var(--muted);margin:0}
+  .day-card .mini{margin-top:6px}
+
+  /* ---------- pain cards ---------- */
+  .pain-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(3,1fr);gap:9px;height:100%}
+  .pain-card{border:1px solid var(--line);border-radius:13px;padding:12px 14px;background:#fffdf9;display:flex;gap:10px;align-items:flex-start}
+  .pain-card .ic{width:30px;height:30px;border-radius:8px;background:#fdf0e8;color:#c2410c}
+  .pain-card .ic svg{width:15px;height:15px}
+  .pain-card h3{margin:0 0 3px;font-size:12.6px}
+  .pain-card p{margin:0;color:var(--muted);font-size:10.6px;line-height:1.45}
+  .pain-card .after{display:block;margin-top:5px;color:var(--sec);font-size:9.6px;font-weight:700;letter-spacing:.01em}
+
+  /* ---------- value / flow ---------- */
+  .value-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .value-card{border:1px solid var(--line);border-radius:15px;padding:16px 16px;background:linear-gradient(180deg,#fffdf9,#fdf8f1);display:flex;flex-direction:column;min-height:300px}
+  .value-card .ic{width:42px;height:42px;border-radius:12px;margin-bottom:10px}
+  .value-card .ic svg{width:21px;height:21px}
+  .value-card h3{margin:0 0 6px;font-size:18px}
+  .value-card p{margin:0;color:var(--muted);font-size:11.8px;line-height:1.55}
+  .value-card ul.clean{margin-top:7px}
+  .value-card ul.clean li{font-size:10.5px;padding:2.5px 0 2.5px 13px}
+  .value-card .before{margin-top:auto;padding-top:8px;border-top:1px dashed #e8dccd;color:var(--faint);font-size:9.4px;line-height:1.4}
+  .value-card .chips{padding-top:8px}
+  .flow{display:flex;align-items:stretch;margin-top:12px}
+  .flow-node{flex:1;border:1px solid var(--line);border-radius:11px;padding:9px 11px;background:#fffdf9;min-width:0}
+  .flow-node b{display:block;font-size:11.2px;margin-bottom:2px}
+  .flow-node span{display:block;color:var(--muted);font-size:9.8px;line-height:1.4}
+  .flow-node.hot{border-color:var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft))}
+  .flow-arrow{display:flex;align-items:center;padding:0 6px;color:#c4b3a2;font-size:13px;flex:none}
+
+  /* ---------- scenario map ---------- */
+  .scenario-grid{display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);gap:9px}
+  .scenario-card{border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:#fffdf9;display:flex;flex-direction:column;min-height:178px}
+  .scenario-card .sc-top{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px}
+  .scenario-card .sc-num{font-size:8.4px;font-weight:850;letter-spacing:.12em;color:var(--sec)}
+  .scenario-card .sc-poc{font-size:8.2px;color:#9a8877;white-space:nowrap}
+  .scenario-card h3{margin:0 0 3px;font-size:11.6px;line-height:1.3}
+  .scenario-card .persona{color:#8a7665;font-size:9.3px;line-height:1.35;margin-bottom:4px}
+  .scenario-card .chips{gap:4px}
+  .scenario-card .chip{font-size:8.6px;padding:2px 6px}
+  .scenario-card .deliver{margin-top:auto;padding-top:5px;border-top:1px dashed #eee3d6;color:var(--muted);font-size:8.8px;line-height:1.4}
+
+  /* ---------- story + mockup ---------- */
+  .scenario-layout{display:grid;grid-template-columns:1fr 1fr;gap:15px;min-height:0}
+  .story{display:flex;flex-direction:column;gap:9px;min-width:0}
+  .story-block{border:1px solid var(--line);border-radius:12px;padding:9px 11px;background:#fffdf9}
+  .story-block.pain{border-left:3px solid #d97706;background:#fffaf4}
+  .story-block.combo{border-left:3px solid var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft))}
+  .story-block.result{border-left:3px solid var(--green);background:#f8fcf9}
+  .sb-label{font-size:8.8px;font-weight:850;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px;color:var(--sec)}
+  .story-block.pain .sb-label{color:#b45309}
+  .story-block.result .sb-label{color:var(--green)}
+  .story-block ul{list-style:none;margin:0;padding:0}
+  .story-block li{position:relative;padding:2.5px 0 2.5px 12px;font-size:10.4px;line-height:1.45;color:var(--muted)}
+  .story-block li::before{content:"";position:absolute;left:1px;top:8px;width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.5}
+  .story-block li b{color:var(--ink)}
+  .story-block .chips{gap:4px}
+  .story-block .chip{font-size:9.3px;padding:2px 7px}
+
+  .mockup{background:#fff;border:1px solid #e6dcd0;border-radius:15px;box-shadow:0 16px 36px rgba(70,45,25,.13);overflow:hidden;min-width:0}
+  .mockup-bar{display:flex;align-items:center;gap:6px;padding:8px 11px;border-bottom:1px solid #f0e7dd;background:#fcf8f2}
+  .mockup-bar .dots{display:flex;gap:4px}
+  .mockup-bar .dot{width:6px;height:6px;border-radius:50%;background:#d8c8b8}
+  .mockup-bar .title{font-size:9.6px;color:#7a6a5b;font-weight:700;margin-left:4px}
+  .mockup-body{padding:11px 13px}
+  .mockup-foot{display:flex;align-items:center;gap:6px;padding:7px 11px;border-top:1px solid #f2e8de;background:#fdf9f4;font-size:8.6px;color:#9a8877}
+
+  .chat-row{display:flex;gap:7px;margin-bottom:8px;align-items:flex-start}
+  .chat-row.user{flex-direction:row-reverse}
+  .avatar{width:21px;height:21px;border-radius:50%;background:var(--sec-soft);color:var(--sec);font-size:8.4px;font-weight:850;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .avatar.human{background:#e7f2fa;color:#0369a1}
+  .bubble{max-width:84%;padding:7px 10px;border-radius:10px;background:#f6f0e8;font-size:10.1px;line-height:1.5;color:#3f332a}
+  .bubble.user{background:var(--sec);color:#fff}
+  .bubble .meta{display:block;margin-top:3px;font-size:7.8px;opacity:.62}
+  .bubble .cite{display:inline-block;margin-top:4px;padding:2px 6px;border-radius:5px;background:#fff;border:1px solid #eadfd3;color:#8a7665;font-size:7.8px}
+  .attach{display:flex;align-items:center;gap:7px;margin-top:5px;padding:6px 8px;border:1px solid #eadfd3;border-radius:7px;background:#fffdf9}
+  .attach .ic{width:21px;height:21px;border-radius:6px}
+  .attach .ic svg{width:11px;height:11px}
+  .attach b{display:block;font-size:8.8px;line-height:1.2}
+  .attach span{display:block;font-size:7.6px;color:#9a8877}
+
+  .kpi-row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px}
+  .kpi{border:1px solid #eee4d8;border-radius:9px;padding:6px 8px;background:#fdfaf6}
+  .kpi b{display:block;font-size:16px;color:var(--sec);line-height:1.05;font-weight:850}
+  .kpi span{display:block;font-size:8.1px;color:#7d6d5e;margin-top:2px}
+  .bars{display:flex;align-items:flex-end;gap:5px;height:58px;padding:2px 2px 0;margin-bottom:24px}
+  .bar{flex:1;background:var(--sec-soft);border-radius:4px 4px 2px 2px;position:relative}
+  .bar.hot{background:var(--sec)}
+  .bar span{position:absolute;bottom:-13px;left:-2px;right:-2px;text-align:center;font-size:7.2px;color:#9a8877}
+
+  .data-table{width:100%;border-collapse:collapse;font-size:8.5px}
+  .data-table th{font-size:7.4px;text-align:left;color:#8a7665;font-weight:800;letter-spacing:.04em;padding:3px 4px;border-bottom:1px solid #e9dfd3;background:#fbf5ed;white-space:nowrap}
+  .data-table td{padding:3.5px 4px;border-bottom:1px solid #f0e7dd;color:#5f6b7a;vertical-align:middle}
+  .data-table tr:last-child td{border-bottom:none}
+  .status{display:inline-block;padding:1px 5px;border-radius:999px;font-size:7.2px;font-weight:750;white-space:nowrap}
+  .status.blue{background:#e7f2fa;color:#0369a1}
+  .status.amber{background:#fdf1df;color:#b45309}
+  .status.green{background:#e8f6f0;color:#047857}
+  .status.red{background:#fdeeee;color:#b91c1c}
+  .status.violet{background:#f0eafd;color:#6d28d9}
+
+  .goal-card{border:1px solid var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft));border-radius:10px;padding:8px 10px;margin-bottom:7px}
+  .goal-card .gl{font-size:7.6px;font-weight:850;letter-spacing:.1em;text-transform:uppercase;color:var(--sec);margin-bottom:2px}
+  .goal-card b{display:block;font-size:10.6px;line-height:1.3}
+  .goal-card span{display:block;font-size:8.2px;color:#7d6d5e;margin-top:2px}
+  .board{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+  .board-col{background:#fbf5ed;border-radius:7px;padding:5px;min-width:0}
+  .board-col .bh{font-size:7.4px;font-weight:850;color:#8a7665;letter-spacing:.04em;margin-bottom:4px;white-space:nowrap}
+  .task{background:#fff;border:1px solid #eee3d6;border-radius:6px;padding:4px 5px;font-size:7.8px;line-height:1.35;color:#5f6b7a;margin-bottom:4px}
+  .task.hot{border-color:var(--sec);background:var(--sec-soft);color:#7c2d12}
+  .task b{display:block;font-size:8.2px;color:#3f332a;margin-bottom:1px}
+
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:9px}
+  .metric{border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:#fffdf9}
+  .metric b{display:block;font-size:12.2px;color:var(--sec);line-height:1.15;font-weight:850}
+  .metric span{display:block;font-size:8.4px;color:var(--muted);margin-top:1px}
+
+  /* ---------- feature / reason grids ---------- */
+  .feature-grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:10px}
+  .feature-card{border:1px solid var(--line);border-radius:13px;padding:13px 14px;background:#fffdf9;display:flex;flex-direction:column;min-height:172px}
+  .feature-card .hd{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .feature-card .hd h3{margin:0;font-size:13px}
+  .feature-card .ic{width:29px;height:29px;border-radius:8px}
+  .feature-card .ic svg{width:14px;height:14px}
+  .feature-card p{margin:0 0 5px;color:var(--muted);font-size:10.4px;line-height:1.5}
+  .feature-card .example{margin-top:5px;padding-top:5px;border-top:1px dashed #eee3d6;color:var(--faint);font-size:9px;line-height:1.4}
+  .feature-card .chips{margin-top:auto;gap:4px}
+  .feature-card .chip{font-size:8.8px;padding:2px 6px}
+
+  /* ---------- steps ---------- */
+  .steps4{display:flex;align-items:stretch}
+  .step{flex:1;border:1px solid var(--line);border-radius:12px;padding:10px 11px;background:#fffdf9;min-width:0}
+  .step .n{width:21px;height:21px;border-radius:50%;background:var(--sec);color:#fff;font-size:9.4px;font-weight:850;display:flex;align-items:center;justify-content:center;margin-bottom:6px}
+  .step h3{font-size:11.6px;margin:0 0 3px}
+  .step p{font-size:9.6px;line-height:1.45;color:var(--muted);margin:0}
+  .step .chip{margin-top:6px;font-size:8.4px;padding:2px 6px}
+  .step-arrow{display:flex;align-items:center;padding:0 5px;color:#c4b3a2;font-size:13px;flex:none}
+
+  /* ---------- compare / deploy ---------- */
+  .compare{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .compare-card{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:#fffdf9}
+  .compare-card.good{border-top:3px solid var(--green)}
+  .compare-card.bad{border-top:3px solid var(--amber)}
+  .compare-card h3{margin:0 0 3px;font-size:13px}
+  .compare-card .hint{margin:0 0 5px;color:#9a8877;font-size:9.4px}
+  .compare-card ul.checks li,.compare-card ul.warns li{font-size:10.8px}
+
+  .deploy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}
+  .deploy-card{border:1px solid var(--line);border-radius:14px;padding:12px 13px;background:#fffdf9;display:flex;flex-direction:column}
+  .deploy-card .ic{margin-bottom:6px}
+  .deploy-card h3{margin:0 0 3px;font-size:12.4px}
+  .deploy-card p{margin:0;color:var(--muted);font-size:10.2px;line-height:1.45}
+  .deploy-card .chips{margin-top:7px;gap:4px}
+  .deploy-card .chip{font-size:8.6px;padding:2px 6px}
+  .deploy-card ul.clean li{font-size:9.4px;padding:2px 0 2px 12px}
+  .mini-card{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:#fffdf9}
+  .mini-card b{display:block;font-size:10.6px;margin-bottom:2px}
+  .mini-card span{display:block;font-size:9.3px;color:var(--muted);line-height:1.4}
+
+  .code-strip{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:10px;padding:9px 12px;border-radius:9px;background:#241a14;color:#f3e6d8;font-family:var(--mono);font-size:10px;line-height:1.5}
+  .code-strip .cmd{color:#fbbf24}
+  .code-strip .sep{color:#7d6352}
+
+  /* ---------- closing ---------- */
+  .closing{
+    padding:0;color:#fff7ed;
+    background:
+      radial-gradient(780px 520px at 80% 12%,rgba(251,146,60,.22),transparent 60%),
+      radial-gradient(620px 460px at 6% 108%,rgba(45,212,191,.15),transparent 62%),
+      linear-gradient(145deg,#1b1411 0%,#2a1c15 56%,#34231a 100%);
+  }
+  .closing::before{background:linear-gradient(90deg,#fb923c,#2dd4bf 48%,transparent 92%);height:6px}
+  .closing::after{
+    right:0;top:0;width:100%;height:100%;opacity:1;border-radius:0;
+    background-image:linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(circle at 76% 40%,#000 10%,transparent 72%);
+    mask-image:radial-gradient(circle at 76% 40%,#000 10%,transparent 72%);
+  }
+  .closing-inner{position:relative;z-index:2;display:grid;grid-template-columns:1.08fr .92fr;gap:28px;height:100%;padding:52px 60px 66px}
+  .closing-left{display:flex;flex-direction:column;height:100%;min-width:0}
+  .closing .kicker{color:#fdba74}
+  .closing h2{margin:16px 0 8px;font-size:40px;line-height:1.2;color:#fff;letter-spacing:-.02em}
+  .closing .sub{color:#c8aa96;font-size:14px;max-width:590px}
+  .closing .next-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:18px;max-width:620px}
+  .next-step{border:1px solid rgba(255,255,255,.13);border-radius:11px;padding:9px 10px;background:rgba(255,255,255,.055)}
+  .next-step b{display:block;color:#fdba74;font-size:9px;letter-spacing:.12em;margin-bottom:3px}
+  .next-step span{display:block;color:#d8bfae;font-size:10.2px;line-height:1.4}
+  .closing-links{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+  .closing-links .chip{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.12);color:#c8aa96;font-size:9.4px}
+  .closing-quote{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.12);color:#d8bfae;font-size:12px;font-weight:650;line-height:1.5}
+  .closing .footer{left:60px;right:60px;bottom:16px;border-top-color:rgba(255,255,255,.13);color:#9f8372}
+  .closing .footer b{color:#fdba74}
+  .closing-mark{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0}
+  .big-mark{width:160px;height:160px;color:#fdba74;opacity:.95;filter:drop-shadow(0 0 34px rgba(251,146,60,.22))}
+  .closing-mark .qa{margin-top:16px;font-size:44px;font-weight:900;letter-spacing:.06em;color:#fff}
+  .closing-mark .qa-sub{margin-top:4px;color:#a98d7a;font-size:10.5px;letter-spacing:.22em;text-transform:uppercase}
+
+  /* ---------- nav ---------- */
+  .progress{position:fixed;left:0;right:0;top:0;height:3px;background:rgba(44,28,18,.08);z-index:50}
+  .progress #bar{height:100%;width:0;background:linear-gradient(90deg,#c2410c,#fb923c);transition:width .25s ease}
+  .nav-hint{position:fixed;left:50%;bottom:7px;transform:translateX(-50%);color:rgba(90,66,50,.58);font-size:10px;letter-spacing:.04em;z-index:40;pointer-events:none;white-space:nowrap}
+  .hud{position:fixed;right:16px;bottom:14px;display:flex;align-items:center;gap:5px;z-index:60;background:rgba(255,253,249,.9);border:1px solid rgba(210,195,180,.8);border-radius:10px;padding:4px;box-shadow:0 4px 16px rgba(58,38,22,.1);backdrop-filter:blur(8px)}
+  .hud button{border:0;background:transparent;color:#6b5a4c;width:26px;height:24px;border-radius:6px;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .hud button:hover{background:#f3eee7;color:#c2410c}
+  .hud #pageno{min-width:44px;text-align:center;color:#7a6a5b;font-size:10px;font-variant-numeric:tabular-nums}
+
+  @media print{
+    @page{size:1280px 720px;margin:0}
+    html,body{overflow:visible;background:#fff}
+    #viewport{position:static;display:block;padding:0}
+    #stage{width:1280px;height:auto;transform:none!important}
+    .slide{position:relative;inset:auto;display:flex!important;width:1280px;height:720px;border-radius:0;box-shadow:none;page-break-after:always;break-after:page}
+    .slide::before,.slide::after{display:none}
+    .progress,.nav-hint,.hud{display:none!important}
+  }
+</style>
+</head>
+<body>
+
+<svg aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8 9h8M8 12.2h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5c3.2-1 5.8-.4 8 1.2 2.2-1.6 4.8-2.2 8-1.2v13c-3.2-1-5.8-.4-8 1.2-2.2-1.6-4.8-2.2-8-1.2v-13Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 6.7v13" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.8 19c.4-3 2.5-4.8 5.2-4.8s4.8 1.8 5.2 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="17" cy="9.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16.4 14.5c2.1.1 3.6 1.6 3.9 3.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2.8 5.5 13h5.3l-1.3 8.2L18 10.6h-5.4L13 2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.2 19 6v5.4c0 4.2-2.8 7.3-7 9.4-4.2-2.1-7-5.2-7-9.4V6l7-2.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.8 12.1 2.1 2.1 4.4-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="15" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5c.6 4.8 2.7 6.9 7.5 7.5-4.8.6-6.9 2.7-7.5 7.5-.6-4.8-2.7-6.9-7.5-7.5 4.8-.6 6.9-2.7 7.5-7.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M18.5 15.5c.2 1.8 1 2.6 2.8 2.8-1.8.2-2.6 1-2.8 2.8-.2-1.8-1-2.6-2.8-2.8 1.8-.2 2.6-1 2.8-2.8Z" fill="currentColor" opacity=".8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7v5.4l3.5 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.8 12h16.4M12 3.5c2.3 2.3 3.4 5.1 3.4 8.5s-1.1 6.2-3.4 8.5c-2.3-2.3-3.4-5.1-3.4-8.5S9.7 5.8 12 3.5Z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 8.5h17" stroke="currentColor" stroke-width="1.6"/><circle cx="6.5" cy="6.5" r=".8" fill="currentColor"/><circle cx="9" cy="6.5" r=".8" fill="currentColor"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M8.5 3.5v5M15.5 3.5v5M6 8.5h12v3.2a6 6 0 0 1-6 6 6 6 0 0 1-6-6V8.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 17.7v2.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.7" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 6v12c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7V6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 12c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="17" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9 7.5V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8v1.7M3.5 12.5h17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7.8 12.2 2.8 2.8 5.6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 21 20H3L12 3.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 9v5M12 17.2v.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m7 9 3 3-3 3M12.5 15h4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h8l4 4v13H6v-17Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3.5v4h4M9 12h6M9 15.5h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7.5-4.4-7.5-10A4.2 4.2 0 0 1 12 7.5 4.2 4.2 0 0 1 19.5 10c0 5.6-7.5 10-7.5 10Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-octopus" viewBox="0 0 64 64"><circle cx="32" cy="25" r="12" fill="none" stroke="currentColor" stroke-width="4.5"/><path d="M20 34c-6 4-8 10-6.5 16.5M28 38c-3 6-3 12 0 18M36 38c3 6 3 12 0 18M44 34c6 4 8 10 6.5 16.5" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/><circle cx="27" cy="24" r="2.2" fill="currentColor"/><circle cx="37" cy="24" r="2.2" fill="currentColor"/></symbol>
+</svg>
+
+<div class="progress"><div id="bar"></div></div>
+
+<div id="viewport"><div id="stage">
+
+  <!-- 01 cover -->
+  <section class="slide cover active">
+    <div class="cover-inner">
+      <div class="cover-left">
+        <div class="brandline">
+          <svg class="mark"><use href="#i-octopus"/></svg>
+          <span>OctopOS</span><span class="sep"></span><span>Scenarios &amp; Solutions</span>
+        </div>
+        <h1>让 AI 从回答问题，<br><em>到替你完成工作。</em></h1>
+        <p class="tagline">一个自托管的 AI 工作平台：记得你、能动手、把结果交付出来。</p>
+        <p class="lede">面向个人、团队与企业，用同一套 Agent 运行时连接 Web、IM、文件、数据与自动化。不是把数据交给别人的云，而是把 AI 放进你的环境。</p>
+        <div class="cover-stats">
+          <div class="cstat"><b>10</b><span>IM 入口</span></div>
+          <div class="cstat"><b>24</b><span>专家模板</span></div>
+          <div class="cstat"><b>31</b><span>连接器</span></div>
+          <div class="cstat"><b>7</b><span>可落地场景</span></div>
+        </div>
+        <div class="cover-meta"><span><b>2026.11</b> · 场景 / 方案 / 功能</span><span><b>自托管</b> · 数据留在本机</span><span><b>包名 / CLI</b> · octop</span></div>
+      </div>
+      <div class="hero-stack">
+        <div class="hero-ring"></div>
+        <div class="float-card fc-chat">
+          <div class="hero-label"><span class="dot"></span>对话 · 一句话开始</div>
+          <div class="hero-msg user">帮我把本周门店巡检整理成看板</div>
+          <div class="hero-msg bot">已生成：18 家门店，3 家未通过。要现在打开吗？</div>
+        </div>
+        <div class="float-card fc-app">
+          <div class="hero-label"><span class="dot"></span>MiniApp · 门店巡检看板</div>
+          <div class="hero-kpis">
+            <div class="hero-kpi"><b>18</b><span>总门店</span></div>
+            <div class="hero-kpi"><b>3</b><span>未通过</span></div>
+            <div class="hero-kpi"><b>92%</b><span>覆盖率</span></div>
+          </div>
+          <div class="hero-bars"><i style="height:38%"></i><i style="height:62%"></i><i class="hot" style="height:84%"></i><i style="height:49%"></i><i style="height:70%"></i><i style="height:32%"></i></div>
+        </div>
+        <div class="float-card fc-remind">
+          <div class="hero-label"><span class="dot"></span>自动化 · 每天 08:30</div>
+          <div class="row"><div class="time">08:30</div><div><b style="font-size:10.5px">经营日报 → 飞书群</b><span class="small">昨日销售、库存、异常已整理好</span></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span><b>OctopOS</b> · 场景与解决方案</span><span class="pg">01 / 16</span></div>
+  </section>
+
+  <!-- 02 day -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">01</span> A day with OctopOS</div>
+    <h2>如果 OctopOS 陪你上一天班</h2>
+    <p class="sub">它不只在你打开聊天框时存在；它可以在 IM、桌面、定时任务和你的数据里工作。</p>
+    <div class="body">
+      <div class="day-layout">
+        <div class="vtimeline">
+          <div class="vday"><div class="vtime">08:30</div><div class="vdot"></div><div class="vcard"><h3>经营日报</h3><p>昨天的销售、库存、异常已经整理好，自动推到飞书群。</p><span class="chip strong">Cron + IM</span></div></div>
+          <div class="vday"><div class="vtime">10:00</div><div class="vdot"></div><div class="vcard"><h3>群内问答</h3><p>新人问报销标准，专家引用《财务制度 v3》回答，并给出出处。</p><span class="chip strong">知识库 + 通道</span></div></div>
+          <div class="vday"><div class="vtime">14:00</div><div class="vdot"></div><div class="vcard"><h3>Excel → 看板</h3><p>上传门店巡检表，几分钟生成一个手机可看、可分享的看板。</p><span class="chip strong">MiniApp</span></div></div>
+          <div class="vday"><div class="vtime">16:30</div><div class="vdot"></div><div class="vcard"><h3>客户跟进</h3><p>提醒今天该联系的 5 个客户，并给出结合上下文的话术草稿。</p><span class="chip strong">记忆 + 连接器</span></div></div>
+          <div class="vday"><div class="vtime">18:00</div><div class="vdot"></div><div class="vcard"><h3>团队收尾</h3><p>任务看板更新，审批待处理，今日进展自动汇总成周报。</p><span class="chip strong">团队 + 看板</span></div></div>
+        </div>
+        <div class="day-panel">
+          <div>
+            <div class="dp-kicker">这一天，少了什么</div>
+            <div class="day-stats">
+              <div class="day-stat"><b>3</b><span>少切换的 App：IM、文档、表格各少开一次</span></div>
+              <div class="day-stat"><b>2h</b><span>少写的重复文字：日报、周报、话术草稿</span></div>
+              <div class="day-stat"><b>1</b><span>多出来的可用看板：手机可看，链接可分享</span></div>
+            </div>
+            <div class="dp-quote">“不是多了一个聊天窗口，而是多了一个会做事的同事。”</div>
+            <div class="chips" style="margin-top:9px"><span class="chip strong">IM</span><span class="chip">Web</span><span class="chip">桌面</span><span class="chip">Cron</span></div>
+          </div>
+          <div class="dp-deliver">
+            <div class="dp-row"><b>日报</b><span>08:30 已推送</span></div>
+            <div class="dp-row"><b>看板</b><span>14:00 已生成</span></div>
+            <div class="dp-row"><b>周报</b><span>18:00 已汇总</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="footer"><span><b>02</b> · 一天</span><span class="pg">02 / 16</span></div>
+  </section>
+
+  <!-- 03 pain -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">02</span> Why now</div>
+    <h2>问题不在 AI 不够聪明，而在它接不到你的工作</h2>
+    <p class="sub">你缺的不是一个更会回答问题的模型，而是一个能进入你工作流的执行者。</p>
+    <div class="body">
+      <div class="pain-grid">
+        <div class="pain-card"><span class="ic"><svg><use href="#i-search"/></svg></span><div><h3>信息散落</h3><p>IM、文档、网页、表格各一份；找一个答案要翻半天。</p><span class="after">→ 统一入口与统一会话</span><div class="chips" style="margin-top:5px"><span class="chip">Web</span><span class="chip">IM</span><span class="chip">CLI</span></div></div></div>
+        <div class="pain-card"><span class="ic"><svg><use href="#i-clock"/></svg></span><div><h3>重复劳动</h3><p>周报、提醒、汇总、复制粘贴，每天都在做同一件事。</p><span class="after">→ 定时任务自动执行</span><div class="chips" style="margin-top:5px"><span class="chip">Cron</span><span class="chip">Webhook</span><span class="chip">事件</span></div></div></div>
+        <div class="pain-card"><span class="ic"><svg><use href="#i-book"/></svg></span><div><h3>知识找不到</h3><p>制度、产品资料、经验，只存在老员工脑子里或群聊记录里。</p><span class="after">→ 知识库 + 引用出处</span><div class="chips" style="margin-top:5px"><span class="chip">RAG</span><span class="chip">引用溯源</span><span class="chip">权限</span></div></div></div>
+        <div class="pain-card"><span class="ic"><svg><use href="#i-grid"/></svg></span><div><h3>数据汇总慢</h3><p>Excel 多、版本乱；会做透视表的人只有一个。</p><span class="after">→ 几分钟生成看板</span><div class="chips" style="margin-top:5px"><span class="chip">Excel</span><span class="chip">MiniApp</span><span class="chip">公开链接</span></div></div></div>
+        <div class="pain-card"><span class="ic"><svg><use href="#i-users"/></svg></span><div><h3>客户跟进漏</h3><p>客户信息在表格和聊天里，跟进靠记忆，容易漏。</p><span class="after">→ 每日跟进清单</span><div class="chips" style="margin-top:5px"><span class="chip">CRM</span><span class="chip">提醒</span><span class="chip">话术</span></div></div></div>
+        <div class="pain-card"><span class="ic"><svg><use href="#i-chat"/></svg></span><div><h3>AI 只会聊</h3><p>能给建议，但不能查、不能做、不能把结果交付出来。</p><span class="after">→ 可交付的 MiniApp / 文件</span><div class="chips" style="margin-top:5px"><span class="chip">看板</span><span class="chip">公开链接</span><span class="chip">日报</span></div></div></div>
+      </div>
+      <div class="note" style="margin-top:12px"><span>↳</span><span><b>OctopOS 把这些工作接过来：</b>统一入口 · 能动手 · 有记忆 · 可交付。</span></div>
+    </div>
+    <div class="footer"><span><b>03</b> · 为什么需要</span><span class="pg">03 / 16</span></div>
+  </section>
+
+  <!-- 04 what is -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">03</span> What is OctopOS</div>
+    <h2>OctopOS = 一个自托管的 AI 工作平台</h2>
+    <p class="sub">不是另一个聊天机器人，而是把 Agent 放进你的环境：有入口、有工具、有记忆、有交付。</p>
+    <div class="body">
+      <div class="value-grid">
+        <div class="value-card">
+          <span class="ic"><svg><use href="#i-heart"/></svg></span>
+          <h3>记得你</h3>
+          <p>长期记忆、知识库、工作区；越用越懂你的业务、偏好和上下文。</p>
+          <ul class="clean"><li>记得你的偏好与常用表达</li><li>记得项目上下文与上次进度</li><li>换会话、换入口，记忆还在</li></ul>
+          <div class="before">以前：每次都要重新解释一遍</div>
+          <div class="chips"><span class="chip">长期记忆</span><span class="chip">知识库</span><span class="chip">工作区</span></div>
+        </div>
+        <div class="value-card">
+          <span class="ic"><svg><use href="#i-bolt"/></svg></span>
+          <h3>能动手</h3>
+          <p>文件、浏览器、终端、连接器、MCP；不只是给建议，而是真的去查、去写、去做。</p>
+          <ul class="clean"><li>查资料：浏览器 + 知识库 + 连接器</li><li>写文件：工作区 + 附件 + 导出</li><li>跑流程：Cron + Webhook + 外部事件</li></ul>
+          <div class="before">以前：复制粘贴到另一个工具</div>
+          <div class="chips"><span class="chip">文件</span><span class="chip">浏览器</span><span class="chip">31 连接器</span></div>
+        </div>
+        <div class="value-card">
+          <span class="ic"><svg><use href="#i-window"/></svg></span>
+          <h3>有交付</h3>
+          <p>MiniApp、看板、公开链接、日报、任务看板；结果能被人直接使用。</p>
+          <ul class="clean"><li>看板：手机可看，链接可分享</li><li>日报 / 周报：自动生成，直接可发</li><li>交付物：文件、链接、应用都算结果</li></ul>
+          <div class="before">以前：截图发群，文件找不到</div>
+          <div class="chips"><span class="chip">MiniApp</span><span class="chip">看板</span><span class="chip">公开链接</span></div>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="flow-node hot"><b>你提出目标</b><span>一句话、一个 Excel、一个群里的问题</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node"><b>专家 / 团队</b><span>选角色、带记忆、用工具、可审批</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node"><b>工具 + 数据</b><span>文件、浏览器、连接器、知识库、IM</span></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node"><b>可用的结果</b><span>看板、日报、链接、文件、任务</span></div>
+      </div>
+      <div class="note" style="margin-top:12px"><span>↳</span><span><b>一句话记住：</b>不是让 AI 更会聊天，而是让它接得住工作。</span></div>
+    </div>
+    <div class="footer"><span><b>04</b> · 是什么</span><span class="pg">04 / 16</span></div>
+  </section>
+
+  <!-- 05 scenario map -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">04</span> Scenario map</div>
+    <h2>从个人到企业，7 个可以马上开始的场景</h2>
+    <p class="sub">每个场景都从真实痛点出发；先从一周内能看到结果的那个开始。</p>
+    <div class="body">
+      <div class="scenario-grid">
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S1 · 个人</span><span class="sc-poc">POC 1–3 天</span></div>
+          <h3>个人 / 家庭超级助理</h3>
+          <div class="persona">适合：个人 / 家庭 / 自由职业</div>
+          <div class="chips"><span class="chip">日报周报</span><span class="chip">提醒</span><span class="chip">资料库</span></div>
+          <div class="deliver">典型交付：每日简报 / 周报 / 个人资料库</div>
+        </div>
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S2 · 团队</span><span class="sc-poc">POC 1–2 周</span></div>
+          <h3>中小企业 IM 团队助手</h3>
+          <div class="persona">适合：10–200 人团队</div>
+          <div class="chips"><span class="chip">群内专家</span><span class="chip">制度问答</span><span class="chip">任务提醒</span></div>
+          <div class="deliver">典型交付：群内专家 / 会议纪要 / 任务提醒</div>
+        </div>
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S3 · 知识</span><span class="sc-poc">POC 1–3 周</span></div>
+          <h3>企业知识库与文档问答</h3>
+          <div class="persona">适合：制度 / 产品资料多</div>
+          <div class="chips"><span class="chip">可引用问答</span><span class="chip">培训</span><span class="chip">客服</span></div>
+          <div class="deliver">典型交付：带引用的问答 / 培训助手</div>
+        </div>
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S4 · 销售</span><span class="sc-poc">POC 2–4 周</span></div>
+          <h3>销售 / 客户运营</h3>
+          <div class="persona">适合：销售 / 客户成功 / 渠道</div>
+          <div class="chips"><span class="chip">客户 360</span><span class="chip">跟进清单</span><span class="chip">话术</span></div>
+          <div class="deliver">典型交付：客户台账 / 每日跟进 / 漏斗看板</div>
+        </div>
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S5 · 运营</span><span class="sc-poc">POC 1–5 天</span></div>
+          <h3>运营数据台账与看板</h3>
+          <div class="persona">适合：运营 / 门店 / 财务</div>
+          <div class="chips"><span class="chip">Excel 看板</span><span class="chip">公开链接</span><span class="chip">协作</span></div>
+          <div class="deliver">典型交付：门店看板 / 台账 / 公开链接</div>
+        </div>
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S6 · 研发</span><span class="sc-poc">POC 2–4 周</span></div>
+          <h3>研发效能与运维</h3>
+          <div class="persona">适合：研发 / 测试 / SRE</div>
+          <div class="chips"><span class="chip">IDE 助手</span><span class="chip">巡检</span><span class="chip">告警处置</span></div>
+          <div class="deliver">典型交付：IDE 助手 / 自动巡检 / 排障知识库</div>
+        </div>
+        <div class="scenario-card">
+          <div class="sc-top"><span class="sc-num">S7 · 企业</span><span class="sc-poc">POC 2–6 周</span></div>
+          <h3>私有化与合规部署</h3>
+          <div class="persona">适合：金融 / 医疗 / 政企</div>
+          <div class="chips"><span class="chip">内网</span><span class="chip">SSO / LDAP</span><span class="chip">审计</span><span class="chip">本地模型</span></div>
+          <div class="deliver">典型交付：内网多用户平台 / 审计与备份</div>
+        </div>
+        <div class="scenario-card" style="border-style:dashed;background:linear-gradient(180deg,#fffdf9,#fdf4ec)">
+          <div class="sc-top"><span class="sc-num">你的场景</span><span class="sc-poc">从这里开始</span></div>
+          <h3>没有找到你的场景？</h3>
+          <div class="persona">从一个最痛的流程开始，我们帮你选第一个 POC。</div>
+          <div class="chips"><span class="chip">选场景</span><span class="chip">接入口</span><span class="chip">接数据</span></div>
+          <div class="deliver">下一步：用一周做一个能验收的小场景</div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:10px"><span>↳</span><span><b>建议：</b>先用 S5 台账看板或 S2 群内知识助手做 1 周 POC，再扩到连接器与自动化。一次演示所有功能，用户记不住，也很难验收。</span></div>
+    </div>
+    <div class="footer"><span><b>05</b> · 场景地图</span><span class="pg">05 / 16</span></div>
+  </section>
+
+  <!-- 06 S1 personal -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">05</span> Scenario A</div>
+    <h2>个人 / 家庭超级助理：一个记得你、能动手的长期助理</h2>
+    <p class="sub">适合个人、自由职业者、家庭共享部署；入口：Web / IM / 桌面。</p>
+    <div class="body">
+      <div class="scenario-layout">
+        <div class="story">
+          <div class="story-block pain"><div class="sb-label">痛点</div><ul><li>信息散落在 IM、文档、网页和本地文件。</li><li>重复写周报、整理资料、设提醒。</li><li>通用聊天机器人不记得你的长期偏好。</li></ul></div>
+          <div class="story-block combo"><div class="sb-label">OctopOS 怎么做</div><div class="chips"><span class="chip strong">专属 Agent</span><span class="chip">长期记忆</span><span class="chip">知识库</span><span class="chip">浏览器 / 文件</span><span class="chip">Cron 提醒</span><span class="chip">IM 推送</span></div></div>
+          <div class="story-block result"><div class="sb-label">你会得到</div><ul><li><b>每日简报 / 周报</b>：自动整理，直接可发。</li><li><b>个人资料库</b>：随时问，带出处。</li><li><b>日程、提醒、订阅</b>：在 IM 里触达。</li><li><b>家庭多用户共享</b>：每个人有自己的助理。</li></ul></div>
+        </div>
+        <div class="mockup">
+          <div class="mockup-bar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="title">智管家 · 今天</span></div>
+          <div class="mockup-body">
+            <div class="chat-row"><div class="avatar">AI</div><div class="bubble">早上好。今天 3 件事：10:00 项目会、15:00 接孩子、20:00 回复客户邮件。上周周报已生成，要现在看吗？</div></div>
+            <div class="chat-row user"><div class="avatar human">你</div><div class="bubble user">帮我把阅读清单整理一下</div></div>
+            <div class="chat-row"><div class="avatar">AI</div><div class="bubble">已整理 3 篇，2 篇待读；摘要放进资料库了。<div class="attach"><span class="ic"><svg><use href="#i-file"/></svg></span><div><b>周报_11月第2周.md</b><span>3 个项目 · 2 个风险</span></div></div></div></div>
+          </div>
+          <div class="mockup-foot"><span class="chip green">已同步到飞书</span><span>记忆：偏好 / 日程 / 常用联系人</span></div>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><b>30–60 分钟</b><span>示例目标：每天节省的整理时间</span></div>
+        <div class="metric"><b>1 小时 → 5 分钟</b><span>示例目标：周报生成耗时</span></div>
+        <div class="metric"><b>IM 直达</b><span>提醒与简报的到达率</span></div>
+      </div>
+      <div class="boundary"><b>边界：</b>需要一台常开的机器与一个 LLM provider；长期记忆和大量文档会占磁盘；不是零配置消费级 App。</div>
+      <div class="insight"><span class="tk">Takeaway</span><span>助理的价值不是多聊几句，而是每天帮你省下那 30 分钟。</span></div>
+    </div>
+    <div class="footer"><span><b>06</b> · 个人 / 家庭</span><span class="pg">06 / 16</span></div>
+  </section>
+
+  <!-- 07 S2 + S3 team -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">06</span> Scenario B</div>
+    <h2>团队 IM + 知识库：把答案放回群里</h2>
+    <p class="sub">适合 10–200 人团队；入口：飞书 / 钉钉 / 企微 / 微信 / Telegram / Discord。</p>
+    <div class="body">
+      <div class="scenario-layout">
+        <div class="mockup">
+          <div class="mockup-bar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="title">产品-客户支持群 · 飞书</span></div>
+          <div class="mockup-body">
+            <div class="chat-row"><div class="avatar human">新</div><div class="bubble">报销标准是什么？</div></div>
+            <div class="chat-row"><div class="avatar">AI</div><div class="bubble">根据《财务制度 v3》4.2：一线城市住宿 600 元/晚，需发票；超标需提前审批。<span class="cite">引用 1 · 财务制度 v3 · 4.2 节</span></div></div>
+            <div class="chat-row user"><div class="avatar human">同</div><div class="bubble user">/weekly</div></div>
+            <div class="chat-row"><div class="avatar">AI</div><div class="bubble">本周周报已生成：3 个项目，2 个风险。已同步到团队看板。</div></div>
+          </div>
+          <div class="mockup-foot"><span class="chip green">知识库命中</span><span class="chip">slash 命令</span><span class="chip">团队看板</span></div>
+        </div>
+        <div class="story">
+          <div class="story-block pain"><div class="sb-label">痛点</div><ul><li>知识和决策淹没在群聊里，新人重复问同样的问题。</li><li>任务跟进靠人肉提醒，容易漏、容易忘。</li><li>回答不可追溯，不敢直接用来做决策。</li></ul></div>
+          <div class="story-block combo"><div class="sb-label">OctopOS 怎么做</div><div class="chips"><span class="chip strong">多用户 + 多专家</span><span class="chip">IM 通道</span><span class="chip">slash + 审批</span><span class="chip">知识库</span><span class="chip">连接器</span><span class="chip">Cron + 团队看板</span></div></div>
+          <div class="story-block result"><div class="sb-label">你会得到</div><ul><li><b>群内可用的专家</b>：不用切换 App。</li><li><b>会议纪要 / 周报</b>：自动汇总。</li><li><b>制度与产品问答</b>：带引用、可追溯。</li><li><b>任务提醒与升级</b>：到点提醒，逾期升级。</li></ul></div>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><b>群内响应</b><span>减少等待与转接</span></div>
+        <div class="metric"><b>知识命中率</b><span>回答带出处</span></div>
+        <div class="metric"><b>任务按时率</b><span>提醒与升级</span></div>
+      </div>
+      <div class="boundary"><b>边界：</b>IM 通道需要平台应用与权限配置；团队能力为 Beta；群聊策略与数据可见范围需在 POC 中确认。</div>
+      <div class="insight"><span class="tk">Takeaway</span><span>把答案放回群里，让每个人都能问到、查到、用上。</span></div>
+    </div>
+    <div class="footer"><span><b>07</b> · 团队 IM + 知识库</span><span class="pg">07 / 16</span></div>
+  </section>
+
+  <!-- 08 S5 miniapp -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">07</span> Scenario C</div>
+    <h2>运营台账与看板：上传一份 Excel，几分钟变成能用的看板</h2>
+    <p class="sub">适合运营、门店、行政、财务、项目团队；入口：Web / MiniApp / 公开链接。</p>
+    <div class="body">
+      <div class="steps4" style="margin-bottom:10px">
+        <div class="step"><div class="n">1</div><h3>上传 Excel / CSV</h3><p>选工作表、确认表头；支持多 sheet。</p><div class="chip">xlsx / csv / json</div></div>
+        <div class="step-arrow">→</div>
+        <div class="step"><div class="n">2</div><h3>确认字段 + 选视图</h3><p>台账 / 看板 / 进度板，三选一。</p><div class="chip">不走 LLM · 秒级</div></div>
+        <div class="step-arrow">→</div>
+        <div class="step"><div class="n">3</div><h3>生成 MiniApp</h3><p>手机可看、可协作、可分享；不满意继续改。</p><div class="chip">单文件 HTML</div></div>
+      </div>
+      <div class="scenario-layout">
+        <div class="mockup">
+          <div class="mockup-bar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="title">门店巡检看板 · MiniApp</span></div>
+          <div class="mockup-body">
+            <div class="kpi-row">
+              <div class="kpi"><b>18</b><span>总门店</span></div>
+              <div class="kpi"><b>3</b><span>未通过</span></div>
+              <div class="kpi"><b>92%</b><span>覆盖率</span></div>
+            </div>
+            <div class="bars"><div class="bar" style="height:42%"><span>卫生</span></div><div class="bar" style="height:66%"><span>陈列</span></div><div class="bar hot" style="height:86%"><span>库存</span></div><div class="bar" style="height:54%"><span>安全</span></div><div class="bar" style="height:72%"><span>服务</span></div><div class="bar" style="height:36%"><span>整改</span></div></div>
+            <table class="data-table"><thead><tr><th>门店</th><th>检查项</th><th>结果</th><th>负责人</th></tr></thead><tbody><tr><td>华星店</td><td>库存</td><td><span class="status red">不通过</span></td><td>小王</td></tr><tr><td>云图店</td><td>陈列</td><td><span class="status green">通过</span></td><td>小李</td></tr><tr><td>新禾店</td><td>卫生</td><td><span class="status green">通过</span></td><td>小张</td></tr></tbody></table>
+          </div>
+          <div class="mockup-foot"><span class="chip green">已发布只读链接</span><span>手机可看 · 可导出</span></div>
+        </div>
+        <div class="story">
+          <div class="story-block combo"><div class="sb-label">你会得到</div><div class="chips"><span class="chip strong">多表 / 导入导出</span><span class="chip">行级修改</span><span class="chip">服务端聚合</span><span class="chip">公开链接</span><span class="chip">PII 脱敏</span><span class="chip">桌面 / 聊天侧栏</span></div></div>
+          <div class="story-block result"><div class="sb-label">为什么好用</div><ul><li><b>不用写代码</b>：上传、确认、生成。</li><li><b>数据能改</b>：表格视图、行内编辑、导入导出。</li><li><b>结果能传</b>：公开链接、发布快照、手机可看。</li><li><b>还能问</b>：应用内 AI 助手，问数据、出图表。</li></ul></div>
+          <div class="story-block pain"><div class="sb-label">边界</div><ul><li>单表 2 万行 / 5 MB；公开链接只读。</li><li>复杂审批流、实时协同编辑、公开可写表单不做。</li><li>PII 默认不导入，展示与公开链接脱敏。</li></ul></div>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><b>2 小时 → 几分钟</b><span>示例目标：报表制作时间</span></div>
+        <div class="metric"><b>手机可看</b><span>公开链接与分享</span></div>
+        <div class="metric"><b>多人协作</b><span>台账维护与交接</span></div>
+      </div>
+      <div class="insight"><span class="tk">Takeaway</span><span>Excel 不用变成系统，先变成一个能用的看板。</span></div>
+    </div>
+    <div class="footer"><span><b>08</b> · 运营台账与看板</span><span class="pg">08 / 16</span></div>
+  </section>
+
+  <!-- 09 S4 sales -->
+  <section class="slide theme-scenario">
+    <div class="kicker"><span class="num">08</span> Scenario D</div>
+    <h2>销售 / 客户运营：客户信息不再散落在表格、聊天和邮件里</h2>
+    <p class="sub">适合销售团队、客户成功、渠道运营；入口：IM / Web / MiniApp。</p>
+    <div class="body">
+      <div class="scenario-layout">
+        <div class="mockup">
+          <div class="mockup-bar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span><span class="title">客户跟进 · 本周</span></div>
+          <div class="mockup-body">
+            <div class="kpi-row">
+              <div class="kpi"><b>5</b><span>今日跟进</span></div>
+              <div class="kpi"><b>2</b><span>逾期</span></div>
+              <div class="kpi"><b>3</b><span>本周转化</span></div>
+            </div>
+            <table class="data-table"><thead><tr><th>客户</th><th>阶段</th><th>下次跟进</th><th>负责人</th><th>风险</th></tr></thead><tbody><tr><td>华星商贸</td><td><span class="status blue">方案中</span></td><td>明天 10:00</td><td>小王</td><td><span class="status red">高</span></td></tr><tr><td>云图科技</td><td><span class="status amber">已报价</span></td><td>周四 14:00</td><td>小李</td><td><span class="status amber">中</span></td></tr><tr><td>新禾食品</td><td><span class="status green">初次接触</span></td><td>今天 16:00</td><td>小张</td><td><span class="status green">低</span></td></tr><tr><td>远山制造</td><td><span class="status violet">合同审核</span></td><td>周五 11:00</td><td>小王</td><td><span class="status green">低</span></td></tr></tbody></table>
+          </div>
+          <div class="mockup-foot"><span class="chip strong">客户 360</span><span class="chip">企查查</span><span class="chip">邮箱</span><span class="chip">CRM / MCP</span></div>
+        </div>
+        <div class="story">
+          <div class="story-block pain"><div class="sb-label">痛点</div><ul><li>客户信息散落在表格、聊天和邮件里。</li><li>跟进靠记忆，容易漏；话术不统一，新人上手慢。</li><li>周报和漏斗靠人肉汇总。</li></ul></div>
+          <div class="story-block combo"><div class="sb-label">OctopOS 怎么做</div><div class="chips"><span class="chip strong">连接器</span><span class="chip">记忆</span><span class="chip">知识库 / 话术</span><span class="chip">Cron 提醒</span><span class="chip">MiniApp 台账</span><span class="chip">公开链接</span></div></div>
+          <div class="story-block result"><div class="sb-label">你会得到</div><ul><li><b>客户 360 台账</b>：阶段、负责人、风险一屏看清。</li><li><b>每日跟进清单</b>：到点提醒，附上下文。</li><li><b>话术与方案草稿</b>：结合产品知识库。</li><li><b>周报 / 漏斗看板</b>：只读分享给管理者。</li></ul></div>
+        </div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><b>跟进及时率</b><span>提醒 + 上下文</span></div>
+        <div class="metric"><b>人均客户数</b><span>减少手工整理</span></div>
+        <div class="metric"><b>新人上手时间</b><span>话术与知识复用</span></div>
+      </div>
+      <div class="boundary"><b>边界：</b>外部 CRM / 邮箱需连接器或 MCP 接入；客户敏感信息必须做 PII 标记与权限控制；公开链接只读，不能作为写入入口。</div>
+      <div class="insight"><span class="tk">Takeaway</span><span>客户跟进不靠记忆，靠一张每天更新的清单。</span></div>
+    </div>
+    <div class="footer"><span><b>09</b> · 销售 / 客户运营</span><span class="pg">09 / 16</span></div>
+  </section>
+
+  <!-- 10 S6 + S7 -->
+  <section class="slide theme-private">
+    <div class="kicker"><span class="num">09</span> More scenarios</div>
+    <h2>研发运维与私有化：把 AI 放进更专业的环境</h2>
+    <p class="sub">一个平台，也能覆盖需要终端、浏览器、权限与合规的场景。</p>
+    <div class="body">
+      <div class="grid-2">
+        <div class="card" style="display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="ic sm"><svg><use href="#i-terminal"/></svg></span><h3 style="margin:0;font-size:13px">研发效能与运维</h3><span class="chip gray" style="margin-left:auto">POC 2–4 周</span></div>
+          <p style="font-size:10.5px"><b>痛点：</b>排障要在日志、终端、浏览器、文档间切换；重复巡检、重复命令；告警响应慢。</p>
+          <div class="chips" style="margin:4px 0 5px"><span class="chip strong">ACP</span><span class="chip">终端</span><span class="chip">浏览器</span><span class="chip">Cron</span><span class="chip">告警 Webhook</span><span class="chip">Shell 防护</span><span class="chip">HITL</span></div>
+          <ul class="clean"><li><b>IDE / 终端里的 AI 搭档</b>：委派 Claude Code / OpenCode 等。</li><li><b>自动巡检与告警处置</b>：事件触发，结果回到群。</li><li><b>排障知识库</b>：下次遇到同类问题直接问。</li></ul>
+          <div class="metrics"><div class="metric"><b>MTTR</b><span>排障时间</span></div><div class="metric"><b>自动化率</b><span>重复任务</span></div><div class="metric"><b>一次解决率</b><span>告警处置</span></div></div>
+        </div>
+        <div class="card" style="display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span class="ic sm"><svg><use href="#i-shield"/></svg></span><h3 style="margin:0;font-size:13px">私有化与合规部署</h3><span class="chip gray" style="margin-left:auto">POC 2–6 周</span></div>
+          <p style="font-size:10.5px"><b>痛点：</b>数据不能出内网；需要 SSO / LDAP、权限、审计；需要可控的备份、升级与运维。</p>
+          <div class="chips" style="margin:4px 0 5px"><span class="chip strong">自托管</span><span class="chip">SQLite / PG</span><span class="chip">OIDC / LDAP</span><span class="chip">ACL</span><span class="chip">PII 脱敏</span><span class="chip">备份 / TLS</span><span class="chip">Ollama</span></div>
+          <ul class="clean"><li><b>内网多用户 AI 平台</b>：统一入口与权限。</li><li><b>数据不出域</b>：模型、记忆、文档都在自己的机器。</li><li><b>可备份、可升级</b>：TLS / 审计 / 日志 / 恢复。</li></ul>
+          <div class="metrics"><div class="metric"><b>数据出域 0</b><span>本地闭环</span></div><div class="metric"><b>审计覆盖</b><span>管理动作</span></div><div class="metric"><b>可用性</b><span>单节点运维</span></div></div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:10px"><span>↳</span><span><b>边界：</b>单节点、非多租户；跨部门强隔离建议每部门 / 环境一个实例；不承诺等保、密评等认证，需按客户合规流程单独评估。</span></div>
+      <div class="insight"><span class="tk">Takeaway</span><span>一个平台覆盖 7 类场景；先从最痛的一个开始，不要一次上全。</span></div>
+    </div>
+    <div class="footer"><span><b>10</b> · 研发 / 私有化</span><span class="pg">10 / 16</span></div>
+  </section>
+
+  <!-- 12 features -->
+  <section class="slide theme-product">
+    <div class="kicker"><span class="num">10</span> Features</div>
+    <h2>你需要的功能，已经在一张桌面上</h2>
+    <p class="sub">从入口到交付，从记忆到自动化；不用全用上，先从一条链路开始。</p>
+    <div class="body">
+      <div class="feature-grid">
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-globe"/></svg></span><h3>统一入口</h3></div><p>在你已经在用的地方出现，而不是再装一个 App。</p><div class="example">从飞书群里 @ 专家，或打开 Web 对话</div><div class="chips"><span class="chip">Web / 桌面</span><span class="chip">10 IM</span><span class="chip">CLI / API</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-users"/></svg></span><h3>专家与团队</h3></div><p>从开箱模板开始，按角色、人格和技能装配。</p><div class="example">选模板 → 填名字 → 开始；团队可加目标与看板</div><div class="chips"><span class="chip">24 模板</span><span class="chip">人格</span><span class="chip">目标 / 任务</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-book"/></svg></span><h3>知识与记忆</h3></div><p>文档、经验、偏好都留下来，越用越懂业务。</p><div class="example">把制度、产品资料、常用话术放进去</div><div class="chips"><span class="chip">RAG</span><span class="chip">长期记忆</span><span class="chip">技能 / 插件</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-plug"/></svg></span><h3>连接器与自动化</h3></div><p>接业务系统，按时间或事件自动触发。</p><div class="example">接一个系统，设一个时间或事件触发</div><div class="chips"><span class="chip">31 连接器</span><span class="chip">MCP</span><span class="chip">Cron / Webhook</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-window"/></svg></span><h3>交付</h3></div><p>不是一段回答，而是能被人直接使用的界面与文件。</p><div class="example">生成看板 / 日报，发一个只读链接</div><div class="chips"><span class="chip">MiniApp</span><span class="chip">看板</span><span class="chip">公开链接</span><span class="chip">日报</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-shield"/></svg></span><h3>安全与运维</h3></div><p>多用户、审批、脱敏、审计，以及自托管的备份与升级。</p><div class="example">审批、备份、TLS 一次配好</div><div class="chips"><span class="chip">ACL</span><span class="chip">HITL</span><span class="chip">PII</span><span class="chip">TLS / 备份</span></div></div>
+      </div>
+      <div class="note" style="margin-top:10px"><span>↳</span><span><b>不用一上来做全平台。</b>从一个入口、一个专家、一个场景开始，跑通再扩。</span></div>
+    </div>
+    <div class="footer"><span><b>11</b> · 功能全景</span><span class="pg">11 / 16</span></div>
+  </section>
+
+  <!-- 13 POC -->
+  <section class="slide theme-plan">
+    <div class="kicker"><span class="num">11</span> How to start</div>
+    <h2>从一个场景到可用方案，只需要 4 步</h2>
+    <p class="sub">先证明“有用”，再扩平台；不要一上来演示所有功能。</p>
+    <div class="body">
+      <div class="steps4">
+        <div class="step"><div class="n">1</div><h3>选场景</h3><p>选一个一周内能看到结果的问题；推荐台账看板或群内知识助手。</p><span class="chip">1 周内可验收</span></div>
+        <div class="step-arrow">→</div>
+        <div class="step"><div class="n">2</div><h3>接入口</h3><p>先用 Web 或一个 IM 群；让用户在已经工作的位置用起来。</p><span class="chip">飞书 / 钉钉 / Web</span></div>
+        <div class="step-arrow">→</div>
+        <div class="step"><div class="n">3</div><h3>接数据</h3><p>先接一个最重要的数据源：Excel、知识库、连接器或事件。</p><span class="chip">先一个，不求全</span></div>
+        <div class="step-arrow">→</div>
+        <div class="step"><div class="n">4</div><h3>交付与迭代</h3><p>用 MiniApp / 日报 / 看板交付；一周复盘，再扩下一个场景。</p><span class="chip">结果可验收</span></div>
+      </div>
+      <div class="note" style="margin-top:12px"><span>↳</span><span><b>POC 前先问三个问题：</b>数据能不能出内网？团队多少人？最痛的一个流程是什么？</span></div>
+      <div style="padding-top:14px">
+        <div style="font-size:9.2px;font-weight:850;letter-spacing:.12em;color:var(--faint);text-transform:uppercase;margin-bottom:5px">Suggested POC timeline</div>
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+          <span class="chip strong">1–5 天 · 台账看板</span><span style="color:#c4b3a2">→</span><span class="chip">1–2 周 · 群内知识助手</span><span style="color:#c4b3a2">→</span><span class="chip">2–4 周 · 销售 / 研发</span>
+        </div>
+      </div>
+      <div class="insight"><span class="tk">Takeaway</span><span>第一周只做一件事：让一个场景真正跑起来。</span></div>
+    </div>
+    <div class="footer"><span><b>12</b> · 怎么开始</span><span class="pg">12 / 16</span></div>
+  </section>
+
+  <!-- 14 why -->
+  <section class="slide theme-why">
+    <div class="kicker"><span class="num">12</span> Why OctopOS</div>
+    <h2>不是功能更多，而是更适合你自己的 AI</h2>
+    <p class="sub">同样的能力，放在你自己的机器上；同样的 Agent，接进你已经在用的入口。</p>
+    <div class="body">
+      <div class="feature-grid">
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-lock"/></svg></span><h3>数据留在自己的机器</h3></div><p>自托管，<code>~/.octop/</code> 单一数据根；SQLite 默认，PostgreSQL 可选。</p><div class="example">备份 = 一个数据目录，可用 octop backup 导出</div><div class="chips"><span class="chip">本地优先</span><span class="chip">可备份</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-users"/></svg></span><h3>多用户、多专家</h3></div><p>每个人有自己的专家与工作区；管理员统一管理权限与资源。</p><div class="example">每个人有自己的助理，也能共享同一个专家</div><div class="chips"><span class="chip">JWT</span><span class="chip">ACL</span><span class="chip">共享</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-bolt"/></svg></span><h3>一个进程，部署简单</h3></div><p>Web、CLI、IM、定时任务与 Agent 运行时在同一个进程里。</p><div class="example">一条命令启动，不需要额外装队列或 worker</div><div class="chips"><span class="chip">无外部队列</span><span class="chip">一键服务</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-plug"/></svg></span><h3>能接你的系统</h3></div><p>31 个连接器、MCP、API 与 Webhook；把已有系统变成 Agent 的工具。</p><div class="example">不用换掉现有系统，先接一个最常用的</div><div class="chips"><span class="chip">OAuth</span><span class="chip">MCP</span><span class="chip">Webhook</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-window"/></svg></span><h3>能交付，不只是聊天</h3></div><p>MiniApp、看板、公开链接、日报；结果能被人直接使用和分享。</p><div class="example">结果能直接发给同事、客户或管理者</div><div class="chips"><span class="chip">MiniApp</span><span class="chip">看板</span><span class="chip">公开链接</span></div></div>
+        <div class="feature-card"><div class="hd"><span class="ic"><svg><use href="#i-shield"/></svg></span><h3>有边界，敢用</h3></div><p>审批、Shell 防护、PII 脱敏、审计；高风险动作先问你。</p><div class="example">越界动作先审批，不是先执行再解释</div><div class="chips"><span class="chip">HITL</span><span class="chip">PII</span><span class="chip">Docker 沙箱</span></div></div>
+      </div>
+      <div class="note" style="margin-top:10px"><span>↳</span><span><b>不是把数据交给别人的云，而是把 AI 放进你的环境。</b>这是 OctopOS 和通用聊天产品最大的不同。</span></div>
+    </div>
+    <div class="footer"><span><b>13</b> · 为什么是 OctopOS</span><span class="pg">13 / 16</span></div>
+  </section>
+
+  <!-- 15 fit -->
+  <section class="slide theme-why">
+    <div class="kicker"><span class="num">13</span> Fit</div>
+    <h2>先说清楚：谁适合，谁不适合</h2>
+    <p class="sub">把边界说清楚，比多列十个功能更能建立信任。</p>
+    <div class="body">
+      <div class="compare">
+        <div class="compare-card good">
+          <h3>适合</h3>
+          <p class="hint">想在自己的环境里，把 AI 用进真实工作</p>
+          <ul class="checks">
+            <li>个人 / 家庭极客，想要一个长期助理</li>
+            <li>10–200 人团队，想在 IM 里用专家与知识库</li>
+            <li>有台账、报表、客户跟进需求的业务团队</li>
+            <li>研发 / 运维团队，需要终端、浏览器与自动化</li>
+            <li>金融、医疗、政企等需要私有化部署的组织</li>
+          </ul>
+        </div>
+        <div class="compare-card bad">
+          <h3>不适合</h3>
+          <p class="hint">这些边界，最好在 POC 前就确认</p>
+          <ul class="warns">
+            <li>需要多租户 SaaS 集群、跨地域高可用</li>
+            <li>需要分布式内核或外部大规模队列</li>
+            <li>需要零配置的消费级 App</li>
+            <li>需要复杂 BI、流程引擎或原生小程序运行时</li>
+            <li>不能接受自己运维一台服务器 / 容器</li>
+          </ul>
+        </div>
+      </div>
+      <div class="grid-3" style="margin-top:9px">
+        <div class="mini-card"><b>数据能不能出内网？</b><span>决定部署方式、模型选择和是否本地化。</span></div>
+        <div class="mini-card"><b>团队多少人？</b><span>决定个人电脑、团队服务器还是多实例。</span></div>
+        <div class="mini-card"><b>最痛的一个流程是什么？</b><span>决定第一个 POC 场景，而不是先买全平台。</span></div>
+      </div>
+      <div class="note" style="margin-top:9px"><span>↳</span><span><b>单节点是部署选择，也是责任边界。</b>每个团队 / 客户一个实例，数据不出节点；跨部门强隔离建议每部门 / 环境一个实例。</span></div>
+    </div>
+    <div class="footer"><span><b>14</b> · 适合谁</span><span class="pg">14 / 16</span></div>
+  </section>
+
+  <!-- 16 get started -->
+  <section class="slide theme-plan">
+    <div class="kicker"><span class="num">14</span> Get started</div>
+    <h2>三种开始方式，选一个适合你的</h2>
+    <p class="sub">个人先试用，团队上服务器，合规环境走私有化。</p>
+    <div class="body">
+      <div class="deploy-grid">
+        <div class="deploy-card">
+          <span class="ic"><svg><use href="#i-heart"/></svg></span>
+          <h3>个人电脑 · 先试用</h3>
+          <p>安装后本地启动，先做一个自己的助理；适合个人与家庭。</p>
+          <ul class="clean"><li>数据在自己的电脑</li><li>可以接 IM 与定时任务</li><li>不满意随时备份迁移</li></ul>
+          <div class="chips"><span class="chip">一键安装</span><span class="chip">pip</span><span class="chip">PWA / 桌面</span></div>
+        </div>
+        <div class="deploy-card">
+          <span class="ic"><svg><use href="#i-users"/></svg></span>
+          <h3>团队服务器 · 一起用</h3>
+          <p>Docker Compose 或系统服务；开启 TLS、备份与多用户。</p>
+          <ul class="clean"><li>多用户与权限</li><li>TLS / 备份 / 服务托管</li><li>适合 10–200 人团队</li></ul>
+          <div class="chips"><span class="chip">Docker</span><span class="chip">systemd / launchd</span><span class="chip">10–200 人</span></div>
+        </div>
+        <div class="deploy-card">
+          <span class="ic"><svg><use href="#i-shield"/></svg></span>
+          <h3>私有化环境 · 合规用</h3>
+          <p>内网部署；PostgreSQL、SSO / LDAP、审计与本地模型。</p>
+          <ul class="clean"><li>数据不出内网</li><li>可接 SSO / LDAP</li><li>本地模型与 embedding</li></ul>
+          <div class="chips"><span class="chip">内网</span><span class="chip">PostgreSQL</span><span class="chip">Ollama</span></div>
+        </div>
+      </div>
+      <div class="grid-3" style="margin-top:10px">
+        <div class="mini-card"><b>1 · 配一个模型</b><span>选预设或 Ollama，测试连接后保存。</span></div>
+        <div class="mini-card"><b>2 · 建一个专家</b><span>从 24 个模板里选一个，填名字即可。</span></div>
+        <div class="mini-card"><b>3 · 接一个入口</b><span>先用 Web 或一个 IM 群，跑通第一件事。</span></div>
+      </div>
+      <div class="code-strip"><span class="cmd">pip install octop</span><span class="sep">→</span><span class="cmd">octop init</span><span class="sep">→</span><span class="cmd">octop run</span><span class="sep">→</span><span>http://127.0.0.1:8088</span></div>
+      <div class="note" style="margin-top:10px"><span>↳</span><span><b>也可以使用一键安装脚本（无需预装 Python）、Docker、桌面客户端或 FnOS。</b>除 LLM provider 外，无必需外部服务；首次启动有设置向导。</span></div>
+      <div class="insight"><span class="tk">Takeaway</span><span>不确定选哪个？先在个人电脑跑通一个场景，再搬到团队服务器。</span></div>
+    </div>
+    <div class="footer"><span><b>15</b> · 开始使用</span><span class="pg">15 / 16</span></div>
+  </section>
+
+  <!-- 17 closing -->
+  <section class="slide closing">
+    <div class="closing-inner">
+      <div class="closing-left">
+        <div class="kicker"><span class="num" style="border-color:rgba(253,186,116,.35);background:rgba(253,186,116,.1)">15</span> Next step</div>
+        <h2>把 AI 从对话框，<br>带到你的工作里。</h2>
+        <p class="sub">选一个场景，建一个专家，接一个入口。先用一周证明“有用”，再谈平台。</p>
+        <div class="next-steps">
+          <div class="next-step"><b>01 · 选场景</b><span>台账看板 / 群内知识助手 / 个人助理</span></div>
+          <div class="next-step"><b>02 · 建专家</b><span>从 24 个模板开始，按角色装配</span></div>
+          <div class="next-step"><b>03 · 接入口</b><span>IM、Web、CLI 或 API</span></div>
+        </div>
+        <div class="closing-links">
+          <span class="chip">docs/user-guide.md</span><span class="chip">docs/miniapp-use-cases-and-security.md</span><span class="chip">GitHub · yueshi/OctopOS</span><span class="chip">PyPI · octop</span>
+        </div>
+        <div class="closing-quote">“先证明有用，再谈平台。”</div>
+      </div>
+      <div class="closing-mark">
+        <svg class="big-mark"><use href="#i-octopus"/></svg>
+        <div class="qa">Q&amp;A</div>
+        <div class="qa-sub">Let's build your first scenario</div>
+      </div>
+    </div>
+    <div class="footer"><span><b>OctopOS</b> · 场景与解决方案 · 2026.11</span><span class="pg">16 / 16</span></div>
+  </section>
+
+</div></div>
+
+<div class="nav-hint">← → 翻页 · Home / End 首尾 · F 全屏 · P 打印</div>
+<div class="hud">
+  <button id="prev" title="上一页" aria-label="上一页">‹</button>
+  <span id="pageno">1 / 17</span>
+  <button id="next" title="下一页" aria-label="下一页">›</button>
+  <button id="fs" title="全屏" aria-label="全屏">⛶</button>
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var cur = 0;
+  var bar = document.getElementById('bar');
+  var pageno = document.getElementById('pageno');
+  var stage = document.getElementById('stage');
+
+  function show(i){
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach(function(s, k){ s.classList.toggle('active', k === cur); });
+    pageno.textContent = (cur + 1) + ' / ' + slides.length;
+    bar.style.width = ((cur + 1) / slides.length * 100) + '%';
+    if (history.replaceState) history.replaceState(null, '', '#' + (cur + 1));
+  }
+  function fit(){
+    var pad = 28;
+    var s = Math.min((window.innerWidth - pad) / 1280, (window.innerHeight - pad) / 720);
+    s = Math.max(0.2, Math.min(s, 1.4));
+    stage.style.transform = 'scale(' + s + ')';
+  }
+  function fs(){
+    try{
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    }catch(e){}
+  }
+  document.getElementById('prev').addEventListener('click', function(){ show(cur - 1); });
+  document.getElementById('next').addEventListener('click', function(){ show(cur + 1); });
+  document.getElementById('fs').addEventListener('click', fs);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { show(cur + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { show(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') { show(0); e.preventDefault(); }
+    else if (e.key === 'End') { show(slides.length - 1); e.preventDefault(); }
+    else if (e.key === 'f' || e.key === 'F') { fs(); }
+    else if (e.key === 'p' || e.key === 'P') { window.print(); }
+  });
+  var tx = 0, ty = 0;
+  document.addEventListener('touchstart', function(e){
+    if (!e.touches || e.touches.length !== 1) return;
+    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+  }, {passive:true});
+  document.addEventListener('touchend', function(e){
+    if (!e.changedTouches || e.changedTouches.length !== 1) return;
+    var dx = e.changedTouches[0].clientX - tx;
+    var dy = e.changedTouches[0].clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) show(cur + (dx < 0 ? 1 : -1));
+  }, {passive:true});
+  window.addEventListener('resize', fit);
+  var h = parseInt((location.hash || '').replace('#', ''), 10);
+  show(isNaN(h) ? 0 : h - 1);
+  fit();
+})();
+</script>
+</body>
+</html>
