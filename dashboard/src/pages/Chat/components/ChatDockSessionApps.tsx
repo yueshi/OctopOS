@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Button, Empty, Typography } from "antd";
 import { AppWindow, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -33,6 +33,21 @@ function SessionAppThumb({ app }: { app: SessionApp }) {
   );
 }
 
+export interface ChatDockSessionAppsProps {
+  apps: readonly SessionApp[];
+  /** Called when a row is chosen, before its MiniApp opens in the panel. */
+  onSelectApp?: (app: SessionApp) => void;
+  /**
+   * Host override for `octopApp.composeMessage`. Defaults to navigating to the
+   * chat route; desktop windows fill their own composer instead.
+   */
+  onComposeMessage?: (text: string) => void;
+  /** Host override for `octopApp.openExternal` (desktop web windows). */
+  onOpenExternal?: (url: string) => void;
+  /** False while the hosting desktop window is hidden or minimized. */
+  active?: boolean;
+}
+
 /**
  * MiniApps created in the open conversation, shown in the chat dock.
  *
@@ -42,14 +57,23 @@ function SessionAppThumb({ app }: { app: SessionApp }) {
  */
 export default function ChatDockSessionApps({
   apps,
-}: {
-  apps: readonly SessionApp[];
-}) {
+  onSelectApp,
+  onComposeMessage,
+  onOpenExternal,
+  active = true,
+}: ChatDockSessionAppsProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = apps.find((app) => app.app_id === selectedId) ?? null;
+
+  const prefillViaChat = useCallback(
+    (text: string) => {
+      navigate(location.pathname, { state: { prefillInput: text } });
+    },
+    [location.pathname, navigate],
+  );
 
   if (apps.length === 0) {
     return (
@@ -90,11 +114,10 @@ export default function ChatDockSessionApps({
             appId={selected.app_id}
             title={selected.name}
             capabilities={selected.capabilities}
-            onComposeMessage={(text) =>
-              navigate(location.pathname, {
-                state: { prefillInput: text },
-              })
-            }
+            active={active}
+            foreground={active}
+            onComposeMessage={onComposeMessage ?? prefillViaChat}
+            onOpenExternal={onOpenExternal}
             fill
           />
         </div>
@@ -109,7 +132,10 @@ export default function ChatDockSessionApps({
           key={app.app_id}
           type="button"
           className={styles.sessionAppsRow}
-          onClick={() => setSelectedId(app.app_id)}
+          onClick={() => {
+            onSelectApp?.(app);
+            setSelectedId(app.app_id);
+          }}
         >
           <SessionAppThumb app={app} />
           <span className={styles.sessionAppsRowMain}>

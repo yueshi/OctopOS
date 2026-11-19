@@ -485,10 +485,37 @@ function desktopExpertAccessible(agent: OctopAgent): boolean {
   );
 }
 
+/** Window resize edges and corners (four sides + four corners). */
+type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
+const RESIZE_DIRECTIONS: readonly ResizeDirection[] = [
+  "n",
+  "s",
+  "e",
+  "w",
+  "ne",
+  "nw",
+  "se",
+  "sw",
+];
+
+const RESIZE_HANDLE_CLASS: Record<ResizeDirection, string> = {
+  n: styles.desktopWindowResizeN,
+  s: styles.desktopWindowResizeS,
+  e: styles.desktopWindowResizeE,
+  w: styles.desktopWindowResizeW,
+  ne: styles.desktopWindowResizeNe,
+  nw: styles.desktopWindowResizeNw,
+  se: styles.desktopWindowResizeSe,
+  sw: styles.desktopWindowResizeSw,
+};
+
 interface WindowDrag {
   id: string;
   kind: DesktopWindowState["kind"];
   mode: "move" | "resize";
+  /** Set for mode ``resize``: which edge(s) the pointer moves. */
+  dir?: ResizeDirection;
   startX: number;
   startY: number;
   x: number;
@@ -670,6 +697,8 @@ export default function DesktopGrid({
   } | null>(null);
   const [resizePreview, setResizePreview] = useState<{
     id: string;
+    x: number;
+    y: number;
     w: number;
     h: number;
     startW: number;
@@ -1785,19 +1814,43 @@ export default function DesktopGrid({
       // Resize the window chrome immediately, but keep the content at its
       // starting size and scale it visually. The iframe therefore does not
       // reflow on every pointer move (which exposes a white backing edge).
+      // West/north drags move the window origin; the opposite edge stays put.
       const spec = WINDOW_REGISTRY[drag.kind];
-      drag.nextW = Math.max(
-        spec.minWidth,
-        Math.min(maxW - drag.x, drag.w + dx),
-      );
-      drag.nextH = Math.max(
-        spec.minHeight,
-        Math.min(maxH - drag.y, drag.h + dy),
-      );
+      const dir = drag.dir ?? "se";
+      let nextX = drag.x;
+      let nextY = drag.y;
+      let nextW = drag.w;
+      let nextH = drag.h;
+      if (dir.includes("e")) {
+        nextW = Math.max(spec.minWidth, Math.min(maxW - drag.x, drag.w + dx));
+      }
+      if (dir.includes("s")) {
+        nextH = Math.max(spec.minHeight, Math.min(maxH - drag.y, drag.h + dy));
+      }
+      if (dir.includes("w")) {
+        nextX = Math.max(
+          0,
+          Math.min(drag.x + drag.w - spec.minWidth, drag.x + dx),
+        );
+        nextW = drag.w + (drag.x - nextX);
+      }
+      if (dir.includes("n")) {
+        nextY = Math.max(
+          MENU_BAR_HEIGHT,
+          Math.min(drag.y + drag.h - spec.minHeight, drag.y + dy),
+        );
+        nextH = drag.h + (drag.y - nextY);
+      }
+      drag.nextX = nextX;
+      drag.nextY = nextY;
+      drag.nextW = nextW;
+      drag.nextH = nextH;
       setResizePreview({
         id: drag.id,
-        w: drag.nextW,
-        h: drag.nextH,
+        x: nextX,
+        y: nextY,
+        w: nextW,
+        h: nextH,
         startW: drag.w,
         startH: drag.h,
       });
@@ -1824,11 +1877,18 @@ export default function DesktopGrid({
         drag.nextW !== undefined &&
         drag.nextH !== undefined
       ) {
-        const nextW = drag.nextW;
-        const nextH = drag.nextH;
+        const { nextX, nextY, nextW, nextH } = drag;
         setWindows((list) =>
           list.map((win) =>
-            win.id === drag.id ? { ...win, w: nextW, h: nextH } : win,
+            win.id === drag.id
+              ? {
+                  ...win,
+                  x: nextX ?? win.x,
+                  y: nextY ?? win.y,
+                  w: nextW,
+                  h: nextH,
+                }
+              : win,
           ),
         );
       }
@@ -2254,7 +2314,11 @@ export default function DesktopGrid({
   );
 
   const startResize = useCallback(
-    (win: DesktopWindowState, event: ReactPointerEvent<HTMLElement>) => {
+    (
+      win: DesktopWindowState,
+      event: ReactPointerEvent<HTMLElement>,
+      dir: ResizeDirection,
+    ) => {
       if (event.button !== 0 || win.maximized) return;
       event.preventDefault();
       event.stopPropagation();
@@ -2264,6 +2328,7 @@ export default function DesktopGrid({
         id: win.id,
         kind: win.kind,
         mode: "resize",
+        dir,
         startX: event.clientX,
         startY: event.clientY,
         x: win.x,
@@ -2942,8 +3007,8 @@ export default function DesktopGrid({
                 .filter(Boolean)
                 .join(" ")}
               style={{
-                left: win.x,
-                top: win.y,
+                left: resizing?.x ?? win.x,
+                top: resizing?.y ?? win.y,
                 width: resizing?.w ?? win.w,
                 height: resizing?.h ?? win.h,
                 zIndex: win.z,
@@ -3149,7 +3214,6 @@ export default function DesktopGrid({
                       initialAppId={win.contextAppId}
                       seed={win.seed}
                       onSeedConsumed={consumeChatSeed}
-                      onOpenApp={openWindow}
                       onOpenFile={openFileInWindow}
                       onOpenFiles={openFilesFromChat}
                       windowId={win.id}
@@ -3179,14 +3243,21 @@ export default function DesktopGrid({
                     />
                   )}
               </div>
-              {!win.maximized && (
-                <span
-                  className={styles.desktopWindowResize}
-                  data-testid="desktop-window-resize"
-                  aria-hidden
-                  onPointerDown={(event) => startResize(win, event)}
-                />
-              )}
+              {!win.maximized &&
+                RESIZE_DIRECTIONS.map((dir) => (
+                  <span
+                    key={dir}
+                    className={`${styles.desktopWindowResizeHandle} ${RESIZE_HANDLE_CLASS[dir]}`}
+                    data-testid={
+                      dir === "se"
+                        ? "desktop-window-resize"
+                        : `desktop-window-resize-${dir}`
+                    }
+                    data-dir={dir}
+                    aria-hidden
+                    onPointerDown={(event) => startResize(win, event, dir)}
+                  />
+                ))}
             </section>
           );
         })}

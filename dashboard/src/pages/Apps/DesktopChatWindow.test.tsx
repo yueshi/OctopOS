@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ForwardedRef } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AppSummary } from "../../api/modules/apps";
+import { appsApi, type AppSummary } from "../../api/modules/apps";
 import type { OctopThread } from "../../api/modules/octopThreads";
 import type { OctopAgent } from "../../context/AgentContext";
 import DesktopChatWindow from "./DesktopChatWindow";
@@ -144,6 +145,16 @@ vi.mock("../../hooks/useServerTimezone", () => ({
   useServerTimezone: () => "UTC",
 }));
 
+vi.mock("../../components/MiniAppFrame", () => ({
+  default: ({ appId }: { appId: string }) => (
+    <div data-testid="mini-app-frame" data-app-id={appId} />
+  ),
+}));
+
+vi.mock("../../hooks/usePreviewImage", () => ({
+  usePreviewImage: () => null,
+}));
+
 const agent: OctopAgent = {
   id: 1,
   agent_id: "agent_1",
@@ -166,6 +177,23 @@ const agent: OctopAgent = {
   welcome_message: "今天想先处理哪个小程序？",
 };
 
+const dashboardThread: OctopThread = {
+  thread_id: "thr_dash",
+  title: "客户跟进",
+  channel_type: "dashboard",
+  session_key: "session",
+  last_active: 1_700_000_000,
+  created_at: 1_700_000_000,
+  has_messages: true,
+};
+
+const imThread: OctopThread = {
+  ...dashboardThread,
+  thread_id: "thr_im",
+  title: "微信里的客户",
+  channel_type: "wecom",
+};
+
 const app: AppSummary = {
   app_id: "app_1",
   name: "客户跟进台账",
@@ -184,21 +212,23 @@ const app: AppSummary = {
   updated_at: 0,
 };
 
-const dashboardThread: OctopThread = {
-  thread_id: "thr_dash",
-  title: "客户跟进",
-  channel_type: "dashboard",
-  session_key: "session",
-  last_active: 1_700_000_000,
-  created_at: 1_700_000_000,
-  has_messages: true,
-};
-
-const imThread: OctopThread = {
-  ...dashboardThread,
-  thread_id: "thr_im",
-  title: "微信里的客户",
-  channel_type: "wecom",
+const appCardMessage = {
+  id: "m_app",
+  role: "tool",
+  content: "",
+  toolData: {
+    name: "app_open",
+    output: JSON.stringify({
+      octop_ui: { renderer: "app_card", version: 1 },
+      data: {
+        app_id: "app_1",
+        name: "客户跟进台账",
+        row_count: 12,
+        has_preview: false,
+        capabilities: [],
+      },
+    }),
+  },
 };
 
 function mockChat(options?: { messages?: unknown[]; isStreaming?: boolean }) {
@@ -229,6 +259,7 @@ function mockChat(options?: { messages?: unknown[]; isStreaming?: boolean }) {
 describe("DesktopChatWindow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(appsApi, "inThread").mockResolvedValue({ apps: [] });
     localStorage.clear();
     clearDesktopNotifications();
     currentUser.value = { id: 1, username: "alice", role: "admin" };
@@ -240,6 +271,10 @@ describe("DesktopChatWindow", () => {
     mockChat();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("resumes the latest dashboard conversation and shows the message stream", async () => {
     mockChat({ messages: [{ id: "m1" }, { id: "m2" }] });
     render(
@@ -247,7 +282,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
       />,
     );
 
@@ -274,60 +308,117 @@ describe("DesktopChatWindow", () => {
     );
   });
 
-  it("prefills an app action into the composer", async () => {
+  it("lists conversation MiniApps in the sidebar and runs one in place", async () => {
+    mockChat({ messages: [appCardMessage] });
     render(
-      <DesktopChatWindow
-        agentId="agent_1"
-        agentName="销售助理"
-        agent={agent}
-        apps={[app]}
-        initialAppId="app_1"
-      />,
+      <MemoryRouter>
+        <DesktopChatWindow
+          agentId="agent_1"
+          agentName="销售助理"
+          agent={agent}
+          apps={[app]}
+        />
+      </MemoryRouter>,
     );
 
-    const composer = (await screen.findByLabelText(
-      "composer",
-    )) as HTMLTextAreaElement;
-    fireEvent.click(screen.getByTestId("desktop-chat-action-optimize"));
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("desktop-chat-apps-toggle"));
 
-    expect(composer.value).toContain("客户跟进台账");
-    expect(composer.value).toContain("app_1");
+    expect(screen.getByTestId("desktop-chat-sidebar")).toHaveTextContent(
+      "客户跟进台账",
+    );
+    fireEvent.click(screen.getByText("客户跟进台账"));
+
+    expect(screen.getByTestId("mini-app-frame")).toHaveAttribute(
+      "data-app-id",
+      "app_1",
+    );
   });
 
-  it("opens the selected MiniApp window from the context bar", async () => {
-    const onOpenApp = vi.fn();
+  it("opens and closes the MiniApp sidebar from the header toggle", async () => {
     render(
-      <DesktopChatWindow
-        agentId="agent_1"
-        agentName="销售助理"
-        agent={agent}
-        apps={[app]}
-        initialAppId="app_1"
-        onOpenApp={onOpenApp}
-      />,
+      <MemoryRouter>
+        <DesktopChatWindow
+          agentId="agent_1"
+          agentName="销售助理"
+          agent={agent}
+          apps={[app]}
+        />
+      </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByTestId("desktop-chat-open-app"));
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("desktop-chat-apps-toggle"));
+    expect(screen.getByTestId("desktop-chat-sidebar")).toBeInTheDocument();
 
-    expect(onOpenApp).toHaveBeenCalledWith(app);
+    fireEvent.click(screen.getByTestId("desktop-chat-sidebar-close"));
+    expect(
+      screen.queryByTestId("desktop-chat-sidebar"),
+    ).not.toBeInTheDocument();
   });
 
-  it("opens a MiniApp window directly from the app picker", async () => {
-    const onOpenApp = vi.fn();
+  it("resizes the side panel by dragging its edge", async () => {
+    mockChat({ messages: [{ id: "m1" }] });
     render(
       <DesktopChatWindow
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
-        onOpenApp={onOpenApp}
       />,
     );
 
-    fireEvent.click(await screen.findByTestId("desktop-chat-pick-app"));
-    fireEvent.click(await screen.findByTestId("desktop-chat-app-open"));
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("mock-open-side-panel"));
 
-    expect(onOpenApp).toHaveBeenCalledWith(app);
+    const panel = screen.getByTestId("desktop-chat-sidebar") as HTMLElement;
+    const container = panel.parentElement as HTMLElement;
+    // jsdom has no layout: fake the measured widths the drag reads.
+    Object.defineProperty(panel, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        width: Number.parseFloat(panel.style.width) || 300,
+        height: 500,
+        left: 600,
+        top: 0,
+        right: 900,
+        bottom: 500,
+        x: 600,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    });
+    Object.defineProperty(container, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        width: 900,
+        height: 500,
+        left: 0,
+        top: 0,
+        right: 900,
+        bottom: 500,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }),
+    });
+
+    const handle = screen.getByTestId("desktop-chat-sidebar-resizer");
+    fireEvent(
+      handle,
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 500,
+      }),
+    );
+    fireEvent(
+      document,
+      new MouseEvent("pointermove", { bubbles: true, clientX: 400 }),
+    );
+    fireEvent(document, new MouseEvent("pointerup", { bubbles: true }));
+
+    // Dragging left by 100px widens the sidebar from 300px to 400px.
+    expect(panel.style.width).toBe("400px");
   });
 
   it("lists conversations and switches to the selected thread", async () => {
@@ -336,7 +427,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
       />,
     );
 
@@ -358,7 +448,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
       />,
     );
 
@@ -380,7 +469,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={sharedAgent}
-        apps={[app]}
       />,
     );
 
@@ -444,7 +532,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
         onOpenFiles={onOpenFiles}
       />,
     );
@@ -463,7 +550,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
         onOpenFile={onOpenFile}
       />,
     );
@@ -478,31 +564,108 @@ describe("DesktopChatWindow", () => {
     );
   });
 
-  it("opens plugin tool UIs in an in-window side panel", async () => {
+  it("opens plugin tool UIs as a tab in the side panel", async () => {
     mockChat({ messages: [{ id: "m1" }] });
     render(
       <DesktopChatWindow
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
       />,
     );
 
     await screen.findByText("客户跟进");
     expect(
-      screen.queryByTestId("desktop-chat-tool-panel"),
+      screen.queryByTestId("desktop-chat-sidebar"),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("mock-open-side-panel"));
 
-    const panel = screen.getByTestId("desktop-chat-tool-panel");
-    expect(panel).toHaveTextContent("客户台账");
-    expect(panel).toHaveTextContent("no longer available");
+    const tab = screen.getByTestId("desktop-chat-side-tab");
+    expect(tab).toHaveAttribute("data-tab-kind", "tool");
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveTextContent("客户台账");
+    expect(screen.getByTestId("desktop-chat-sidebar")).toHaveTextContent(
+      "no longer available",
+    );
 
-    fireEvent.click(screen.getByTestId("desktop-chat-tool-panel-close"));
+    fireEvent.click(screen.getByTestId("desktop-chat-side-tab-close"));
     expect(
-      screen.queryByTestId("desktop-chat-tool-panel"),
+      screen.queryByTestId("desktop-chat-sidebar"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the MiniApps tab mounted while a tool tab is active", async () => {
+    mockChat({ messages: [{ id: "m1" }] });
+    render(
+      <MemoryRouter>
+        <DesktopChatWindow
+          agentId="agent_1"
+          agentName="销售助理"
+          agent={agent}
+          apps={[app]}
+        />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("desktop-chat-apps-toggle"));
+    expect(screen.getAllByTestId("desktop-chat-side-tab")).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("mock-open-side-panel"));
+    const tabs = screen.getAllByTestId("desktop-chat-side-tab");
+    expect(tabs).toHaveLength(2);
+    const appsTab = tabs.find(
+      (tab) => tab.getAttribute("data-tab-kind") === "apps",
+    )!;
+    const toolTab = tabs.find(
+      (tab) => tab.getAttribute("data-tab-kind") === "tool",
+    )!;
+    expect(toolTab).toHaveAttribute("aria-selected", "true");
+    expect(appsTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByText(/no longer available/)).toBeVisible();
+
+    fireEvent.click(screen.getByText("MiniApps"));
+
+    expect(appsTab).toHaveAttribute("aria-selected", "true");
+    expect(toolTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByText(/no longer available/)).not.toBeVisible();
+    expect(
+      screen.getByText("No MiniApp in this conversation yet."),
+    ).toBeVisible();
+  });
+
+  it("switches to MiniApps before collapsing from the header toggle", async () => {
+    mockChat({ messages: [{ id: "m1" }] });
+    render(
+      <MemoryRouter>
+        <DesktopChatWindow
+          agentId="agent_1"
+          agentName="销售助理"
+          agent={agent}
+          apps={[app]}
+        />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("desktop-chat-apps-toggle"));
+    fireEvent.click(screen.getByTestId("mock-open-side-panel"));
+
+    const appsTab = screen
+      .getAllByTestId("desktop-chat-side-tab")
+      .find((tab) => tab.getAttribute("data-tab-kind") === "apps")!;
+    expect(appsTab).toHaveAttribute("aria-selected", "false");
+
+    // The header control is the MiniApps toggle: it switches tabs first, and
+    // collapses only when MiniApps is already the active tab.
+    fireEvent.click(screen.getByTestId("desktop-chat-apps-toggle"));
+    expect(screen.getByTestId("desktop-chat-sidebar")).toBeInTheDocument();
+    expect(appsTab).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByTestId("desktop-chat-apps-toggle"));
+    expect(
+      screen.queryByTestId("desktop-chat-sidebar"),
     ).not.toBeInTheDocument();
   });
 
@@ -514,7 +677,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
         onOpenFiles={onOpenFiles}
       />,
     );
@@ -531,7 +693,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={agent}
-        apps={[app]}
       />,
     );
     await screen.findByText("客户跟进");
@@ -546,7 +707,6 @@ describe("DesktopChatWindow", () => {
         agentId="agent_1"
         agentName="销售助理"
         agent={{ ...agent, user_id: 3, owner_username: "jk", is_owner: false }}
-        apps={[app]}
       />,
     );
     await screen.findByText("客户跟进");

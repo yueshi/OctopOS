@@ -2,19 +2,26 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Spin, Tooltip } from "antd";
 import {
   AppWindow,
-  ArrowUpRight,
   Check,
   ChevronDown,
   FolderOpen,
+  Gamepad2,
   MessageSquare,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
+  Puzzle,
   RefreshCw,
   ShieldAlert,
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { AppGameSession, AppSummary } from "../../api/modules/apps";
+import {
+  appsApi,
+  type AppGameSession,
+  type AppSummary,
+} from "../../api/modules/apps";
 import {
   octopThreadsApi,
   type OctopThread,
@@ -29,18 +36,27 @@ import type {
   OpenGamePanelOptions,
   OpenSidePanelOptions,
 } from "../../plugins/toolRenderers/types";
+import GameFrame from "../../components/MiniAppFrame/GameFrame";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { beginPointerDragSession } from "../../hooks/usePointerDragSession";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { message } from "../../utils/antdMessage";
 import { isAgentChatReady } from "../../utils/agentError";
 import { formatMessageTime } from "../../utils/formatMessageTime";
 import { isTeamAgent } from "../../utils/teamAgent";
 import ChatInput, { type ChatInputHandle } from "../Chat/components/ChatInput";
+import ChatDockSessionApps from "../Chat/components/ChatDockSessionApps";
 import MessageList from "../Chat/components/MessageList";
 import { ChatFilePreviewProvider } from "../Chat/ChatFilePreviewContext";
 import * as chatStore from "../Chat/hooks/chatStore";
 import { useChat, type ChatAttachment } from "../Chat/hooks/useChat";
 import { parseConversationMode } from "../Chat/utils/conversationMode";
+import {
+  collectSessionApps,
+  mergeSessionApps,
+  sessionAppsFromSummaries,
+  type SessionApp,
+} from "../Chat/utils/sessionApps";
 import {
   findPendingApproval,
   findPendingAsk,
@@ -48,9 +64,7 @@ import {
 } from "../Chat/utils/pendingHitl";
 import { formatThreadTitle } from "../Chat/utils/threadTitle";
 import { ExpertIcon } from "../Experts/components/iconForName";
-import DesktopChatToolPanel, {
-  type DesktopChatPanelState,
-} from "./DesktopChatToolPanel";
+import DesktopChatToolPanel from "./DesktopChatToolPanel";
 import { addDesktopNotification } from "./desktopNotifications";
 import { isArtifactToolName } from "./desktopFiles";
 import {
@@ -58,26 +72,20 @@ import {
   type DesktopArtifactsEventDetail,
   type DesktopChatSeed,
 } from "./desktopWindows";
-import {
-  APP_ACTIONS,
-  actionPromptFor,
-  fillTemplate,
-  type AppActionDef,
-} from "./appActions";
+import { APP_ACTIONS, actionPromptFor, fillTemplate } from "./appActions";
 import styles from "./index.module.less";
 
 interface DesktopChatWindowProps {
   agentId: string;
   agentName: string;
   agent?: OctopAgent | null;
-  apps: AppSummary[];
+  /** The expert's MiniApps; feeds the in-window apps sidebar. */
+  apps?: AppSummary[];
   /** The MiniApp this chat was opened for (desktop action / app compose). */
   initialAppId?: string | null;
   /** One-shot composer prefill from the desktop pet or an action button. */
   seed?: DesktopChatSeed | null;
   onSeedConsumed?: (windowId: string) => void;
-  /** Open or focus the MiniApp window inside the current desktop. */
-  onOpenApp?: (app: AppSummary) => void;
   /** Open a chat file card in the desktop Files window. */
   onOpenFile?: (
     path: string,
@@ -96,9 +104,67 @@ interface DesktopChatWindowProps {
   active?: boolean;
 }
 
-type ChatPanel = "threads" | "apps" | null;
+type ChatPanel = "threads" | null;
+
+/** One tab in the in-window side panel (apps / plugin tool / MiniApp game). */
+type DesktopSideTab =
+  | { id: "apps"; kind: "apps" }
+  | {
+      id: string;
+      kind: "tool";
+      callId: string;
+      title?: string;
+      toolName?: string;
+    }
+  | { id: string; kind: "game"; appId: string; session: AppGameSession };
 
 const THREAD_STORE_PREFIX = "octop:apps-desktop-thread:";
+const SIDEBAR_WIDTH_KEY = "octop:apps-desktop-sidebar:width";
+
+/** In-window side panel: default width and drag limits. */
+const SIDEBAR_DEFAULT_WIDTH = 300;
+const SIDEBAR_MIN_WIDTH = 220;
+const CHAT_PANEL_MIN_WIDTH = 260;
+
+function toolTabId(callId: string): string {
+  return `tool:${callId}`;
+}
+
+function gameTabId(appId: string, gameId: string): string {
+  return `game:${appId}:${gameId}`;
+}
+
+/** Keep the current tab when it survives, else prefer apps, else the last. */
+function fallbackSideTabId(
+  tabs: readonly DesktopSideTab[],
+  current: string | null,
+): string | null {
+  if (current && tabs.some((tab) => tab.id === current)) return current;
+  return (
+    tabs.find((tab) => tab.kind === "apps")?.id ??
+    tabs[tabs.length - 1]?.id ??
+    null
+  );
+}
+
+function loadSidebarWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(saved) && saved >= SIDEBAR_MIN_WIDTH
+      ? saved
+      : SIDEBAR_DEFAULT_WIDTH;
+  } catch {
+    return SIDEBAR_DEFAULT_WIDTH;
+  }
+}
+
+function rememberSidebarWidth(width: number): void {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+  } catch {
+    // Private windows can disable storage; the width still applies for now.
+  }
+}
 
 function threadTitle(thread: OctopThread | null, fallback: string): string {
   return formatThreadTitle(thread?.title) || fallback;
@@ -125,17 +191,18 @@ function recallThread(agentId: string): string | null {
  *
  * It reuses the production chat transport (`useChat` → chatStore/WebSocket),
  * message renderer and composer, then adds desktop-app chrome: expert identity,
- * thread history, app context with expert actions, and a status footer.
+ * thread history, a tabbed side panel for MiniApps / plugin tools / games, and a
+ * status footer. The side panel has no separate app context bar: selecting an
+ * app only runs it inside the panel.
  */
 function DesktopChatWindow({
   agentId,
   agentName,
   agent = null,
-  apps,
+  apps = [],
   initialAppId = null,
   seed = null,
   onSeedConsumed,
-  onOpenApp,
   onOpenFile,
   onOpenFiles,
   windowId,
@@ -158,16 +225,25 @@ function DesktopChatWindow({
   const [threadsError, setThreadsError] = useState(false);
   const [bootKey, setBootKey] = useState(0);
   const [panel, setPanel] = useState<ChatPanel>(null);
-  const [toolPanel, setToolPanel] = useState<DesktopChatPanelState | null>(
-    null,
-  );
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sideTabs, setSideTabs] = useState<DesktopSideTab[]>([]);
+  const [activeSideTabId, setActiveSideTabId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
   const [activeAppId, setActiveAppId] = useState<string | null>(initialAppId);
   const creatingRef = useRef(false);
+  const sidebarPanelRef = useRef<HTMLElement | null>(null);
+  const sidebarResizeRef = useRef<{
+    startX: number;
+    startWidth: number;
+    maxWidth: number;
+  } | null>(null);
   const inputRef = useRef<ChatInputHandle | null>(null);
   const seedAppliedRef = useRef<number | null>(null);
   const wasStreamingRef = useRef(false);
 
   const activeApp = apps.find((app) => app.app_id === activeAppId) ?? null;
+  const appsTabOpen = sidebarOpen && activeSideTabId === "apps";
 
   // An admin may chat through another user's expert; make the proxy explicit
   // and show both owners so write actions are never silently attributed.
@@ -194,6 +270,12 @@ function DesktopChatWindow({
   }, [seed]);
 
   useEffect(() => {
+    if (activeAppId && !apps.some((app) => app.app_id === activeAppId)) {
+      setActiveAppId(null);
+    }
+  }, [activeAppId, apps]);
+
+  useEffect(() => {
     if (!panel) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -204,12 +286,6 @@ function DesktopChatWindow({
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [panel]);
-
-  useEffect(() => {
-    if (activeAppId && !apps.some((app) => app.app_id === activeAppId)) {
-      setActiveAppId(null);
-    }
-  }, [activeAppId, apps]);
 
   const createThread = useCallback(async (): Promise<string | null> => {
     if (creatingRef.current) return null;
@@ -318,6 +394,55 @@ function DesktopChatWindow({
     if (!threadId) return;
     void loadHistory(threadId);
   }, [loadHistory, threadId]);
+
+  // MiniApps this conversation created or opened — the side panel's apps tab.
+  // History only holds the latest page, so the tab also asks the server for the
+  // whole thread; the transcript keeps live cards visible meanwhile.
+  const transcriptSessionApps = useMemo(
+    () => collectSessionApps(messages),
+    [messages],
+  );
+  const transcriptAppIds = transcriptSessionApps
+    .map((app) => app.app_id)
+    .join("\u0000");
+  const sessionAppsThread = `${agentId}\u0000${threadId ?? ""}`;
+  const [threadSessionApps, setThreadSessionApps] = useState<{
+    thread: string;
+    apps: SessionApp[];
+  } | null>(null);
+  useEffect(() => {
+    if (!appsTabOpen || !threadId) {
+      setThreadSessionApps(null);
+      return;
+    }
+    let alive = true;
+    appsApi
+      .inThread(agentId, threadId)
+      .then((data) => {
+        if (alive) {
+          setThreadSessionApps({
+            thread: sessionAppsThread,
+            apps: sessionAppsFromSummaries(data.apps),
+          });
+        }
+      })
+      .catch(() => {
+        if (alive) setThreadSessionApps(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [agentId, appsTabOpen, sessionAppsThread, threadId, transcriptAppIds]);
+  const sessionApps = useMemo(
+    () =>
+      mergeSessionApps(
+        threadSessionApps?.thread === sessionAppsThread
+          ? threadSessionApps.apps
+          : null,
+        transcriptSessionApps,
+      ),
+    [threadSessionApps, sessionAppsThread, transcriptSessionApps],
+  );
 
   // Surface permission blocks in the desktop notification center. Only cards
   // that arrive after history hydration notify; opening an old conversation
@@ -443,23 +568,150 @@ function DesktopChatWindow({
   }, []);
 
   // Plugin renderers call ``host.openSidePanel``; inside the desktop that
-  // opens a panel in this window instead of the chat page's global dock.
-  const openToolPanel = useCallback((opts: OpenSidePanelOptions) => {
-    setToolPanel({
-      kind: "tool",
-      callId: opts.callId,
-      title: opts.title,
-      toolName: opts.toolName,
+  // opens a tab in this window's side panel instead of the chat page's dock.
+  // Apps, plugin tools and games share one tabbed panel, like the chat dock.
+  const addSideTab = useCallback((tab: DesktopSideTab) => {
+    setSideTabs((prev) => {
+      const existing = prev.find((item) => item.id === tab.id);
+      if (!existing) return [...prev, tab];
+      if (existing.kind === "game" && tab.kind === "game") {
+        // Relaunching the same game replaces the session (stale tokens).
+        return prev.map((item) => (item.id === tab.id ? tab : item));
+      }
+      return prev;
+    });
+    setActiveSideTabId(tab.id);
+    setSidebarOpen(true);
+  }, []);
+  const showAppsTab = useCallback(() => {
+    addSideTab({ id: "apps", kind: "apps" });
+  }, [addSideTab]);
+  const closeSideTab = useCallback((id: string) => {
+    setSideTabs((prev) => {
+      const next = prev.filter((tab) => tab.id !== id);
+      setActiveSideTabId((current) =>
+        fallbackSideTabId(next, current === id ? null : current),
+      );
+      if (next.length === 0) setSidebarOpen(false);
+      return next;
     });
   }, []);
-  const closeToolPanel = useCallback(() => setToolPanel(null), []);
-  const closeToolPanelForCall = useCallback((callId: string) => {
-    setToolPanel((current) =>
-      current?.kind === "tool" && current.callId === callId ? null : current,
-    );
+  const closeToolPanelForCall = useCallback(
+    (callId: string) => {
+      closeSideTab(toolTabId(callId));
+    },
+    [closeSideTab],
+  );
+  const openToolPanel = useCallback(
+    (opts: OpenSidePanelOptions) => {
+      addSideTab({
+        id: toolTabId(opts.callId),
+        kind: "tool",
+        callId: opts.callId,
+        title: opts.title,
+        toolName: opts.toolName,
+      });
+    },
+    [addSideTab],
+  );
+  const openGameTab = useCallback(
+    (appId: string, session: AppGameSession) => {
+      addSideTab({
+        id: gameTabId(appId, session.game_id),
+        kind: "game",
+        appId,
+        session,
+      });
+    },
+    [addSideTab],
+  );
+  const openGamePanel = useCallback(
+    (opts: OpenGamePanelOptions) => {
+      openGameTab(opts.appId, opts.session);
+    },
+    [openGameTab],
+  );
+  const toggleAppsSidebar = useCallback(() => {
+    if (sidebarOpen && activeSideTabId === "apps") {
+      setSidebarOpen(false);
+      return;
+    }
+    showAppsTab();
+  }, [activeSideTabId, showAppsTab, sidebarOpen]);
+  // The dock's close control drops plugin tool tabs (they return to the
+  // message stream) and keeps the apps / game tabs.
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen(false);
+    setSideTabs((prev) => {
+      const next = prev.filter((tab) => tab.kind !== "tool");
+      setActiveSideTabId((current) => fallbackSideTabId(next, current));
+      return next;
+    });
   }, []);
-  const openGamePanel = useCallback((opts: OpenGamePanelOptions) => {
-    setToolPanel({ kind: "game", appId: opts.appId, session: opts.session });
+  /** Drop plugin tool tabs when the conversation changes under them. */
+  const dropToolTabs = useCallback(() => {
+    setSideTabs((prev) => {
+      const next = prev.filter((tab) => tab.kind !== "tool");
+      if (next.length === prev.length) return prev;
+      setActiveSideTabId((current) => fallbackSideTabId(next, current));
+      if (next.length === 0) setSidebarOpen(false);
+      return next;
+    });
+  }, []);
+  const resetSideTabs = useCallback(() => {
+    setSideTabs([]);
+    setActiveSideTabId(null);
+    setSidebarOpen(false);
+  }, []);
+  const handleSelectSessionApp = useCallback((app: SessionApp) => {
+    setActiveAppId(app.app_id);
+  }, []);
+  // Drag the sidebar's left edge. Width is written to the DOM during the drag
+  // (no chat re-render / iframe churn) and committed to state on pointerup.
+  const handleSidebarResizeStart = useCallback((event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const panel = sidebarPanelRef.current;
+    const container = panel?.parentElement;
+    if (!panel || !container) return;
+    sidebarResizeRef.current = {
+      startX: event.clientX,
+      startWidth: panel.getBoundingClientRect().width,
+      maxWidth: Math.max(
+        SIDEBAR_MIN_WIDTH,
+        container.getBoundingClientRect().width - CHAT_PANEL_MIN_WIDTH,
+      ),
+    };
+    setSidebarResizing(true);
+    beginPointerDragSession({
+      pointerId: event.pointerId,
+      target: event.currentTarget as HTMLElement,
+      cursor: "col-resize",
+      onMove: (clientX) => {
+        const drag = sidebarResizeRef.current;
+        const el = sidebarPanelRef.current;
+        if (!drag || !el) return;
+        const width = Math.min(
+          drag.maxWidth,
+          Math.max(
+            SIDEBAR_MIN_WIDTH,
+            drag.startWidth + (drag.startX - clientX),
+          ),
+        );
+        el.style.width = `${width}px`;
+      },
+      onEnd: () => {
+        const el = sidebarPanelRef.current;
+        const drag = sidebarResizeRef.current;
+        sidebarResizeRef.current = null;
+        setSidebarResizing(false);
+        if (!el || !drag) return;
+        const width = Math.round(el.getBoundingClientRect().width);
+        setSidebarWidth(width);
+        rememberSidebarWidth(width);
+      },
+    });
   }, []);
   const toolHostOverrides = useMemo(
     () => ({
@@ -471,9 +723,9 @@ function DesktopChatWindow({
   );
   const handleGameSession = useCallback(
     (appId: string, session: AppGameSession) => {
-      setToolPanel({ kind: "game", appId, session });
+      openGameTab(appId, session);
     },
-    [],
+    [openGameTab],
   );
   const handleOpenExternal = useCallback(
     (url: string) => {
@@ -584,9 +836,9 @@ function DesktopChatWindow({
 
   const handleNewChat = useCallback(() => {
     setPanel(null);
-    setToolPanel(null);
+    resetSideTabs();
     void createThread();
-  }, [createThread]);
+  }, [createThread, resetSideTabs]);
 
   const handleEditUserMessage = useCallback(
     (messageId: string, newText: string) => {
@@ -608,17 +860,10 @@ function DesktopChatWindow({
       setThreadId(id);
       rememberThread(agentId, id);
       setPanel(null);
-      setToolPanel(null);
+      // Tool UIs are transcript-bound; the apps tab follows the new thread.
+      dropToolTabs();
     },
-    [agentId],
-  );
-
-  const handleAction = useCallback(
-    (action: AppActionDef) => {
-      if (!activeApp) return;
-      prefill(actionPromptFor(action, activeApp, tr));
-    },
-    [activeApp, prefill, tr],
+    [agentId, dropToolTabs],
   );
 
   const quickPrompts = useMemo(() => {
@@ -715,6 +960,34 @@ function DesktopChatWindow({
               </button>
             </Tooltip>
           )}
+          <Tooltip
+            title={
+              appsTabOpen
+                ? tr("chat.sessionAppsClose", "Close MiniApp sidebar")
+                : tr("chat.sessionAppsOpen", "Open MiniApp sidebar")
+            }
+          >
+            <button
+              type="button"
+              className={`${styles.desktopChatIconButton} ${
+                appsTabOpen ? styles.desktopChatIconButtonActive : ""
+              }`}
+              data-testid="desktop-chat-apps-toggle"
+              aria-label={
+                appsTabOpen
+                  ? tr("chat.sessionAppsClose", "Close MiniApp sidebar")
+                  : tr("chat.sessionAppsOpen", "Open MiniApp sidebar")
+              }
+              aria-pressed={appsTabOpen}
+              onClick={toggleAppsSidebar}
+            >
+              {appsTabOpen ? (
+                <PanelRightClose size={15} />
+              ) : (
+                <PanelRightOpen size={15} />
+              )}
+            </button>
+          </Tooltip>
           <button
             type="button"
             className={styles.desktopChatThreadButton}
@@ -772,7 +1045,7 @@ function DesktopChatWindow({
         </div>
       )}
 
-      {panel && (
+      {panel === "threads" && (
         <>
           <button
             type="button"
@@ -783,247 +1056,71 @@ function DesktopChatWindow({
           <div
             className={styles.desktopChatPanel}
             role="dialog"
-            aria-label={
-              panel === "threads"
-                ? tr("apps.desktop.sessions", "Conversations")
-                : tr("apps.desktop.pickApp", "Choose a MiniApp")
-            }
-            data-testid={`desktop-chat-panel-${panel}`}
+            aria-label={tr("apps.desktop.sessions", "Conversations")}
+            data-testid="desktop-chat-panel-threads"
           >
-            {panel === "threads" ? (
-              <>
-                <div className={styles.desktopChatPanelHeader}>
-                  <span>{tr("apps.desktop.sessions", "Conversations")}</span>
-                  <button
-                    type="button"
-                    className={styles.desktopChatPanelAction}
-                    onClick={handleNewChat}
-                  >
-                    <Plus size={12} />
-                    {tr("apps.desktop.newChat", "New conversation")}
-                  </button>
-                </div>
-                <div className={styles.desktopChatPanelList}>
-                  {threads.length === 0 ? (
-                    <div className={styles.desktopChatPanelEmpty}>
-                      {tr("apps.desktop.noSessions", "No conversations yet.")}
-                    </div>
-                  ) : (
-                    threads.map((thread) => {
-                      const active = thread.thread_id === threadId;
-                      const stamp = thread.last_active
-                        ? formatMessageTime(thread.last_active * 1000, timeZone)
-                        : "";
-                      return (
-                        <button
-                          key={thread.thread_id}
-                          type="button"
-                          className={[
-                            styles.desktopChatThreadItem,
-                            active ? styles.desktopChatThreadItemActive : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" ")}
-                          data-testid="desktop-chat-thread"
-                          data-thread-id={thread.thread_id}
-                          aria-pressed={active}
-                          onClick={() => handleSelectThread(thread.thread_id)}
-                        >
-                          <span className={styles.desktopChatThreadItemMain}>
-                            <span className={styles.desktopChatThreadItemName}>
-                              {threadTitle(
-                                thread,
-                                tr(
-                                  "apps.desktop.untitledThread",
-                                  "New conversation",
-                                ),
-                              )}
-                            </span>
-                            <span className={styles.desktopChatThreadItemMeta}>
-                              {stamp || tr("apps.desktop.emptyThread", "Empty")}
-                              {thread.channel_type !== "dashboard"
-                                ? ` · ${thread.channel_type}`
-                                : ""}
-                            </span>
-                          </span>
-                          {active && <Check size={14} />}
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className={styles.desktopChatPanelHeader}>
-                  <span>{tr("apps.desktop.pickApp", "Choose a MiniApp")}</span>
-                </div>
-                <div className={styles.desktopChatPanelList}>
-                  {apps.length === 0 ? (
-                    <div className={styles.desktopChatPanelEmpty}>
-                      {tr(
-                        "apps.desktop.noAppsForExpert",
-                        "This expert has not created a MiniApp yet.",
-                      )}
-                    </div>
-                  ) : (
-                    apps.map((app) => {
-                      const active = app.app_id === activeAppId;
-                      return (
-                        <div
-                          key={app.app_id}
-                          className={styles.desktopChatAppRow}
-                        >
-                          <button
-                            type="button"
-                            className={[
-                              styles.desktopChatAppItem,
-                              active ? styles.desktopChatAppItemActive : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                            data-testid="desktop-chat-app-option"
-                            data-app-id={app.app_id}
-                            aria-pressed={active}
-                            onClick={() => {
-                              setActiveAppId(app.app_id);
-                              setPanel(null);
-                            }}
-                          >
-                            <span className={styles.desktopChatAppItemIcon}>
-                              <AppWindow size={14} />
-                            </span>
-                            <span className={styles.desktopChatAppItemText}>
-                              <span className={styles.desktopChatAppItemName}>
-                                {app.name}
-                              </span>
-                              <span className={styles.desktopChatAppItemMeta}>
-                                {fillTemplate(
-                                  tr("apps.desktop.appRows", "{{count}} rows"),
-                                  { count: app.row_count },
-                                )}
-                              </span>
-                            </span>
-                            {active && <Check size={14} />}
-                          </button>
-                          {onOpenApp && (
-                            <button
-                              type="button"
-                              className={styles.desktopChatAppOpen}
-                              data-testid="desktop-chat-app-open"
-                              aria-label={`${tr(
-                                "apps.desktop.openMiniApp",
-                                "Open",
-                              )} ${app.name}`}
-                              title={tr("apps.desktop.openMiniApp", "Open")}
-                              onClick={() => {
-                                setActiveAppId(app.app_id);
-                                setPanel(null);
-                                onOpenApp(app);
-                              }}
-                            >
-                              <ArrowUpRight size={14} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-                {activeApp && (
-                  <button
-                    type="button"
-                    className={styles.desktopChatPanelClear}
-                    onClick={() => {
-                      setActiveAppId(null);
-                      setPanel(null);
-                    }}
-                  >
-                    <X size={12} />
-                    {tr(
-                      "apps.desktop.clearAppContext",
-                      "Clear MiniApp context",
-                    )}
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        </>
-      )}
-
-      {(activeApp || apps.length > 0) && (
-        <div
-          className={styles.desktopChatContext}
-          data-testid="desktop-chat-context"
-        >
-          {activeApp ? (
-            <>
-              <span className={styles.desktopChatContextIcon}>
-                <AppWindow size={13} />
-              </span>
-              <span className={styles.desktopChatContextName}>
-                {activeApp.name}
-              </span>
-              <div className={styles.desktopChatContextActions}>
-                {onOpenApp && (
-                  <button
-                    type="button"
-                    className={styles.desktopChatContextOpen}
-                    data-testid="desktop-chat-open-app"
-                    title={tr("apps.desktop.openMiniApp", "Open")}
-                    onClick={() => onOpenApp(activeApp)}
-                  >
-                    <ArrowUpRight size={12} />
-                    <span>{tr("apps.desktop.openMiniApp", "Open")}</span>
-                  </button>
-                )}
-                {APP_ACTIONS.map(({ key, icon: Icon, labelKey, label }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={styles.desktopChatContextAction}
-                    data-testid={`desktop-chat-action-${key}`}
-                    onClick={() => {
-                      const action = APP_ACTIONS.find(
-                        (item) => item.key === key,
-                      );
-                      if (action) handleAction(action);
-                    }}
-                  >
-                    <Icon size={12} />
-                    <span>{tr(labelKey, label)}</span>
-                  </button>
-                ))}
-              </div>
+            <div className={styles.desktopChatPanelHeader}>
+              <span>{tr("apps.desktop.sessions", "Conversations")}</span>
               <button
                 type="button"
-                className={styles.desktopChatContextClear}
-                aria-label={tr(
-                  "apps.desktop.clearAppContext",
-                  "Clear MiniApp context",
-                )}
-                onClick={() => setActiveAppId(null)}
+                className={styles.desktopChatPanelAction}
+                onClick={handleNewChat}
               >
-                <X size={12} />
+                <Plus size={12} />
+                {tr("apps.desktop.newChat", "New conversation")}
               </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className={styles.desktopChatContextPick}
-              data-testid="desktop-chat-pick-app"
-              onClick={() => setPanel("apps")}
-            >
-              <AppWindow size={13} />
-              {tr("apps.desktop.pickApp", "Choose a MiniApp")}
-              <span className={styles.desktopChatContextCount}>
-                {apps.length}
-              </span>
-              <ChevronDown size={12} />
-            </button>
-          )}
-        </div>
+            </div>
+            <div className={styles.desktopChatPanelList}>
+              {threads.length === 0 ? (
+                <div className={styles.desktopChatPanelEmpty}>
+                  {tr("apps.desktop.noSessions", "No conversations yet.")}
+                </div>
+              ) : (
+                threads.map((thread) => {
+                  const active = thread.thread_id === threadId;
+                  const stamp = thread.last_active
+                    ? formatMessageTime(thread.last_active * 1000, timeZone)
+                    : "";
+                  return (
+                    <button
+                      key={thread.thread_id}
+                      type="button"
+                      className={[
+                        styles.desktopChatThreadItem,
+                        active ? styles.desktopChatThreadItemActive : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      data-testid="desktop-chat-thread"
+                      data-thread-id={thread.thread_id}
+                      aria-pressed={active}
+                      onClick={() => handleSelectThread(thread.thread_id)}
+                    >
+                      <span className={styles.desktopChatThreadItemMain}>
+                        <span className={styles.desktopChatThreadItemName}>
+                          {threadTitle(
+                            thread,
+                            tr(
+                              "apps.desktop.untitledThread",
+                              "New conversation",
+                            ),
+                          )}
+                        </span>
+                        <span className={styles.desktopChatThreadItemMeta}>
+                          {stamp || tr("apps.desktop.emptyThread", "Empty")}
+                          {thread.channel_type !== "dashboard"
+                            ? ` · ${thread.channel_type}`
+                            : ""}
+                        </span>
+                      </span>
+                      {active && <Check size={14} />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       <ToolHostScopeProvider overrides={toolHostOverrides}>
@@ -1082,7 +1179,7 @@ function DesktopChatWindow({
                     <button
                       type="button"
                       className={styles.desktopChatWelcomePick}
-                      onClick={() => setPanel("apps")}
+                      onClick={showAppsTab}
                     >
                       <AppWindow size={13} />
                       {tr(
@@ -1178,18 +1275,145 @@ function DesktopChatWindow({
               </span>
             </footer>
           </div>
-          {toolPanel && (
-            <DesktopChatToolPanel
-              state={toolPanel}
-              messages={messages}
-              agentId={agentId}
-              isStreaming={isStreaming}
-              active={active}
-              onClose={closeToolPanel}
-              onComposeMessage={prefill}
-              onGameSession={handleGameSession}
-              onOpenExternal={onOpenExternal ? handleOpenExternal : undefined}
-            />
+          {sidebarOpen && sideTabs.length > 0 && (
+            <>
+              <div
+                className={`${styles.desktopChatSidebarResizer} ${
+                  sidebarResizing ? styles.desktopChatSidebarResizerActive : ""
+                }`}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={tr("chat.resizeSidebar", "Resize sidebar")}
+                data-testid="desktop-chat-sidebar-resizer"
+                onPointerDown={handleSidebarResizeStart}
+              >
+                <span className={styles.desktopChatSidebarResizerHandle} />
+              </div>
+              <aside
+                ref={sidebarPanelRef}
+                className={styles.desktopChatSidebar}
+                style={{ width: sidebarWidth }}
+                data-testid="desktop-chat-sidebar"
+              >
+                <div className={styles.desktopChatSidebarTabBar}>
+                  <div className={styles.desktopChatSidebarTabs} role="tablist">
+                    {sideTabs.map((tab) => {
+                      const isActive = tab.id === activeSideTabId;
+                      const label =
+                        tab.kind === "apps"
+                          ? tr("chat.dockMiniApps", "MiniApps")
+                          : tab.kind === "tool"
+                          ? tab.title ||
+                            tab.toolName ||
+                            tr("chat.dockToolUiTitle", "Plugin tool")
+                          : tab.session.name;
+                      return (
+                        <div
+                          key={tab.id}
+                          className={`${styles.desktopChatSidebarTab} ${
+                            isActive ? styles.desktopChatSidebarTabActive : ""
+                          }`}
+                          role="tab"
+                          aria-selected={isActive}
+                          data-testid="desktop-chat-side-tab"
+                          data-tab-id={tab.id}
+                          data-tab-kind={tab.kind}
+                        >
+                          <button
+                            type="button"
+                            className={styles.desktopChatSidebarTabLabel}
+                            title={label}
+                            onClick={() => setActiveSideTabId(tab.id)}
+                          >
+                            {tab.kind === "apps" ? (
+                              <AppWindow size={13} aria-hidden />
+                            ) : tab.kind === "tool" ? (
+                              <Puzzle size={13} aria-hidden />
+                            ) : (
+                              <Gamepad2 size={13} aria-hidden />
+                            )}
+                            <span>{label}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.desktopChatSidebarTabClose}
+                            data-testid="desktop-chat-side-tab-close"
+                            data-tab-id={tab.id}
+                            aria-label={tr("common.close", "Close")}
+                            title={tr("common.close", "Close")}
+                            onClick={() => closeSideTab(tab.id)}
+                          >
+                            <X size={11} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.desktopChatSidebarClose}
+                    data-testid="desktop-chat-sidebar-close"
+                    aria-label={tr("apps.desktop.closePanel", "Close panel")}
+                    title={tr("apps.desktop.closePanel", "Close panel")}
+                    onClick={closeSidebar}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+                <div className={styles.desktopChatSidebarBody}>
+                  {sideTabs.map((tab) => {
+                    const isActive = tab.id === activeSideTabId;
+                    return (
+                      <div
+                        key={tab.id}
+                        className={styles.desktopChatSidebarTabBody}
+                        role="tabpanel"
+                        hidden={!isActive}
+                        style={{ display: isActive ? "flex" : "none" }}
+                      >
+                        {tab.kind === "apps" ? (
+                          <ChatDockSessionApps
+                            apps={sessionApps}
+                            active={active && isActive}
+                            onSelectApp={handleSelectSessionApp}
+                            onComposeMessage={prefill}
+                            onOpenExternal={
+                              onOpenExternal ? handleOpenExternal : undefined
+                            }
+                          />
+                        ) : tab.kind === "tool" ? (
+                          <DesktopChatToolPanel
+                            embedded
+                            state={{
+                              kind: "tool",
+                              callId: tab.callId,
+                              title: tab.title,
+                              toolName: tab.toolName,
+                            }}
+                            messages={messages}
+                            agentId={agentId}
+                            isStreaming={isStreaming}
+                            active={active && isActive}
+                            onClose={() => closeSideTab(tab.id)}
+                            onComposeMessage={prefill}
+                            onGameSession={handleGameSession}
+                            onOpenExternal={
+                              onOpenExternal ? handleOpenExternal : undefined
+                            }
+                          />
+                        ) : (
+                          <GameFrame
+                            appId={tab.appId}
+                            session={tab.session}
+                            onFinished={() => closeSideTab(tab.id)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </aside>
+            </>
           )}
         </div>
       </ToolHostScopeProvider>

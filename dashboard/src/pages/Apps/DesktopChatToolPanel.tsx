@@ -33,6 +33,8 @@ interface DesktopChatToolPanelProps {
   onComposeMessage: (text: string) => void;
   onGameSession: (appId: string, session: AppGameSession) => void;
   onOpenExternal?: (url: string) => void;
+  /** Render only the body; the side panel supplies its own tab chrome. */
+  embedded?: boolean;
 }
 
 interface AppCardPanelData {
@@ -170,6 +172,7 @@ function DesktopChatToolPanel({
   onComposeMessage,
   onGameSession,
   onOpenExternal,
+  embedded = false,
 }: DesktopChatToolPanelProps) {
   const { t } = useTranslation();
   const title =
@@ -201,6 +204,10 @@ function DesktopChatToolPanel({
         onOpenExternal={onOpenExternal}
       />
     );
+  }
+
+  if (embedded) {
+    return <div className={styles.desktopChatToolPanelContent}>{content}</div>;
   }
 
   return (

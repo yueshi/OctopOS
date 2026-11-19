@@ -591,6 +591,64 @@ describe("DesktopGrid", () => {
     expect(content.style.transform).toBe("");
   });
 
+  it("resizes from the west and north edges while keeping opposite edges fixed", () => {
+    renderGrid(<DesktopGrid apps={apps} />);
+    openAppWindow("app_1");
+    const root = screen.getByTestId("desktop-root");
+    Object.defineProperty(root, "clientWidth", {
+      configurable: true,
+      value: 1280,
+    });
+    Object.defineProperty(root, "clientHeight", {
+      configurable: true,
+      value: 800,
+    });
+
+    for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
+      const testId =
+        dir === "se" ? "desktop-window-resize" : `desktop-window-resize-${dir}`;
+      expect(screen.getByTestId(testId)).toBeInTheDocument();
+    }
+
+    const win = screen.getByTestId("desktop-window");
+    const left = Number.parseFloat(win.style.left);
+    const top = Number.parseFloat(win.style.top);
+    const width = Number.parseFloat(win.style.width);
+    const height = Number.parseFloat(win.style.height);
+
+    const nw = screen.getByTestId("desktop-window-resize-nw");
+    fireEvent(
+      nw,
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        clientX: 200,
+        clientY: 200,
+      }),
+    );
+    fireEvent(
+      window,
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: 240,
+        clientY: 230,
+      }),
+    );
+
+    expect(win).toHaveAttribute("data-resizing", "true");
+    expect(win.style.left).toBe(`${left + 40}px`);
+    expect(win.style.top).toBe(`${top + 30}px`);
+    expect(win.style.width).toBe(`${width - 40}px`);
+    expect(win.style.height).toBe(`${height - 30}px`);
+
+    fireEvent(window, new MouseEvent("pointerup", { bubbles: true }));
+    expect(win).toHaveAttribute("data-resizing", "false");
+    expect(win.style.left).toBe(`${left + 40}px`);
+    expect(win.style.top).toBe(`${top + 30}px`);
+    expect(win.style.width).toBe(`${width - 40}px`);
+    expect(win.style.height).toBe(`${height - 30}px`);
+  });
+
   it("reveals the window title bar only from the top edge", () => {
     renderGrid(<DesktopGrid apps={apps} />);
     openAppWindow("app_1");

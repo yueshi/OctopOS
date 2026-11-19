@@ -64,4 +64,21 @@ describe("ChatDockSessionApps", () => {
     expect(screen.queryByTestId("mini-app-frame")).not.toBeInTheDocument();
     expect(screen.getByText("业绩看板")).toBeInTheDocument();
   });
+
+  it("notifies the host before opening a MiniApp", () => {
+    const onSelectApp = vi.fn();
+    render(
+      <MemoryRouter>
+        <ChatDockSessionApps apps={apps} onSelectApp={onSelectApp} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByText("业绩看板"));
+
+    expect(onSelectApp).toHaveBeenCalledWith(apps[1]);
+    expect(screen.getByTestId("mini-app-frame")).toHaveAttribute(
+      "data-app-id",
+      "app_b",
+    );
+  });
 });

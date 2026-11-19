@@ -125,4 +125,16 @@ describe("DesktopChatToolPanel", () => {
 
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("renders only the body when embedded in a tabbed side panel", () => {
+    renderPanel({ embedded: true });
+
+    expect(
+      screen.queryByTestId("desktop-chat-tool-panel"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("miniapp-frame")).toHaveAttribute(
+      "data-app-id",
+      "app_1",
+    );
+  });
 });

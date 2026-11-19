@@ -2251,11 +2251,75 @@
   }
 }
 
-.desktopWindowResize {
+/* Eight resize handles: four edges + four corners. The window clips its
+   overflow, so handles sit inside the border. The top edge sits above the
+   auto-hidden title bar so it can still start a north resize. */
+.desktopWindowResizeHandle {
   position: absolute;
+  z-index: 5;
+  touch-action: none;
+}
+
+.desktopWindowResizeN,
+.desktopWindowResizeS {
+  right: 10px;
+  left: 10px;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.desktopWindowResizeN {
+  top: 0;
+}
+
+.desktopWindowResizeS {
+  bottom: 0;
+}
+
+.desktopWindowResizeE,
+.desktopWindowResizeW {
+  top: 10px;
+  bottom: 10px;
+  width: 5px;
+  cursor: ew-resize;
+}
+
+.desktopWindowResizeE {
+  right: 0;
+}
+
+.desktopWindowResizeW {
+  left: 0;
+}
+
+.desktopWindowResizeNe,
+.desktopWindowResizeNw,
+.desktopWindowResizeSw {
+  width: 12px;
+  height: 12px;
+}
+
+.desktopWindowResizeNe {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.desktopWindowResizeNw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.desktopWindowResizeSw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.desktopWindowResizeSe {
   right: 0;
   bottom: 0;
-  z-index: 3;
   width: 18px;
   height: 18px;
   background: linear-gradient(
@@ -3625,6 +3689,16 @@
   }
 }
 
+.desktopChatIconButtonActive {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+
+  &:hover {
+    background: #dbeafe;
+  }
+}
+
 .desktopChatPanelBackdrop {
   position: absolute;
   inset: 0;
@@ -3750,272 +3824,6 @@
   font-size: 9.5px;
 }
 
-.desktopChatAppRow {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 7px;
-}
-
-.desktopChatAppItem {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: #334155;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-
-  &:hover {
-    background: #f1f5f9;
-  }
-
-  &:focus-visible {
-    outline: 2px solid #6366f1;
-    outline-offset: -2px;
-  }
-}
-
-.desktopChatAppItemActive {
-  background: #eef2ff;
-  color: #1d4ed8;
-}
-
-.desktopChatAppOpen {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid #e2e8f0;
-  border-radius: 7px;
-  background: #fff;
-  color: #64748b;
-  cursor: pointer;
-
-  &:hover {
-    border-color: #bfdbfe;
-    background: #eff6ff;
-    color: #1d4ed8;
-  }
-
-  &:focus-visible {
-    outline: 2px solid #6366f1;
-    outline-offset: 1px;
-  }
-}
-
-.desktopChatAppItemIcon {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: #f1f5f9;
-  color: #475569;
-}
-
-.desktopChatAppItemText {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.desktopChatAppItemName {
-  overflow: hidden;
-  font-size: 11.5px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.desktopChatAppItemMeta {
-  color: #94a3b8;
-  font-size: 9.5px;
-}
-
-.desktopChatPanelClear {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 8px;
-  border: 0;
-  border-top: 1px solid #eef2f7;
-  background: #fff;
-  color: #dc2626;
-  font: inherit;
-  font-size: 10.5px;
-  cursor: pointer;
-
-  &:hover {
-    background: #fef2f2;
-  }
-}
-
-.desktopChatContext {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-  min-height: 38px;
-  padding: 6px 10px;
-  overflow-x: auto;
-  border-bottom: 1px solid #e8edf4;
-  background: #fff;
-  scrollbar-width: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-.desktopChatContextIcon {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: #eef2ff;
-  color: #4f46e5;
-}
-
-.desktopChatContextName {
-  flex: none;
-  max-width: 180px;
-  overflow: hidden;
-  color: #334155;
-  font-size: 11px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.desktopChatContextActions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.desktopChatContextOpen {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid #bfdbfe;
-  border-radius: 6px;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font: inherit;
-  font-size: 10.5px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-
-  &:hover {
-    background: #dbeafe;
-  }
-
-  &:focus-visible {
-    outline: 2px solid #6366f1;
-    outline-offset: 1px;
-  }
-}
-
-.desktopChatContextAction {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #475569;
-  font: inherit;
-  font-size: 10.5px;
-  cursor: pointer;
-  white-space: nowrap;
-
-  &:hover {
-    border-color: #bfdbfe;
-    background: #eff6ff;
-    color: #1d4ed8;
-  }
-
-  &:focus-visible {
-    outline: 2px solid #6366f1;
-    outline-offset: 1px;
-  }
-}
-
-.desktopChatContextClear {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: #94a3b8;
-  cursor: pointer;
-
-  &:hover {
-    background: #f1f5f9;
-    color: #475569;
-  }
-}
-
-.desktopChatContextPick {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px dashed #cbd5e1;
-  border-radius: 6px;
-  background: #fff;
-  color: #64748b;
-  font: inherit;
-  font-size: 10.5px;
-  cursor: pointer;
-
-  &:hover {
-    border-color: #93c5fd;
-    color: #2563eb;
-  }
-}
-
-.desktopChatContextCount {
-  min-width: 15px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: #eef2ff;
-  color: #4f46e5;
-  font-size: 9px;
-  line-height: 15px;
-  text-align: center;
-}
-
 .desktopChatSplit {
   display: flex;
   flex: 1;
@@ -4024,6 +3832,183 @@
 }
 
 .desktopChatMain {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* In-window tabbed side panel (MiniApps / plugin tools / games), mirroring
+   the chat dock's tabs. Width is drag-controlled by the adjacent resizer. */
+.desktopChatSidebar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: 70%;
+  min-height: 0;
+  border-left: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.desktopChatSidebarResizer {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.desktopChatSidebarResizerHandle {
+  width: 1px;
+  height: 30px;
+  border-radius: 1px;
+  background: #e2e8f0;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    width 0.15s;
+}
+
+.desktopChatSidebarResizerActive {
+  background: rgb(99 102 241 / 6%);
+}
+
+.desktopChatSidebarResizer:hover .desktopChatSidebarResizerHandle,
+.desktopChatSidebarResizerActive .desktopChatSidebarResizerHandle {
+  width: 2px;
+  opacity: 1;
+  background: #6366f1;
+}
+
+.desktopChatSidebarTabBar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.desktopChatSidebarTabs {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.desktopChatSidebarTab {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  max-width: 180px;
+  height: 28px;
+  padding: 0 3px 0 7px;
+  border-radius: 6px;
+  color: #64748b;
+}
+
+.desktopChatSidebarTabActive {
+  background: #eef2ff;
+  color: #1d4ed8;
+}
+
+.desktopChatSidebarTabLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 150px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &:focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: -2px;
+  }
+}
+
+.desktopChatSidebarTabClose {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+
+  &:hover {
+    background: rgb(226 232 240 / 80%);
+    color: #475569;
+  }
+
+  &:focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: 1px;
+  }
+}
+
+.desktopChatSidebarClose {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+
+  &:hover {
+    background: #f1f5f9;
+    color: #475569;
+  }
+
+  &:focus-visible {
+    outline: 2px solid #6366f1;
+    outline-offset: 1px;
+  }
+}
+
+.desktopChatSidebarBody {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.desktopChatSidebarTabBody {
   display: flex;
   flex: 1;
   flex-direction: column;
