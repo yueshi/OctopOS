@@ -2449,7 +2449,17 @@
     "assistantChartSampled": "Based on the first {{count}} rows",
     "assistantPlaceholder": "Ask about the data…",
     "assistantSend": "Send",
-    "assistantToolRunning": "Querying data ({{name}})…",
+    "assistantThinking": "Deep thinking",
+    "assistantTools": {
+      "appTables": "List tables",
+      "appQueryRows": "Query rows",
+      "appChart": "Build chart",
+      "generic": "Tool"
+    },
+    "assistantToolRunningShort": "Running",
+    "assistantToolFailed": "Failed",
+    "assistantToolArguments": "Arguments",
+    "assistantToolResult": "Result",
     "assistantHint": "Answers come from the app's data via the owning Agent and consume its model quota.",
     "assistantLoadFailed": "Failed to load assistant history.",
     "assistantRequestFailed": "Assistant request failed.",

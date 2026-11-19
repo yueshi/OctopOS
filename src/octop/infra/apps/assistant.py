@@ -1,15 +1,16 @@
 """Read-only data assistant for one light app.
 
 The assistant is a restricted invocation of the app's owning agent: it answers
-questions about the app's own tables using only two read-only tools
-(``app_tables`` / ``app_query_rows``) bound to that single app. It never writes
-data, never sees other apps, and its permission is exactly the caller's
-``view`` permission on the app — enforced by the router before this module
-runs.
+questions about the app's own tables using only three read-only tools
+(``app_tables`` / ``app_query_rows`` / ``app_chart``) bound to that single app.
+It never writes data, never sees other apps, and its permission is exactly the
+caller's ``view`` permission on the app — enforced by the router before this
+module runs.
 
-Each turn is buffered and emitted after the model finishes it, so tool-call
-rounds never leak preamble text into the answer and ``<think>`` blocks are
-stripped with the same helper the rest of the codebase uses.
+Each model round is buffered before its text is emitted. Thinking (`<think>`
+tags, reasoning blocks, provider reasoning kwargs) and tool calls are streamed
+as their own events and persisted with the answer, so the dashboard shows the
+same process after a reload; only the visible Q/A text is replayed to the model.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from octop.infra.db.repos.apps import (
 )
 from octop.infra.errors import OctopError
 from octop.infra.users.resource_policy import assert_token_quota_available
-from octop.infra.utils.llm_text import llm_text_content
+from octop.infra.utils.llm_text import llm_text_and_thinking
 from octop.infra.utils.locale import Locale
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,22 @@ ASSISTANT_CONTEXT_MESSAGES = 12
 
 MAX_QUESTION_LEN = 4000
 MAX_ANSWER_LEN = 8000
+MAX_THINKING_CHARS = 8000
+MAX_TOOL_RESULT_CHARS = 4000
+MAX_PROCESS_STEPS = 40
+"""Persisted process caps: a runaway loop must not bloat one history row."""
 
 # Chart specs are render-only metadata. They ride in the answer text behind an
 # HTML comment so old databases need no schema migration; history strips them
 # before replaying messages to the model or returning them to the dashboard.
 _CHARTS_MARKER_RE = re.compile(r"\n\n<!--octop-charts:v1:(.*?)-->", re.DOTALL)
 _CHARTS_MARKER_TEMPLATE = "\n\n<!--octop-charts:v1:{payload}-->"
+
+# Thinking and tool-call steps follow the same no-migration rule as charts:
+# they are ordered process metadata attached to the assistant content, and are
+# stripped before the text is replayed to the model.
+_META_MARKER_RE = re.compile(r"\n\n<!--octop-assistant-meta:v1:(.*?)-->", re.DOTALL)
+_META_MARKER_TEMPLATE = "\n\n<!--octop-assistant-meta:v1:{payload}-->"
 
 
 def _split_charts(content: str) -> tuple[str, list[dict[str, Any]]]:
@@ -82,6 +93,88 @@ def _with_charts(answer: str, charts: list[dict[str, Any]]) -> str:
     return answer.rstrip() + _CHARTS_MARKER_TEMPLATE.format(payload=payload)
 
 
+def _clip_text(text: str, limit: int) -> str:
+    """Keep persisted process metadata readable without unbounded row growth."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n… (truncated)"
+
+
+def _split_meta(
+    content: str,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, str]]]:
+    """Separate visible answer text from its persisted process metadata."""
+    match = _META_MARKER_RE.search(content)
+    if match is None:
+        return content, [], []
+    try:
+        raw = base64.urlsafe_b64decode(match.group(1).encode("ascii")).decode("utf-8")
+        parsed = json.loads(raw)
+    except (ValueError, UnicodeError):
+        parsed = {}
+    process: list[dict[str, Any]] = []
+    citations: list[dict[str, str]] = []
+    if isinstance(parsed, dict):
+        for step in parsed.get("process") or []:
+            if isinstance(step, dict):
+                process.append(step)
+        for item in parsed.get("citations") or []:
+            if not isinstance(item, dict):
+                continue
+            table = str(item.get("table") or "")
+            row_id = str(item.get("row_id") or "")
+            if table and row_id:
+                citations.append({"table": table, "row_id": row_id})
+    text = (content[: match.start()] + content[match.end() :]).rstrip()
+    return text, process, citations
+
+
+def _with_meta(
+    answer: str,
+    process: list[dict[str, Any]],
+    citations: list[dict[str, str]],
+) -> str:
+    if not process and not citations:
+        return answer
+    payload = {"process": process, "citations": citations}
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+    return answer.rstrip() + _META_MARKER_TEMPLATE.format(payload=encoded)
+
+
+def _tool_status(result: str) -> str:
+    """A tool error is reported to the model as a JSON ``{"error": …}``."""
+    try:
+        payload = json.loads(result)
+    except (TypeError, ValueError):
+        return "ok"
+    if isinstance(payload, dict) and payload.get("error"):
+        return "error"
+    return "ok"
+
+
+def _thinking_step(text: str) -> dict[str, Any]:
+    return {"kind": "thinking", "text": _clip_text(text.strip(), MAX_THINKING_CHARS)}
+
+
+def _tool_step(
+    *,
+    call_id: str,
+    name: str,
+    arguments: dict[str, Any],
+    result: str,
+    status: str,
+) -> dict[str, Any]:
+    return {
+        "kind": "tool",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments,
+        "result": _clip_text(result, MAX_TOOL_RESULT_CHARS),
+        "status": status,
+    }
+
+
 @dataclass(frozen=True)
 class AssistantTurn:
     """One persisted assistant message."""
@@ -90,6 +183,8 @@ class AssistantTurn:
     content: str
     created_at: int
     charts: tuple[dict[str, Any], ...] = ()
+    process: tuple[dict[str, Any], ...] = ()
+    citations: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -134,13 +229,16 @@ class AppAssistant:
         messages = self._app_repo.list_assistant_messages(row.app_id, user_id, limit=limit)
         turns: list[AssistantTurn] = []
         for item in messages:
-            content, charts = _split_charts(item.content)
+            content, process, citations = _split_meta(item.content)
+            content, charts = _split_charts(content)
             turns.append(
                 AssistantTurn(
                     role=item.role,
                     content=content,
                     created_at=item.created_at,
                     charts=tuple(charts),
+                    process=tuple(process),
+                    citations=tuple(citations),
                 )
             )
         return turns
@@ -172,15 +270,22 @@ class AppAssistant:
         )
 
     async def stream(self, prepared: PreparedAsk) -> AsyncIterator[dict[str, Any]]:
-        """Yield ``token`` / ``tool`` / ``chart`` / ``done`` / ``error`` events."""
+        """Yield thinking / tool_start / tool_end / token / chart / done / error."""
         row, user_id, question = prepared.row, prepared.user_id, prepared.question
         try:
             self._check_owner_quota(row)
             messages = await self._messages_for(row, user_id, question, prepared.locale)
             charts: list[dict[str, Any]] = []
+            process: list[dict[str, Any]] = []
             bound = prepared.llm.bind_tools(
                 self._build_tools(row, user_id, charts, prepared.locale)
             )
+
+            def add_process(step: dict[str, Any]) -> dict[str, Any] | None:
+                if len(process) >= MAX_PROCESS_STEPS:
+                    return None
+                process.append(step)
+                return step
 
             usage_in = usage_out = 0
             answer = ""
@@ -192,7 +297,12 @@ class AppAssistant:
                 usage = getattr(result, "usage_metadata", None) or {}
                 usage_in += int(usage.get("input_tokens") or 0)
                 usage_out += int(usage.get("output_tokens") or 0)
-                text = llm_text_content(result)[:MAX_ANSWER_LEN]
+                text, thinking = llm_text_and_thinking(result)
+                text = text[:MAX_ANSWER_LEN]
+                if thinking:
+                    thinking_step = add_process(_thinking_step(thinking))
+                    if thinking_step is not None:
+                        yield {"type": "thinking", "text": thinking_step["text"]}
                 tool_calls = list(getattr(result, "tool_calls", None) or [])
                 if not tool_calls:
                     answer = text
@@ -211,10 +321,39 @@ class AppAssistant:
                     yield {"type": "token", "text": text}
                 messages.append(result)
                 for call in tool_calls:
+                    call_id = str(call.get("id") or "")
                     tool_name = str(call.get("name") or "")
-                    yield {"type": "tool", "name": tool_name}
+                    raw_args = call.get("args")
+                    arguments = dict(raw_args) if isinstance(raw_args, dict) else {}
+                    yield {
+                        "type": "tool_start",
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "arguments": arguments,
+                    }
                     chart_start = len(charts)
                     tool_result = await self._run_tool(row, user_id, call, charts, prepared.locale)
+                    status = _tool_status(tool_result)
+                    tool_step = add_process(
+                        _tool_step(
+                            call_id=call_id,
+                            name=tool_name,
+                            arguments=arguments,
+                            result=tool_result,
+                            status=status,
+                        )
+                    )
+                    yield {
+                        "type": "tool_end",
+                        "call_id": call_id,
+                        "name": tool_name,
+                        "result": (
+                            tool_step["result"]
+                            if tool_step is not None
+                            else _clip_text(tool_result, MAX_TOOL_RESULT_CHARS)
+                        ),
+                        "status": status,
+                    }
                     # Emit each new chart as soon as its tool call completes.
                     for chart in charts[chart_start:]:
                         yield {"type": "chart", "chart": chart}
@@ -231,18 +370,20 @@ class AppAssistant:
                                 row_id = str(meta.get("row_id") or "")
                                 if row_id and all(item["row_id"] != row_id for item in citations):
                                     citations.append({"table": table, "row_id": row_id})
-                    messages.append(
-                        ToolMessage(content=tool_result, tool_call_id=str(call.get("id") or ""))
-                    )
+                    messages.append(ToolMessage(content=tool_result, tool_call_id=call_id))
             else:
                 # Tool budget exhausted. Ask for a final answer with tools
                 # unbound instead of discarding the data/charts already
                 # gathered; a hard error was the old, unhelpful behavior.
-                answer, final_in, final_out = await self._finalize_answer(
+                answer, final_thinking, final_in, final_out = await self._finalize_answer(
                     prepared.llm, messages, prepared.locale
                 )
                 usage_in += final_in
                 usage_out += final_out
+                if final_thinking:
+                    thinking_step = add_process(_thinking_step(final_thinking))
+                    if thinking_step is not None:
+                        yield {"type": "thinking", "text": thinking_step["text"]}
                 if not answer and charts:
                     answer = tr(
                         "light_apps.assistant_round_limit_partial",
@@ -278,6 +419,8 @@ class AppAssistant:
                     input_tokens=usage_in,
                     output_tokens=usage_out,
                     charts=charts,
+                    process=process,
+                    citations=citations,
                 )
         except OctopError as exc:
             yield {"type": "error", "message": exc.localized_message(prepared.locale)}
@@ -290,7 +433,7 @@ class AppAssistant:
         llm: Any,
         messages: list[Any],
         locale: Locale,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, str, int, int]:
         """One last model call with tools unbound after the tool budget runs out."""
         try:
             result = await llm.ainvoke(
@@ -301,10 +444,12 @@ class AppAssistant:
             )
         except Exception:
             logger.warning("app assistant finalization failed", exc_info=True)
-            return "", 0, 0
+            return "", "", 0, 0
         usage = getattr(result, "usage_metadata", None) or {}
+        text, thinking = llm_text_and_thinking(result)
         return (
-            llm_text_content(result)[:MAX_ANSWER_LEN],
+            text[:MAX_ANSWER_LEN],
+            thinking,
             int(usage.get("input_tokens") or 0),
             int(usage.get("output_tokens") or 0),
         )
@@ -565,6 +710,8 @@ class AppAssistant:
         input_tokens: int = 0,
         output_tokens: int = 0,
         charts: list[dict[str, Any]] | None = None,
+        process: list[dict[str, Any]] | None = None,
+        citations: list[dict[str, str]] | None = None,
     ) -> None:
         self._app_repo.add_assistant_message(
             row.app_id, user_id, role=ASSISTANT_ROLE_USER, content=question
@@ -573,7 +720,11 @@ class AppAssistant:
             row.app_id,
             user_id,
             role=ASSISTANT_ROLE_ASSISTANT,
-            content=_with_charts(answer, charts or []),
+            content=_with_meta(
+                _with_charts(answer, charts or []),
+                process or [],
+                citations or [],
+            ),
         )
         if self._usage_repo is None:
             return

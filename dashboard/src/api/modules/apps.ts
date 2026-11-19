@@ -391,12 +391,25 @@ export interface AppAssistantChart {
   truncated?: boolean;
 }
 
+/** One ordered thinking or tool-call step of an assistant answer. */
+export interface AppAssistantProcessStep {
+  kind: "thinking" | "tool";
+  text?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  result?: string;
+  /** "running" only exists while the turn is streaming. */
+  status?: "running" | "ok" | "error";
+}
+
 export interface AppAssistantMessage {
   role: "user" | "assistant";
   content: string;
   created_at: number;
   citations?: AppAssistantCitation[];
   charts?: AppAssistantChart[];
+  process?: AppAssistantProcessStep[];
 }
 
 export interface AppGenerateResult {
@@ -419,7 +432,20 @@ export interface AppGameSession {
 
 export type AppAssistantEvent =
   | { type: "token"; text: string }
-  | { type: "tool"; name: string }
+  | { type: "thinking"; text: string }
+  | {
+      type: "tool_start";
+      call_id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    }
+  | {
+      type: "tool_end";
+      call_id: string;
+      name: string;
+      result: string;
+      status: "ok" | "error";
+    }
   | { type: "chart"; chart: AppAssistantChart }
   | {
       type: "done";
@@ -433,7 +459,8 @@ export type AppAssistantEvent =
 
 /**
  * Ask the app's built-in assistant. Resolves when the SSE stream ends;
- * ``onEvent`` receives each parsed frame (token / tool / done / error).
+ * ``onEvent`` receives each parsed frame (token / thinking / tool / chart /
+ * done / error).
  */
 export async function askAppAssistant(
   appId: string,

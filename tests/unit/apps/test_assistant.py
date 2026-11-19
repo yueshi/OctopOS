@@ -179,14 +179,28 @@ async def test_stream_tool_loop_queries_rows(world: World) -> None:  # noqa: F81
     prepared = assistant.prepare(row, user_id=world.alice_id, question="find cup")
     events = await _collect(assistant.stream(prepared))
 
-    assert [event["type"] for event in events] == ["tool", "token", "done"]
+    assert [event["type"] for event in events] == [
+        "tool_start",
+        "tool_end",
+        "token",
+        "done",
+    ]
     assert events[0]["name"] == "app_query_rows"
+    assert events[0]["arguments"] == {"table": "main", "filters": {"title": "cup"}}
+    assert events[1]["status"] == "ok"
+    assert "Cup" in events[1]["result"]
     assert events[-1]["rounds"] == 2
     # The tool result fed back to the model contained the filtered row.
     tool_messages = [m for m in model.calls[1] if m.type == "tool"]
     assert len(tool_messages) == 1
     assert tool_messages[0].tool_call_id == "c1"
     assert "Cup" in tool_messages[0].content
+    # The tool call is remembered in history and never replayed as a marker.
+    turns = assistant.history(row, world.alice_id)
+    assert [step["kind"] for step in turns[-1].process] == ["tool"]
+    assert turns[-1].process[0]["name"] == "app_query_rows"
+    assert len(turns[-1].citations) == 1
+    assert turns[-1].citations[0]["table"] == "main"
 
 
 async def test_stream_chart_tool_emits_chart_and_persists(world: World) -> None:  # noqa: F811
@@ -212,12 +226,13 @@ async def test_stream_chart_tool_emits_chart_and_persists(world: World) -> None:
     events = await _collect(assistant.stream(prepared))
 
     assert [event["type"] for event in events] == [
-        "tool",
+        "tool_start",
+        "tool_end",
         "chart",
         "token",
         "done",
     ]
-    chart = events[1]["chart"]
+    chart = events[2]["chart"]
     assert chart["type"] == "bar"
     assert chart["series"] == [{"key": "qty", "label": "qty"}]
     assert chart["data"] == [
@@ -238,6 +253,94 @@ async def test_stream_chart_tool_emits_chart_and_persists(world: World) -> None:
     assert all(
         "octop-charts:v1" not in str(message.content) for message in follow_up_model.calls[-1]
     )
+
+
+async def test_stream_records_thinking_and_tool_steps(world: World) -> None:  # noqa: F811
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    tool_call = {"name": "app_tables", "args": {}, "id": "c1", "type": "tool_call"}
+    first = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "Check which tables exist."},
+            {"type": "text", "text": "Let me look."},
+        ],
+        tool_calls=[tool_call],
+        additional_kwargs={"reasoning_content": "Check which tables exist."},
+        usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+    )
+    final = AIMessage(
+        content=[{"type": "text", "text": "There is one table."}],
+        additional_kwargs={"reasoning_content": "Now summarize."},
+        usage_metadata={"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+    )
+    model = _FakeModel([first, final])
+    assistant = _assistant(world, model)
+    prepared = assistant.prepare(row, user_id=world.alice_id, question="what tables?")
+    events = await _collect(assistant.stream(prepared))
+
+    assert [event["type"] for event in events] == [
+        "thinking",
+        "token",
+        "tool_start",
+        "tool_end",
+        "thinking",
+        "token",
+        "done",
+    ]
+    assert events[0]["text"] == "Check which tables exist."
+    assert events[2]["name"] == "app_tables"
+    assert events[4]["text"] == "Now summarize."
+
+    turns = assistant.history(row, world.alice_id)
+    process = turns[-1].process
+    assert [step["kind"] for step in process] == ["thinking", "tool", "thinking"]
+    assert process[0]["text"] == "Check which tables exist."
+    assert process[1]["name"] == "app_tables"
+    assert process[1]["status"] == "ok"
+    assert process[2]["text"] == "Now summarize."
+
+    # History replay keeps visible Q/A only: no thinking or metadata markers.
+    follow_up_model = _FakeModel([_final("again")])
+    follow_up = _assistant(world, follow_up_model)
+    follow_up_prepared = follow_up.prepare(row, user_id=world.alice_id, question="and now?")
+    await _collect(follow_up.stream(follow_up_prepared))
+    replayed = str(follow_up_model.calls[-1])
+    assert "octop-assistant-meta:v1" not in replayed
+    assert "Check which tables exist." not in replayed
+    assert "There is one table." in replayed
+
+
+async def test_stream_marks_failed_tool_steps(world: World) -> None:  # noqa: F811
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    tool_call = {
+        "name": "app_query_rows",
+        "args": {"filters": {"nope": "x"}},
+        "id": "bad-1",
+        "type": "tool_call",
+    }
+    model = _FakeModel(
+        [AIMessage(content="", tool_calls=[tool_call]), _final("Could not query it.")]
+    )
+    assistant = _assistant(world, model)
+    prepared = assistant.prepare(row, user_id=world.alice_id, question="bad query")
+    events = await _collect(assistant.stream(prepared))
+
+    tool_end = next(event for event in events if event["type"] == "tool_end")
+    assert tool_end["status"] == "error"
+    assert "error" in tool_end["result"]
+    turns = assistant.history(row, world.alice_id)
+    assert turns[-1].process[0]["status"] == "error"
+
+
+def test_llm_text_and_thinking_handles_tags_and_orphans() -> None:
+    from octop.infra.utils.llm_text import llm_text_and_thinking
+
+    paired = AIMessage(content="<think>read the schema</think>\n\nThe answer.")
+    assert llm_text_and_thinking(paired) == ("The answer.", "read the schema")
+
+    orphan = AIMessage(content="private reason</think>\n\nVisible")
+    assert llm_text_and_thinking(orphan) == ("Visible", "private reason")
 
 
 async def test_stream_finalizes_after_tool_round_limit(world: World) -> None:  # noqa: F811

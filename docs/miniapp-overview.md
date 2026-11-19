@@ -198,6 +198,7 @@ orders            public_visible=false   全量内部数据
 - 只读工具：`app_tables`、`app_query_rows`（可按列等值过滤 + 单列排序，`sort=-col` 倒序）、`app_chart`。
 - 上限：8 个模型轮次、回放 12 条历史、问题 4,000 字、回答 8,000 字。
 - 图表：bar/line/pie/area/scatter/stacked_bar；后端用真实行数据聚合，禁止模型编造序列。
+- 过程展示：SSE 额外发送 `thinking` / `tool_start` / `tool_end`；思考文本、工具名/参数/结果（截断）与引用行随回答一起持久化，`/assistant/history` 原样返回，刷新后助手抽屉仍显示「深度思考 + 工具调用」折叠过程。过程元数据以内容尾部 marker 存储，无需数据库迁移；回放给模型时只保留可见问答。
 - 历史按 `(app, user)` 分区；回答引用 `row_id`；敏感列脱敏。
 - 计费与限额归属**应用 owner**，不是提问者。
 - 每应用 LLM 并发 2、每分钟 30 次；超限 `APP_BUSY`（429）。

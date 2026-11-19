@@ -3433,6 +3433,39 @@ class AssistantChartOut(BaseModel):
     )
 
 
+class AssistantCitationOut(BaseModel):
+    table: str = Field(description="Table key the cited row belongs to.")
+    row_id: str = Field(description="Cited row id.")
+
+
+class AssistantProcessStepOut(BaseModel):
+    kind: str = Field(description='"thinking" or "tool".')
+    text: str | None = Field(
+        default=None,
+        description="Thinking text when kind=thinking.",
+    )
+    call_id: str | None = Field(
+        default=None,
+        description="Model tool-call id when kind=tool.",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Tool name when kind=tool.",
+    )
+    arguments: dict[str, Any] | None = Field(
+        default=None,
+        description="Tool arguments when kind=tool.",
+    )
+    result: str | None = Field(
+        default=None,
+        description="Tool result (clipped) when kind=tool.",
+    )
+    status: str | None = Field(
+        default=None,
+        description='"ok" or "error" when kind=tool.',
+    )
+
+
 class AssistantMessageOut(BaseModel):
     role: str = Field(description="user or assistant.")
     content: str
@@ -3440,6 +3473,14 @@ class AssistantMessageOut(BaseModel):
     charts: list[AssistantChartOut] = Field(
         default_factory=list,
         description="Chart specs attached to an assistant answer, if any.",
+    )
+    process: list[AssistantProcessStepOut] = Field(
+        default_factory=list,
+        description="Ordered thinking and tool-call steps for this answer.",
+    )
+    citations: list[AssistantCitationOut] = Field(
+        default_factory=list,
+        description="Rows cited by this answer.",
     )
 
 
@@ -3469,6 +3510,8 @@ async def get_app_assistant_history(
                 content=t.content,
                 created_at=t.created_at,
                 charts=[AssistantChartOut.model_validate(chart) for chart in t.charts],
+                process=[AssistantProcessStepOut.model_validate(step) for step in t.process],
+                citations=[AssistantCitationOut.model_validate(item) for item in t.citations],
             )
             for t in turns
         ],
@@ -3480,8 +3523,9 @@ async def get_app_assistant_history(
     summary="Ask the app assistant (SSE)",
     description=(
         "Streams SSE frames (event: chunk) whose data carries "
-        "{type: token|tool|chart|done|error}. Read-only over the app's data; "
-        "consumes the owning agent's model quota. Requires the view permission."
+        "{type: token|thinking|tool_start|tool_end|chart|done|error}. Read-only "
+        "over the app's data; consumes the owning agent's model quota. Requires "
+        "the view permission."
     ),
 )
 async def ask_app_assistant(

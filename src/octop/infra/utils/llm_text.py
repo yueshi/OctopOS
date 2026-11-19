@@ -174,32 +174,86 @@ def format_channel_text(text: str, channel_type: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+def _tagged_thinking(raw: str) -> list[str]:
+    """Paired ``<think>`` blocks plus an orphan closing-marker prefix."""
+    parts: list[str] = []
+    for match in _THINKING_CAPTURE_RE.finditer(raw):
+        text = match.group(1).strip()
+        if text and text not in parts:
+            parts.append(text)
+    if parts:
+        return parts
+    close_match = _THINKING_CLOSE_RE.search(raw)
+    open_match = _THINKING_OPEN_RE.search(raw)
+    if close_match is not None and (open_match is None or open_match.start() > close_match.start()):
+        text = raw[: close_match.start()].strip()
+        if text:
+            parts.append(text)
+    return parts
+
+
+def llm_text_and_thinking(result: Any) -> tuple[str, str]:
+    """Return ``(visible_text, thinking_text)`` from an ``ainvoke`` result.
+
+    Reasoning may arrive as annotated content blocks (``thinking`` /
+    ``reasoning``), provider ``additional_kwargs`` (DeepSeek-style
+    ``reasoning_content``), or inline ``<think>`` tags. The visible text is
+    exactly what :func:`llm_text_content` returns.
+    """
+    content = getattr(result, "content", result)
+    thinking_parts: list[str] = []
+    raw_parts: list[str] = []
+
+    def add_thinking(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in thinking_parts:
+            thinking_parts.append(text)
+
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict):
+                block_type = str(block.get("type") or "").lower()
+                if block_type in ("thinking", "reasoning", "reasoning_content"):
+                    add_thinking(
+                        block.get("text")
+                        or block.get("thinking")
+                        or block.get("reasoning")
+                        or block.get("content")
+                    )
+                    continue
+                if block_type == "text":
+                    raw_parts.append(str(block.get("text") or ""))
+                else:
+                    text = block.get("text") or block.get("content")
+                    if text:
+                        raw_parts.append(str(text))
+            elif isinstance(block, str):
+                raw_parts.append(block)
+    elif isinstance(content, str):
+        raw_parts.append(content)
+    else:
+        raw_parts.append(str(content or ""))
+
+    additional = getattr(result, "additional_kwargs", None)
+    if isinstance(additional, dict):
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = additional.get(key)
+            if isinstance(value, str):
+                add_thinking(value)
+
+    raw_text = "".join(raw_parts)
+    for text in _tagged_thinking(raw_text):
+        add_thinking(text)
+    return strip_thinking(raw_text), "\n\n".join(thinking_parts).strip()
+
+
 def llm_text_content(result: Any) -> str:
     """Extract plain text from a LangChain ``ainvoke`` result.
 
     Skips thinking/reasoning content blocks and strips ``<think>`` tags
     so callers get the user-visible response only.
     """
-    content = getattr(result, "content", result)
-    if isinstance(content, str):
-        return strip_thinking(content)
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict):
-                block_type = str(block.get("type") or "").lower()
-                if block_type in ("thinking", "reasoning"):
-                    continue
-                if block_type == "text":
-                    parts.append(str(block.get("text") or ""))
-                else:
-                    text = block.get("text") or block.get("content")
-                    if text:
-                        parts.append(str(text))
-            elif isinstance(block, str):
-                parts.append(block)
-        return strip_thinking("".join(parts))
-    return strip_thinking(str(content or ""))
+    return llm_text_and_thinking(result)[0]
 
 
 async def ainvoke_text(

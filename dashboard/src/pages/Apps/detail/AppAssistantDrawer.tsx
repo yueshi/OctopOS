@@ -13,10 +13,13 @@ import {
   askAppAssistant,
   type AppAssistantChart,
   type AppAssistantMessage,
+  type AppAssistantProcessStep,
 } from "../../../api/modules/apps";
 import Markdown from "../../../components/Markdown";
 import { apiErrorMessage } from "../../../utils/apiError";
 import { message } from "../../../utils/antdMessage";
+import AppAssistantProcess from "./AppAssistantProcess";
+import styles from "./AppAssistantDrawer.module.less";
 
 const { Text } = Typography;
 
@@ -45,7 +48,6 @@ export default function AppAssistantDrawer({
   const [assistantMsgs, setAssistantMsgs] = useState<AppAssistantMessage[]>([]);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantBusy, setAssistantBusy] = useState(false);
-  const [assistantTool, setAssistantTool] = useState("");
   const [assistantError, setAssistantError] = useState("");
   const [assistantInput, setAssistantInput] = useState("");
   const [assistantWidth, setAssistantWidth] = useState(assistantMinWidth);
@@ -75,62 +77,80 @@ export default function AppAssistantDrawer({
     };
   }, [open, appId, t]);
 
+  /** Patch the streaming assistant turn (the last message). */
+  const updateStreamingAssistant = (
+    updater: (message: AppAssistantMessage) => AppAssistantMessage,
+  ) => {
+    setAssistantMsgs((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+      if (last?.role !== "assistant") return prev;
+      next[next.length - 1] = updater(last);
+      return next;
+    });
+  };
+
+  const appendProcessStep = (step: AppAssistantProcessStep) => {
+    updateStreamingAssistant((last) => ({
+      ...last,
+      process: [...(last.process ?? []), step],
+    }));
+  };
+
   const sendAssistant = async () => {
     const question = assistantInput.trim();
-    if (!question || assistantBusy) return;
+    // History may still be loading; let it land before appending a new turn,
+    // otherwise the fetch would overwrite the just-sent messages.
+    if (!question || assistantBusy || assistantLoading) return;
     setAssistantInput("");
     setAssistantError("");
     setAssistantBusy(true);
     setAssistantMsgs((prev) => [
       ...prev,
       { role: "user", content: question, created_at: 0 },
-      { role: "assistant", content: "", created_at: 0 },
+      { role: "assistant", content: "", created_at: 0, process: [] },
     ]);
     try {
       await askAppAssistant(appId, question, (event) => {
         if (event.type === "token") {
-          setAssistantMsgs((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                content: last.content + event.text,
-              };
-            }
-            return next;
+          updateStreamingAssistant((last) => ({
+            ...last,
+            content: last.content + event.text,
+          }));
+        } else if (event.type === "thinking") {
+          appendProcessStep({ kind: "thinking", text: event.text });
+        } else if (event.type === "tool_start") {
+          appendProcessStep({
+            kind: "tool",
+            call_id: event.call_id,
+            name: event.name,
+            arguments: event.arguments,
+            status: "running",
           });
-        } else if (event.type === "tool") {
-          setAssistantTool(event.name);
+        } else if (event.type === "tool_end") {
+          updateStreamingAssistant((last) => ({
+            ...last,
+            process: (last.process ?? []).map((step) =>
+              step.kind === "tool" && step.call_id === event.call_id
+                ? { ...step, result: event.result, status: event.status }
+                : step,
+            ),
+          }));
         } else if (event.type === "chart") {
-          setAssistantMsgs((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                charts: [...(last.charts ?? []), event.chart],
-              };
-            }
-            return next;
-          });
+          updateStreamingAssistant((last) => ({
+            ...last,
+            charts: [...(last.charts ?? []), event.chart],
+          }));
         } else if (event.type === "done") {
           const citations = event.citations ?? [];
           const charts = event.charts;
-          setAssistantMsgs((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = {
-                ...last,
-                citations,
-                // `done` carries the authoritative list; chart events are for
-                // rendering while the answer is still streaming.
-                ...(charts ? { charts } : {}),
-              };
-            }
-            return next;
-          });
+          updateStreamingAssistant((last) => ({
+            ...last,
+            citations,
+            // `done` carries the authoritative list; chart events are for
+            // rendering while the answer is still streaming.
+            ...(charts ? { charts } : {}),
+          }));
         } else if (event.type === "error") {
           setAssistantError(event.message);
         }
@@ -140,7 +160,6 @@ export default function AppAssistantDrawer({
         apiErrorMessage(err, t("apps.assistantRequestFailed"), t),
       );
     } finally {
-      setAssistantTool("");
       setAssistantBusy(false);
     }
   };
@@ -175,7 +194,7 @@ export default function AppAssistantDrawer({
   useEffect(() => {
     const el = assistantListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [assistantMsgs, assistantTool, open]);
+  }, [assistantMsgs, open]);
 
   return (
     <Drawer
@@ -237,22 +256,19 @@ export default function AppAssistantDrawer({
               onChange={(event) => setAssistantInput(event.target.value)}
               placeholder={t("apps.assistantPlaceholder")}
               maxLength={4000}
-              disabled={assistantBusy}
+              disabled={assistantBusy || assistantLoading}
               onPressEnter={() => void sendAssistant()}
             />
             <Button
               type="primary"
               loading={assistantBusy}
-              disabled={!assistantInput.trim()}
+              disabled={assistantLoading || !assistantInput.trim()}
               onClick={() => void sendAssistant()}
             >
               {t("apps.assistantSend")}
             </Button>
           </Space.Compact>
-          <Text
-            type="secondary"
-            style={{ fontSize: 12, display: "block", marginTop: 6 }}
-          >
+          <Text type="secondary" className={styles.hint}>
             {t("apps.assistantHint")}
           </Text>
         </div>
@@ -262,46 +278,26 @@ export default function AppAssistantDrawer({
           nearest positioned ancestor), so it spans the full panel height
           and escapes the scrolling body's clipping. */}
       <div
+        className={styles.resizeHandle}
+        data-active={
+          assistantResizeHover || assistantResizing ? "true" : "false"
+        }
         onPointerDown={startAssistantResize}
         onPointerMove={moveAssistantResize}
         onPointerUp={endAssistantResize}
         onPointerCancel={endAssistantResize}
         onMouseEnter={() => setAssistantResizeHover(true)}
         onMouseLeave={() => setAssistantResizeHover(false)}
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          bottom: 0,
-          width: 8,
-          cursor: "col-resize",
-          zIndex: 10,
-          touchAction: "none",
-          background:
-            assistantResizeHover || assistantResizing
-              ? "rgba(22, 119, 255, 0.18)"
-              : "transparent",
-        }}
       />
-      <div
-        ref={assistantListRef}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-      >
+      <div ref={assistantListRef} className={styles.messageList}>
         {assistantLoading ? (
-          <div style={{ padding: 24, textAlign: "center" }}>
+          <div className={styles.loading}>
             <Spin />
           </div>
         ) : (
           <>
             {assistantMsgs.length === 0 && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
+              <Text type="secondary" className={styles.empty}>
                 {t("apps.assistantEmpty")}
               </Text>
             )}
@@ -310,102 +306,74 @@ export default function AppAssistantDrawer({
               const hasCharts = Boolean(item.charts?.length);
               const streaming =
                 assistantBusy && index === assistantMsgs.length - 1;
+              if (isUser) {
+                return (
+                  <div key={index} className={styles.userRow}>
+                    <div className={`${styles.bubble} ${styles.userBubble}`}>
+                      {item.content}
+                    </div>
+                  </div>
+                );
+              }
               return (
-                <div
-                  key={index}
-                  style={{
-                    // Charts need a concrete parent width for
-                    // ResponsiveContainer; give the bubble the full drawer
-                    // width (capped on wide screens) instead of letting it
-                    // shrink to the chart's min-content width.
-                    alignSelf: hasCharts
-                      ? "flex-start"
-                      : isUser
-                      ? "flex-end"
-                      : "flex-start",
-                    width: hasCharts ? "100%" : undefined,
-                    maxWidth: hasCharts ? "min(100%, 720px)" : "85%",
-                    minWidth: 0,
-                    boxSizing: "border-box",
-                    background: isUser
-                      ? "rgba(22, 119, 255, 0.08)"
-                      : "rgba(0, 0, 0, 0.03)",
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    whiteSpace: isUser ? "pre-wrap" : "normal",
-                    wordBreak: "break-word",
-                    fontSize: 13,
-                  }}
-                >
-                  {item.content ? (
-                    isUser ? (
-                      item.content
-                    ) : (
-                      <Markdown
-                        content={item.content}
-                        isStreaming={streaming}
-                      />
-                    )
-                  ) : streaming ? (
-                    <Spin size="small" />
-                  ) : hasCharts ? null : (
-                    "…"
-                  )}
-                  {!isUser && hasCharts ? (
+                <div key={index} className={styles.assistantRow}>
+                  <span className={styles.avatar} aria-hidden>
+                    <Sparkles size={14} />
+                  </span>
+                  <div className={styles.messageColumn}>
+                    <AppAssistantProcess
+                      steps={item.process ?? []}
+                      streaming={streaming}
+                    />
                     <div
-                      style={{
-                        marginTop: 8,
-                        display: "grid",
-                        gap: 12,
-                        minWidth: 0,
-                      }}
+                      className={`${styles.bubble} ${styles.assistantBubble}`}
                     >
-                      {item.charts?.map(
-                        (chart: AppAssistantChart, chartIndex) => (
-                          <Suspense
-                            key={`${chart.title}-${chartIndex}`}
-                            fallback={<Spin size="small" />}
-                          >
-                            <AssistantChart chart={chart} />
-                          </Suspense>
-                        ),
+                      {item.content ? (
+                        <Markdown
+                          content={item.content}
+                          isStreaming={streaming}
+                        />
+                      ) : streaming ? (
+                        <Spin size="small" />
+                      ) : hasCharts ? null : (
+                        "…"
                       )}
                     </div>
-                  ) : null}
-                  {!isUser && item.citations?.length ? (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        display: "flex",
-                        gap: 8,
-                        flexWrap: "wrap",
-                        fontSize: 12,
-                      }}
-                    >
-                      <Text type="secondary">
-                        {t("apps.assistantCitations")}:
-                      </Text>
-                      {item.citations.slice(0, 5).map((citation) => (
-                        <a
-                          key={`${citation.table}-${citation.row_id}`}
-                          onClick={() => onOpenCitation(citation.table)}
-                        >
-                          {citation.row_id}
-                        </a>
-                      ))}
-                    </div>
-                  ) : null}
+                    {hasCharts ? (
+                      <div className={styles.charts}>
+                        {item.charts?.map(
+                          (chart: AppAssistantChart, chartIndex) => (
+                            <Suspense
+                              key={`${chart.title}-${chartIndex}`}
+                              fallback={<Spin size="small" />}
+                            >
+                              <AssistantChart chart={chart} />
+                            </Suspense>
+                          ),
+                        )}
+                      </div>
+                    ) : null}
+                    {item.citations?.length ? (
+                      <div className={styles.citations}>
+                        <Text type="secondary">
+                          {t("apps.assistantCitations")}:
+                        </Text>
+                        {item.citations.slice(0, 5).map((citation) => (
+                          <a
+                            key={`${citation.table}-${citation.row_id}`}
+                            onClick={() => onOpenCitation(citation.table)}
+                          >
+                            {citation.row_id}
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
-            {assistantTool && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                <Spin size="small" style={{ marginRight: 6 }} />
-                {t("apps.assistantToolRunning", { name: assistantTool })}
-              </Text>
-            )}
             {assistantError && (
-              <Text type="danger" style={{ fontSize: 12 }}>
+              <Text type="danger" className={styles.error}>
                 {assistantError}
               </Text>
             )}

@@ -2449,7 +2449,17 @@
     "assistantChartSampled": "基于前 {{count}} 行数据",
     "assistantPlaceholder": "询问数据相关的问题…",
     "assistantSend": "发送",
-    "assistantToolRunning": "正在查询数据（{{name}}）…",
+    "assistantThinking": "深度思考",
+    "assistantTools": {
+      "appTables": "查看数据表",
+      "appQueryRows": "查询数据",
+      "appChart": "生成图表",
+      "generic": "工具"
+    },
+    "assistantToolRunningShort": "运行中",
+    "assistantToolFailed": "失败",
+    "assistantToolArguments": "参数",
+    "assistantToolResult": "结果",
     "assistantHint": "回答由所属 Agent 基于应用数据生成，会消耗其模型额度。",
     "assistantLoadFailed": "助手历史加载失败。",
     "assistantRequestFailed": "助手请求失败。",
