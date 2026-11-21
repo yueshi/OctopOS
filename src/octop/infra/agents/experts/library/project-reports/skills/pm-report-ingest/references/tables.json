@@ -1,0 +1,48 @@
+{
+  "period_reports": {
+    "key": "period_reports",
+    "label": "导入记录",
+    "public": false,
+    "columns": [
+      { "name": "batch_id", "label": "导入批次", "type": "string", "required": true },
+      { "name": "project", "label": "项目", "type": "string" },
+      { "name": "period", "label": "报告期", "type": "string", "required": true },
+      {
+        "name": "period_type",
+        "label": "报告类型",
+        "type": "enum",
+        "values": ["daily", "weekly", "monthly"]
+      },
+      { "name": "source_file", "label": "来源文件", "type": "string" },
+      { "name": "source_hash", "label": "文件指纹", "type": "string" },
+      { "name": "row_count", "label": "任务数", "type": "integer" },
+      { "name": "imported_at", "label": "导入时间", "type": "datetime" },
+      {
+        "name": "status",
+        "label": "导入状态",
+        "type": "enum",
+        "values": ["imported", "partial", "failed"]
+      },
+      { "name": "error_summary", "label": "失败摘要", "type": "text" }
+    ]
+  },
+  "projects": {
+    "key": "projects",
+    "label": "项目档案",
+    "public": false,
+    "columns": [
+      { "name": "project", "label": "项目", "type": "string", "required": true },
+      { "name": "project_name", "label": "项目名称", "type": "string" },
+      { "name": "owner", "label": "负责人", "type": "string" },
+      {
+        "name": "status",
+        "label": "项目状态",
+        "type": "enum",
+        "values": ["active", "paused", "done"]
+      },
+      { "name": "start_date", "label": "开始日期", "type": "date" },
+      { "name": "end_date", "label": "结束日期", "type": "date" },
+      { "name": "notes", "label": "备注", "type": "text" }
+    ]
+  }
+}

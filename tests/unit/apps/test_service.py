@@ -12,6 +12,7 @@ import pytest
 from deepagents.backends import FilesystemBackend
 from octop_harness.backends import BackendWorkspace
 
+from octop.infra.agents.experts.catalog import default_library_root
 from octop.infra.apps.models import PII_MASK, parse_schema_payload
 from octop.infra.apps.service import (
     _APP_LOCKS,
@@ -2035,6 +2036,185 @@ async def test_import_reports_pii_warnings(world: World) -> None:
     )
     assert result.imported == 1
     assert any("id_card" in warning for warning in result.warnings)
+
+
+async def test_project_reports_expert_template_creates_app(world: World) -> None:
+    template = default_library_root() / "project-reports" / "app_templates" / "project-reports"
+    await world.workspace.awrite_text(
+        "app_templates/project-reports/schema.json",
+        (template / "schema.json").read_text(encoding="utf-8"),
+    )
+    await world.workspace.awrite_text(
+        "app_templates/project-reports/app.html",
+        (template / "app.html").read_text(encoding="utf-8"),
+    )
+    row = await world.service.create_from_template(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        template="project-reports",
+        name="项目报告台账",
+    )
+    schema = await world.service.read_schema(row)
+    assert {"project", "period", "task_id", "task_name", "batch_id"} <= set(schema.names)
+    assert await world.service.has_html(row) is True
+
+    tables = json.loads(
+        (
+            default_library_root()
+            / "project-reports"
+            / "skills/pm-report-ingest/references/tables.json"
+        ).read_text(encoding="utf-8")
+    )
+    period = tables["period_reports"]
+    await world.service.create_table(
+        row,
+        table_key=period["key"],
+        label=period["label"],
+        columns=period["columns"],
+        public_visible=period["public"],
+    )
+    period_schema = await world.service.read_schema(row, "period_reports")
+    assert {"batch_id", "period", "source_file", "source_hash", "status"} <= set(
+        period_schema.names
+    )
+
+
+async def test_project_reports_csv_import_round_trip(world: World) -> None:
+    template = default_library_root() / "project-reports" / "app_templates" / "project-reports"
+    await world.workspace.awrite_text(
+        "app_templates/project-reports/schema.json",
+        (template / "schema.json").read_text(encoding="utf-8"),
+    )
+    await world.workspace.awrite_text(
+        "app_templates/project-reports/app.html",
+        (template / "app.html").read_text(encoding="utf-8"),
+    )
+    row = await world.service.create_from_template(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        template="project-reports",
+        name="项目报告台账",
+    )
+    tables = json.loads(
+        (
+            default_library_root()
+            / "project-reports"
+            / "skills/pm-report-ingest/references/tables.json"
+        ).read_text(encoding="utf-8")
+    )
+    period = tables["period_reports"]
+    await world.service.create_table(
+        row,
+        table_key=period["key"],
+        label=period["label"],
+        columns=period["columns"],
+        public_visible=period["public"],
+    )
+    tasks_csv = (
+        "project,period,task_id,task_name,owner,status,progress,priority,"
+        "start_date,due_date,health,days_late,notes,batch_id\n"
+        "A项目,2026-W46,T-1,接口联调,张三,doing,80,high,2026-10-01,2026-11-10,delayed,5,,b1\n"
+        "B项目,2026-W46,T-2,上线验收,李四,done,100,medium,,2026-11-20,on_track,0,,b1\n"
+    )
+    reports_csv = (
+        "batch_id,project,period,period_type,source_file,source_hash,row_count,"
+        "imported_at,status,error_summary\n"
+        "b1,,2026-W46,weekly,reports/x.xlsx,abc,2,2026-11-19T12:00:00+00:00,imported,\n"
+    )
+    await world.workspace.awrite_text("reports/normalized/tasks.csv", tasks_csv)
+    await world.workspace.awrite_text("reports/normalized/period_reports.csv", reports_csv)
+
+    result = await world.service.import_from_file(
+        row,
+        path="reports/normalized/tasks.csv",
+        table="main",
+        upsert_key=["project", "period", "task_id"],
+        created_by=world.alice_id,
+    )
+    assert result.imported == 2
+    again = await world.service.import_from_file(
+        row,
+        path="reports/normalized/tasks.csv",
+        table="main",
+        upsert_key=["project", "period", "task_id"],
+        created_by=world.alice_id,
+    )
+    assert again.imported == 0
+    assert again.updated == 2
+
+    reports = await world.service.import_from_file(
+        row,
+        path="reports/normalized/period_reports.csv",
+        table="period_reports",
+        upsert_key=["batch_id"],
+        created_by=world.alice_id,
+    )
+    assert reports.imported == 1
+    _schema, rows, total = await world.service.read_rows(row)
+    assert total == 2
+    assert rows[0]["task_name"] == "接口联调"
+    assert rows[0]["health"] == "delayed"
+
+
+async def test_project_reports_upgrade_adds_columns_and_tables_without_data_loss(
+    world: World,
+) -> None:
+    row = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        name="旧版项目台账",
+        columns={
+            "columns": [
+                {"name": "project", "label": "项目", "type": "string", "required": True},
+                {"name": "period", "label": "报告期", "type": "string", "required": True},
+                {"name": "task_id", "label": "任务编号", "type": "string", "required": True},
+                {"name": "task_name", "label": "任务名称", "type": "string", "required": True},
+            ]
+        },
+    )
+    await world.service.append_row(
+        row,
+        {"project": "A项目", "period": "2026-W46", "task_id": "T-1", "task_name": "接口联调"},
+    )
+    template = default_library_root() / "project-reports" / "app_templates" / "project-reports"
+    full_schema = json.loads((template / "schema.json").read_text(encoding="utf-8"))
+    existing = set((await world.service.read_schema(row)).names)
+    missing = [
+        {**column, "required": False}
+        for column in full_schema["columns"]
+        if column["name"] not in existing
+    ]
+    await world.service.add_columns(row, missing)
+    tables = json.loads(
+        (
+            default_library_root()
+            / "project-reports"
+            / "skills/pm-report-ingest/references/tables.json"
+        ).read_text(encoding="utf-8")
+    )
+    for table_def in (tables["period_reports"], tables["projects"]):
+        await world.service.create_table(
+            row,
+            table_key=table_def["key"],
+            label=table_def["label"],
+            columns=table_def["columns"],
+            public_visible=table_def["public"],
+        )
+    await world.service.write_html(row, (template / "app.html").read_text(encoding="utf-8"))
+
+    upgraded = await world.service.read_schema(row)
+    assert {"health", "days_late", "batch_id"} <= set(upgraded.names)
+    assert {"batch_id", "status"} <= set(
+        (await world.service.read_schema(row, "period_reports")).names
+    )
+    assert {"project_name", "owner", "status"} <= set(
+        (await world.service.read_schema(row, "projects")).names
+    )
+    _schema, rows, total = await world.service.read_rows(row)
+    assert total == 1
+    assert rows[0]["task_name"] == "接口联调"
+    html = await world.service.read_html(row)
+    assert html and "octopApp" in html
 
 
 async def test_app_templates_list_and_create(world: World) -> None:

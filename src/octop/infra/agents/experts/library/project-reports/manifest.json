@@ -1,0 +1,102 @@
+{
+  "id": "project-reports",
+  "label": {
+    "zh": "项目台账助手",
+    "en": "Project Ledger Assistant"
+  },
+  "description": {
+    "zh": "把项目周报/日报 Excel 汇总成可查询、可对比、可分享的任务台账。负责建表、批量导入、校验失败行，并按周期汇总风险与延期。",
+    "en": "Turns project weekly/daily report spreadsheets into a searchable, comparable, shareable task ledger. Builds the app, imports batches, validates failed rows, and summarizes risks and delays by period."
+  },
+  "welcome_message": {
+    "zh": "把本周项目周报的 Excel 放到 reports/，我来建台账并导入。也可以先点「初始化台账」。",
+    "en": "Put this week's project report Excel files in reports/ and I will build the ledger and import them. Or start with “Set up the ledger”."
+  },
+  "icon_name": "file-text",
+  "color": "#0F766E",
+  "prompt_files": ["SOUL.md", "AGENTS.md"],
+  "quick_prompts": [
+    {
+      "title": {
+        "zh": "初始化台账",
+        "en": "Set up the ledger"
+      },
+      "description": {
+        "zh": "创建项目报告台账应用，准备导入目录",
+        "en": "Create the project report ledger app and prepare the import folder"
+      },
+      "prompt": {
+        "zh": "请读取 `skills/pm-report-init/SKILL.md`，按步骤初始化「项目报告台账」。如果当前 Agent 已经有这个应用，直接打开它并告诉我当前状态，不要重复创建。",
+        "en": "Read `skills/pm-report-init/SKILL.md` and set up the Project Reports ledger. If this agent already has the app, open it and report its state instead of creating a duplicate."
+      },
+      "color": "#ccfbf1",
+      "icon_name": "clipboard-list"
+    },
+    {
+      "title": {
+        "zh": "导入本期报告",
+        "en": "Import this period"
+      },
+      "description": {
+        "zh": "扫描周报目录，先预检再入库",
+        "en": "Scan report files, preview, then import"
+      },
+      "prompt": {
+        "zh": "请读取 `skills/pm-report-ingest/SKILL.md`，扫描 `reports/` 和 `inbound/` 里新增的项目周报 Excel，先 dry-run 汇总，再导入「项目报告台账」。导入完成后告诉我新增、更新、失败和跳过的行数。",
+        "en": "Read `skills/pm-report-ingest/SKILL.md`, scan `reports/` and `inbound/` for new project report Excel files, summarize a dry run, then import into the Project Reports ledger. Report added, updated, failed and skipped rows."
+      },
+      "color": "#e0f2fe",
+      "icon_name": "upload"
+    },
+    {
+      "title": {
+        "zh": "看本周风险",
+        "en": "Review this week's risks"
+      },
+      "description": {
+        "zh": "汇总延期、阻塞和需要决策的事项",
+        "en": "Summarize delays, blockers and decisions"
+      },
+      "prompt": {
+        "zh": "请读取 `skills/pm-report-review/SKILL.md`，汇总最新报告期的延期、阻塞和高优先级任务，按项目分组，给出需要负责人决策的事项。不要编造数据。",
+        "en": "Read `skills/pm-report-review/SKILL.md`, summarize delayed, blocked and high-priority tasks for the latest period by project, and list decisions the owners need to make. Do not invent data."
+      },
+      "color": "#fef3c7",
+      "icon_name": "alert-triangle"
+    },
+    {
+      "title": {
+        "zh": "归档历史",
+        "en": "Archive history"
+      },
+      "description": {
+        "zh": "保留新年份，导出并清理旧报告期",
+        "en": "Keep the new year, export and trim older periods"
+      },
+      "prompt": {
+        "zh": "请读取 `skills/pm-report-archive/SKILL.md`，先问我保留从哪个报告期开始，然后指导我从应用详情页导出主表 CSV 和应用备份，再运行归档脚本。清理活动表前必须让我二次确认。",
+        "en": "Read `skills/pm-report-archive/SKILL.md`, ask which period to keep, guide me to export the main-table CSV and a backup from the app detail page, then run the archive script. Ask for a second confirmation before trimming the live table."
+      },
+      "color": "#e0f2fe",
+      "icon_name": "archive"
+    }
+  ],
+  "task_examples": {
+    "zh": [
+      "每周五「17:00」扫描 reports/ 里本周的项目周报，导入台账并列出失败行",
+      "每周一「09:00」汇总上周延期和阻塞任务，按项目给出负责人待办",
+      "每月最后一个工作日「16:00」对比本月与上月各项目的完成率和延期数",
+      "收到新的项目周报 Excel 后，先预检字段，再导入并告诉我更新了哪些任务",
+      "检查历史报告里哪些项目连续两周出现延期任务",
+      "把某个项目最近 8 周的任务轨迹整理成一页复盘摘要"
+    ],
+    "en": [
+      "Every Friday at 17:00, scan reports/ for this week's project reports, import them and list failed rows",
+      "Every Monday at 09:00, summarize last week's delayed and blocked tasks by project with owner actions",
+      "On the last business day of each month at 16:00, compare completion rate and delay counts by project with the previous month",
+      "When a new project report Excel arrives, preview the fields first, then import and report which tasks changed",
+      "Find projects that had delayed tasks for two consecutive weeks in the report history",
+      "Turn the last 8 weeks of one project's task timeline into a one-page review"
+    ]
+  }
+}

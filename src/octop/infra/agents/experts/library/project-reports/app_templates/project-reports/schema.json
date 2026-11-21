@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "columns": [
+    { "name": "project", "label": "项目", "type": "string", "required": true },
+    { "name": "period", "label": "报告期", "type": "string", "required": true },
+    { "name": "task_id", "label": "任务编号", "type": "string", "required": true },
+    { "name": "task_name", "label": "任务名称", "type": "string", "required": true },
+    { "name": "owner", "label": "负责人", "type": "string" },
+    {
+      "name": "status",
+      "label": "状态",
+      "type": "enum",
+      "values": ["not_started", "doing", "blocked", "done"]
+    },
+    { "name": "progress", "label": "进度(%)", "type": "integer" },
+    {
+      "name": "priority",
+      "label": "优先级",
+      "type": "enum",
+      "values": ["low", "medium", "high"]
+    },
+    { "name": "start_date", "label": "开始日期", "type": "date" },
+    { "name": "due_date", "label": "截止日期", "type": "date" },
+    {
+      "name": "health",
+      "label": "健康度",
+      "type": "enum",
+      "values": ["on_track", "at_risk", "delayed"]
+    },
+    { "name": "days_late", "label": "逾期天数", "type": "integer" },
+    { "name": "notes", "label": "备注", "type": "text" },
+    { "name": "batch_id", "label": "导入批次", "type": "string" }
+  ]
+}

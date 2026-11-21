@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="项目报告台账">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#ccfbf1"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="8" fill="#0F766E"/>
+  <circle cx="1080" cy="90" r="180" fill="#0F766E" opacity="0.05"/>
+  <text x="72" y="120" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="44" font-weight="700" fill="#111827">项目报告台账</text>
+  <text x="72" y="164" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="21" fill="#4b5563">按报告期查看任务、项目总览、历史报告和风险清单</text>
+
+  <rect x="72" y="210" width="248" height="96" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text x="96" y="246" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" fill="#6b7280">任务数</text>
+  <text x="96" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#0F766E">186</text>
+
+  <rect x="348" y="210" width="248" height="96" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text x="372" y="246" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" fill="#6b7280">完成率</text>
+  <text x="372" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#0F766E">52%</text>
+
+  <rect x="624" y="210" width="248" height="96" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text x="648" y="246" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" fill="#6b7280">延期</text>
+  <text x="648" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#DC2626">14</text>
+
+  <rect x="900" y="210" width="248" height="96" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text x="924" y="246" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="16" fill="#6b7280">阻塞</text>
+  <text x="924" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#B45309">9</text>
+
+  <rect x="72" y="336" width="1076" height="238" rx="16" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+  <rect x="72" y="336" width="1076" height="46" rx="16" fill="#f8fafc"/>
+  <text x="96" y="366" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#374151">项目</text>
+  <text x="300" y="366" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#374151">任务</text>
+  <text x="620" y="366" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#374151">负责人</text>
+  <text x="800" y="366" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#374151">状态</text>
+  <text x="960" y="366" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" font-weight="600" fill="#374151">健康度</text>
+
+  <text x="96" y="422" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#374151">A 项目</text>
+  <text x="300" y="422" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#111827">接口联调</text>
+  <text x="620" y="422" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#374151">张三</text>
+  <rect x="800" y="405" width="88" height="24" rx="12" fill="#fee2e2"/>
+  <text x="814" y="422" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#DC2626">阻塞</text>
+  <rect x="960" y="405" width="88" height="24" rx="12" fill="#fee2e2"/>
+  <text x="974" y="422" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#DC2626">已延期</text>
+
+  <line x1="96" y1="446" x2="1124" y2="446" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="96" y="482" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#374151">A 项目</text>
+  <text x="300" y="482" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#111827">需求评审</text>
+  <text x="620" y="482" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#374151">李四</text>
+  <rect x="800" y="465" width="88" height="24" rx="12" fill="#e0f2fe"/>
+  <text x="814" y="482" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#075985">进行中</text>
+  <rect x="960" y="465" width="88" height="24" rx="12" fill="#d1fae5"/>
+  <text x="974" y="482" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#047857">正常</text>
+
+  <line x1="96" y1="506" x2="1124" y2="506" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="96" y="542" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#374151">B 项目</text>
+  <text x="300" y="542" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#111827">上线验收</text>
+  <text x="620" y="542" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="15" fill="#374151">王五</text>
+  <rect x="800" y="525" width="88" height="24" rx="12" fill="#d1fae5"/>
+  <text x="814" y="542" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#047857">已完成</text>
+  <rect x="960" y="525" width="88" height="24" rx="12" fill="#d1fae5"/>
+  <text x="974" y="542" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#047857">正常</text>
+</svg>

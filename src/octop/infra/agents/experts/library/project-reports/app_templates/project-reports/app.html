@@ -1,0 +1,1424 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目报告台账</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --line: #e5e7eb;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --brand: #0f766e;
+    --brand-soft: #ccfbf1;
+    --danger: #dc2626;
+    --danger-soft: #fee2e2;
+    --warn: #b45309;
+    --warn-soft: #fef3c7;
+    --ok: #047857;
+    --ok-soft: #d1fae5;
+    --info: #075985;
+    --info-soft: #e0f2fe;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button, select, input {
+    font: inherit;
+    color: inherit;
+  }
+  button {
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: var(--card);
+    border-radius: 8px;
+    padding: 7px 12px;
+  }
+  button:hover { border-color: var(--brand); color: var(--brand); }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+  button.primary:hover { background: #0d5f59; color: #fff; }
+  .page { max-width: 1240px; margin: 0 auto; padding: 20px; }
+  .head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .head h1 { margin: 0; font-size: 22px; letter-spacing: .2px; }
+  .head p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--brand-soft);
+    color: #115e59;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .tabs {
+    display: flex;
+    gap: 6px;
+    margin: 18px 0 14px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .tab {
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .tab.active {
+    background: var(--card);
+    border-color: var(--line);
+    color: var(--brand);
+    font-weight: 600;
+  }
+  .kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .kpi {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .kpi span { color: var(--muted); font-size: 12px; }
+  .kpi strong { display: block; margin-top: 6px; font-size: 24px; font-variant-numeric: tabular-nums; }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .toolbar select, .toolbar input {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 10px;
+    min-width: 120px;
+  }
+  .toolbar .grow { flex: 1 1 160px; }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .panel-head h2 { margin: 0; font-size: 15px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; min-width: 720px; }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  th { color: var(--muted); font-size: 12px; font-weight: 600; background: #fafafa; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #f8fafc; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .task-name { font-weight: 600; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .badge.done { background: var(--ok-soft); color: var(--ok); }
+  .badge.doing { background: var(--info-soft); color: var(--info); }
+  .badge.blocked { background: var(--danger-soft); color: var(--danger); }
+  .badge.not_started { background: #f1f5f9; color: #475569; }
+  .badge.on_track { background: var(--ok-soft); color: var(--ok); }
+  .badge.at_risk { background: var(--warn-soft); color: var(--warn); }
+  .badge.delayed { background: var(--danger-soft); color: var(--danger); }
+  .progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 110px;
+  }
+  .progress-track {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    overflow: hidden;
+  }
+  .progress-fill { display: block; height: 100%; background: var(--brand); border-radius: 999px; }
+  .late { color: var(--danger); font-weight: 600; }
+  .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+  .pager {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--line);
+  }
+  .project-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+    padding: 16px;
+  }
+  .project-card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    cursor: pointer;
+    background: #fff;
+  }
+  .project-card:hover { border-color: var(--brand); background: #f0fdfa; }
+  .project-card h3 { margin: 0 0 4px; font-size: 14px; }
+  .project-card .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .project-card .numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+  .project-card .numbers b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .project-card .numbers span { color: var(--muted); font-size: 11px; }
+  .error-box {
+    margin: 12px 0;
+    padding: 10px 12px;
+    border: 1px solid #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgb(15 23 42 / 30%);
+    z-index: 40;
+  }
+  .drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(480px, 92vw);
+    background: var(--card);
+    z-index: 50;
+    box-shadow: -8px 0 30px rgb(15 23 42 / 15%);
+    display: flex;
+    flex-direction: column;
+  }
+  .drawer-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .drawer-head h2 { margin: 0; font-size: 16px; }
+  .drawer-body { padding: 16px; overflow-y: auto; }
+  .field { display: grid; grid-template-columns: 90px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px dashed #f1f5f9; }
+  .field dt { color: var(--muted); font-size: 12px; }
+  .field dd { margin: 0; }
+  .timeline { margin: 16px 0 0; padding: 0; list-style: none; }
+  .timeline li { position: relative; padding: 0 0 16px 20px; border-left: 2px solid #e2e8f0; margin-left: 4px; }
+  .timeline li:last-child { padding-bottom: 0; border-left-color: transparent; }
+  .timeline li::before {
+    content: "";
+    position: absolute;
+    left: -6px;
+    top: 4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--brand);
+  }
+  .timeline .when { color: var(--muted); font-size: 12px; }
+  .timeline .what { margin-top: 2px; }
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    background: #111827;
+    color: #fff;
+    padding: 9px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    z-index: 60;
+    max-width: 90vw;
+  }
+  .toast.error { background: var(--danger); }
+  [hidden] { display: none !important; }
+  @media (max-width: 860px) {
+    .page { padding: 12px; }
+    .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .head h1 { font-size: 19px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="head">
+    <div>
+      <h1 id="app-title">项目报告台账</h1>
+      <p id="app-subtitle">按报告期查看任务、项目总览、历史报告和风险清单。</p>
+    </div>
+    <div class="head-actions">
+      <span class="pill" id="period-pill">—</span>
+      <button type="button" id="refresh-btn">刷新</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="视图">
+    <button type="button" class="tab active" data-view="period">本期任务</button>
+    <button type="button" class="tab" data-view="overview">项目总览</button>
+    <button type="button" class="tab" data-view="history" id="tab-history">历史报告</button>
+    <button type="button" class="tab" data-view="risks">风险清单</button>
+  </nav>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section id="view-period">
+    <div class="toolbar">
+      <select id="period-select" aria-label="报告期"></select>
+      <select id="project-select" aria-label="项目"></select>
+      <select id="status-select" aria-label="状态"></select>
+      <select id="owner-select" aria-label="负责人"></select>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 id="heading-period">本期任务</h2>
+        <span class="muted" id="period-total">—</span>
+      </div>
+      <div class="table-wrap" id="period-table"></div>
+      <div class="pager">
+        <span class="muted" id="period-page">—</span>
+        <button type="button" id="page-prev">上一页</button>
+        <button type="button" id="page-next">下一页</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-overview" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 id="heading-overview">项目总览</h2>
+        <span class="muted" id="overview-hint">点击项目可筛选本期任务</span>
+      </div>
+      <div class="project-grid" id="overview-grid"></div>
+    </div>
+  </section>
+
+  <section id="view-history" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 id="heading-history">历史报告</h2>
+        <span class="muted" id="history-hint">按报告期倒序，最多显示最近 500 条</span>
+      </div>
+      <div class="table-wrap" id="history-table"></div>
+    </div>
+  </section>
+
+  <section id="view-risks" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2 id="heading-risks">风险清单</h2>
+        <span class="muted" id="risks-hint">延期或阻塞的任务</span>
+      </div>
+      <div class="table-wrap" id="risks-table"></div>
+    </div>
+  </section>
+</div>
+
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="任务详情">
+  <div class="drawer-head">
+    <div>
+      <h2 id="drawer-title">任务详情</h2>
+      <div class="muted" id="drawer-subtitle"></div>
+    </div>
+    <button type="button" id="drawer-close" aria-label="关闭">关闭</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var SDK = window.octopApp;
+  var MAIN = "main";
+  var REPORTS = "period_reports";
+  var PAGE_SIZE = 50;
+
+  var locale = String(window.__OCTOP_LOCALE__ || "zh").toLowerCase().indexOf("en") === 0 ? "en" : "zh";
+  var T = {
+    zh: {
+      title: "项目报告台账",
+      subtitle: "按报告期查看任务、项目总览、历史报告和风险清单。",
+      publicHint: "公开只读视图，显示最近一期的任务。",
+      period: "本期任务",
+      overview: "项目总览",
+      history: "历史报告",
+      risks: "风险清单",
+      refresh: "刷新",
+      allProjects: "全部项目",
+      allStatus: "全部状态",
+      allOwners: "全部负责人",
+      total: "任务数",
+      doneRate: "完成率",
+      delayed: "延期",
+      blocked: "阻塞",
+      noTasks: "这一期还没有任务。请让项目台账助手导入报告。",
+      noOverview: "还没有可汇总的数据。",
+      noHistory: "还没有导入记录。",
+      noRisks: "本期没有延期或阻塞的任务。",
+      task: "任务",
+      project: "项目",
+      owner: "负责人",
+      status: "状态",
+      priorityLabel: "优先级",
+      notes: "备注",
+      progress: "进度",
+      due: "截止",
+      health: "健康度",
+      late: "逾期",
+      days: "天",
+      periodCol: "报告期",
+      typeCol: "类型",
+      rowsCol: "任务数",
+      importedCol: "导入时间",
+      importStatus: "状态",
+      source: "来源文件",
+      trajectory: "任务轨迹",
+      close: "关闭",
+      prev: "上一页",
+      next: "下一页",
+      page: "第 {page} / {total} 页",
+      loadFailed: "加载失败：",
+      overviewHint: "点击项目可筛选本期任务",
+      historyHint: "按报告期倒序，最多显示最近 500 条",
+      risksHint: "延期或阻塞的任务",
+      projects: "个项目",
+      avgProgress: "平均进度",
+      noSource: "无来源记录"
+    },
+    en: {
+      title: "Project Reports",
+      subtitle: "Review tasks by period, portfolio health, report history and risks.",
+      publicHint: "Public read-only view showing the most recent period.",
+      period: "This Period",
+      overview: "Projects",
+      history: "History",
+      risks: "Risks",
+      refresh: "Refresh",
+      allProjects: "All projects",
+      allStatus: "All statuses",
+      allOwners: "All owners",
+      total: "Tasks",
+      doneRate: "Done",
+      delayed: "Delayed",
+      blocked: "Blocked",
+      noTasks: "No tasks for this period yet. Ask the ledger assistant to import a report.",
+      noOverview: "Nothing to summarize yet.",
+      noHistory: "No imports recorded yet.",
+      noRisks: "No delayed or blocked tasks in this period.",
+      task: "Task",
+      project: "Project",
+      owner: "Owner",
+      status: "Status",
+      priorityLabel: "Priority",
+      notes: "Notes",
+      progress: "Progress",
+      due: "Due",
+      health: "Health",
+      late: "Late",
+      days: "d",
+      periodCol: "Period",
+      typeCol: "Type",
+      rowsCol: "Tasks",
+      importedCol: "Imported",
+      importStatus: "Status",
+      source: "Source file",
+      trajectory: "Task timeline",
+      close: "Close",
+      prev: "Previous",
+      next: "Next",
+      page: "Page {page} / {total}",
+      loadFailed: "Failed to load: ",
+      overviewHint: "Click a project to filter this period",
+      historyHint: "Newest first, up to 500 records",
+      risksHint: "Delayed or blocked tasks",
+      projects: "projects",
+      avgProgress: "Avg progress",
+      noSource: "No source record"
+    }
+  };
+  var STATUS = {
+    zh: { not_started: "未开始", doing: "进行中", blocked: "阻塞", done: "已完成" },
+    en: { not_started: "Not started", doing: "In progress", blocked: "Blocked", done: "Done" }
+  };
+  var HEALTH = {
+    zh: { on_track: "正常", at_risk: "有风险", delayed: "已延期" },
+    en: { on_track: "On track", at_risk: "At risk", delayed: "Delayed" }
+  };
+  var PRIORITY = {
+    zh: { low: "低", medium: "中", high: "高" },
+    en: { low: "Low", medium: "Medium", high: "High" }
+  };
+  var PERIOD_TYPE = {
+    zh: { daily: "日报", weekly: "周报", monthly: "月报" },
+    en: { daily: "Daily", weekly: "Weekly", monthly: "Monthly" }
+  };
+  var PROJECT_STATUS = {
+    zh: { active: "进行中", paused: "暂停", done: "已完成" },
+    en: { active: "Active", paused: "Paused", done: "Done" }
+  };
+
+  function t(key, vars) {
+    var text = (T[locale] && T[locale][key]) || T.zh[key] || key;
+    if (vars) {
+      Object.keys(vars).forEach(function (name) {
+        text = text.split("{" + name + "}").join(String(vars[name]));
+      });
+    }
+    return text;
+  }
+
+  function label(map, value) {
+    if (!value) return "—";
+    return (map[locale] && map[locale][value]) || value;
+  }
+
+  function projectLabel(project) {
+    var meta = state.projectMeta[project];
+    return (meta && meta.project_name) || project || "—";
+  }
+
+  var state = {
+    view: "period",
+    period: "",
+    latestPeriod: "",
+    reports: [],
+    reportsLoaded: false,
+    hasReportsTable: true,
+    hasProjectsTable: true,
+    projectMeta: {},
+    tasks: [],
+    rowMeta: [],
+    total: 0,
+    offset: 0,
+    filters: { project: "", status: "", owner: "" },
+    periods: [],
+    projects: [],
+    owners: [],
+    overview: null,
+    risks: [],
+    loading: false,
+    pendingRefresh: false,
+    publicMode: false,
+    publicRows: [],
+    loaded: { period: false, overview: false, history: false, risks: false }
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (key) {
+        if (key === "text") node.textContent = attrs[key];
+        else if (key === "className") node.className = attrs[key];
+        else if (key === "dataset") {
+          Object.keys(attrs.dataset).forEach(function (name) {
+            node.dataset[name] = attrs.dataset[name];
+          });
+        } else if (key === "hidden") node.hidden = !!attrs.hidden;
+        else node.setAttribute(key, attrs[key]);
+      });
+    }
+    (children || []).forEach(function (child) {
+      if (child === null || child === undefined) return;
+      node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+    });
+    return node;
+  }
+
+  function clear(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function badge(kind, value) {
+    return el("span", {
+      className: "badge " + (value || ""),
+      text: label(kind === "status" ? STATUS : HEALTH, value)
+    });
+  }
+
+  function progressBar(value) {
+    var number = Number(value || 0);
+    if (!isFinite(number)) number = 0;
+    number = Math.max(0, Math.min(100, Math.round(number)));
+    var fill = el("i", { className: "progress-fill" });
+    fill.style.width = number + "%";
+    return el("div", { className: "progress" }, [
+      el("div", { className: "progress-track" }, [fill]),
+      el("span", { className: "muted", text: number + "%" })
+    ]);
+  }
+
+  function showError(error) {
+    toast(t("loadFailed") + (error && error.message ? error.message : String(error)), true);
+  }
+
+  var toastTimer = null;
+  function toast(message, isError) {
+    var node = $("toast");
+    node.textContent = message;
+    node.className = isError ? "toast error" : "toast";
+    node.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { node.hidden = true; }, 4000);
+  }
+
+  function debounce(fn, ms) {
+    var timer = null;
+    return function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(fn, ms);
+    };
+  }
+
+  function unique(values) {
+    var seen = {};
+    var out = [];
+    values.forEach(function (value) {
+      var key = String(value || "");
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      out.push(key);
+    });
+    return out;
+  }
+
+  function sortPeriods(values) {
+    return unique(values).sort(function (a, b) { return a < b ? 1 : a > b ? -1 : 0; });
+  }
+
+  function empty(message) {
+    return el("div", { className: "empty", text: message });
+  }
+
+  function buildOverview(rows) {
+    var projects = {};
+    var statusCounts = {};
+    rows.forEach(function (row) {
+      var project = row.project || "";
+      if (!projects[project]) {
+        projects[project] = {
+          project: project, total: 0, done: 0, delayed: 0, blocked: 0, progress: 0, sum: 0
+        };
+      }
+      var item = projects[project];
+      item.total += 1;
+      item.sum += Number(row.progress || 0);
+      if (row.status === "done") item.done += 1;
+      if (row.status === "blocked") item.blocked += 1;
+      if (row.health === "delayed") item.delayed += 1;
+      var status = row.status || "";
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+    });
+    var list = Object.keys(projects).map(function (key) {
+      var item = projects[key];
+      item.progress = item.total ? item.sum / item.total : 0;
+      return item;
+    }).sort(function (a, b) { return b.total - a.total; });
+    var statusGroups = Object.keys(statusCounts).map(function (key) {
+      return { key: key, count: statusCounts[key], value: statusCounts[key] };
+    });
+    return { projects: list, matched: rows.length, statusGroups: statusGroups };
+  }
+
+  function sortByPeriod(rows, descending) {
+    return rows.slice().sort(function (a, b) {
+      var left = a.period || "", right = b.period || "";
+      if (left === right) return 0;
+      return descending ? (left < right ? 1 : -1) : (left < right ? -1 : 1);
+    });
+  }
+
+  function computePublicView(rows) {
+    var periods = sortPeriods(rows.map(function (row) { return row.period || ""; }));
+    var latest = periods[0] || "";
+    var latestRows = rows.filter(function (row) { return (row.period || "") === latest; });
+    state.publicRows = rows;
+    state.periods = latest ? [latest] : [];
+    state.period = latest;
+    state.projects = unique(latestRows.map(function (row) { return row.project || ""; }));
+    state.owners = unique(latestRows.map(function (row) { return row.owner || ""; }));
+    state.overview = buildOverview(latestRows);
+    state.risks = latestRows
+      .filter(function (row) {
+        return row.health === "delayed" || row.status === "blocked";
+      })
+      .map(function (row) { return { row: row, meta: {} }; })
+      .sort(function (a, b) {
+        return Number(b.row.days_late || 0) - Number(a.row.days_late || 0);
+      });
+    state.hasReportsTable = false;
+    state.hasProjectsTable = false;
+    state.projectMeta = {};
+    state.reports = [];
+    state.reportsLoaded = true;
+    $("tab-history").hidden = true;
+  }
+
+  async function loadPublic() {
+    var first = await SDK.listRows({ table: MAIN, limit: 1, offset: 0 });
+    var total = Number((first && first.total) || 0);
+    if (!total) {
+      state.publicRows = [];
+      computePublicView([]);
+      renderPeriodSelect();
+      renderProjectSelect();
+      renderStatusSelect();
+      renderOwnerSelect();
+      renderKpis();
+      renderTasks();
+      renderOverview();
+      renderRisks();
+      return;
+    }
+    var collected = [];
+    var offset = Math.max(0, total - 500);
+    var pages = 0;
+    var latest = "";
+    while (pages < 4) {
+      var page = await SDK.listRows({ table: MAIN, limit: 500, offset: offset });
+      var rows = (page && page.rows) || [];
+      collected = rows.concat(collected);
+      var pageLatest = "";
+      rows.forEach(function (row) {
+        var period = row.period || "";
+        if (period > pageLatest) pageLatest = period;
+      });
+      if (pageLatest > latest) latest = pageLatest;
+      if (offset === 0) break;
+      var oldest = rows[0] && (rows[0].period || "");
+      if (oldest && latest && oldest < latest) break;
+      offset = Math.max(0, offset - 500);
+      pages += 1;
+    }
+    if (!latest && collected.length) latest = collected[collected.length - 1].period || "";
+    computePublicView(collected);
+    renderPeriodSelect();
+    renderProjectSelect();
+    renderStatusSelect();
+    renderOwnerSelect();
+    renderKpis();
+    renderOverview();
+    renderRisks();
+    await loadTasks();
+  }
+
+  async function loadPeriods() {
+    try {
+      var res = await SDK.aggregate({ table: MAIN, groupBy: "period", agg: "count", limit: 200 });
+      state.periods = sortPeriods((res.groups || []).map(function (group) { return group.key; }));
+    } catch (error) {
+      state.periods = [];
+    }
+    if (!state.period || state.periods.indexOf(state.period) < 0) {
+      state.period = state.periods[0] || "";
+    }
+    state.latestPeriod = state.periods[0] || "";
+    renderPeriodSelect();
+  }
+
+  async function loadProjects() {
+    state.projectMeta = {};
+    if (state.hasProjectsTable) {
+      try {
+        var metaRes = await SDK.listRows({ table: "projects", limit: 500 });
+        (metaRes.rows || []).forEach(function (row) {
+          if (row.project) state.projectMeta[row.project] = row;
+        });
+      } catch (error) {
+        state.hasProjectsTable = false;
+      }
+    }
+    try {
+      var results = await Promise.all([
+        SDK.aggregate({ table: MAIN, groupBy: "project", agg: "count", limit: 200 }),
+        SDK.aggregate({ table: MAIN, groupBy: "owner", agg: "count", limit: 200 })
+      ]);
+      state.projects = sortPeriods((results[0].groups || []).map(function (group) { return group.key; }));
+      state.owners = sortPeriods((results[1].groups || []).map(function (group) { return group.key; }));
+    } catch (error) {
+      state.projects = [];
+      state.owners = [];
+    }
+    if (state.filters.project && state.projects.indexOf(state.filters.project) < 0) {
+      state.filters.project = "";
+    }
+    if (state.filters.owner && state.owners.indexOf(state.filters.owner) < 0) {
+      state.filters.owner = "";
+    }
+    renderProjectSelect();
+    renderStatusSelect();
+    renderOwnerSelect();
+  }
+
+  function option(value, text) {
+    var node = el("option", { value: value, text: text });
+    return node;
+  }
+
+  function renderPeriodSelect() {
+    var select = $("period-select");
+    clear(select);
+    if (!state.periods.length) {
+      select.appendChild(option("", "—"));
+      select.disabled = true;
+      return;
+    }
+    select.disabled = state.publicMode;
+    state.periods.forEach(function (period) {
+      var node = option(period, period);
+      if (period === state.period) node.selected = true;
+      select.appendChild(node);
+    });
+    $("period-pill").textContent = state.period || "—";
+  }
+
+  function renderProjectSelect() {
+    var select = $("project-select");
+    clear(select);
+    select.appendChild(option("", t("allProjects")));
+    state.projects.forEach(function (project) {
+      var node = option(project, projectLabel(project));
+      if (project === state.filters.project) node.selected = true;
+      select.appendChild(node);
+    });
+  }
+
+  function renderStatusSelect() {
+    var select = $("status-select");
+    clear(select);
+    select.appendChild(option("", t("allStatus")));
+    Object.keys(STATUS[locale]).forEach(function (value) {
+      var node = option(value, label(STATUS, value));
+      if (value === state.filters.status) node.selected = true;
+      select.appendChild(node);
+    });
+  }
+
+  function renderOwnerSelect() {
+    var select = $("owner-select");
+    clear(select);
+    select.appendChild(option("", t("allOwners")));
+    state.owners.forEach(function (owner) {
+      var node = option(owner, owner);
+      if (owner === state.filters.owner) node.selected = true;
+      select.appendChild(node);
+    });
+  }
+
+  function currentFilters() {
+    var filters = {};
+    if (state.period) filters.period = state.period;
+    if (state.filters.project) filters.project = state.filters.project;
+    if (state.filters.status) filters.status = state.filters.status;
+    if (state.filters.owner) filters.owner = state.filters.owner;
+    return filters;
+  }
+
+  async function loadTasks() {
+    if (state.publicMode) {
+      var filtered = state.publicRows.filter(function (row) {
+        if (state.period && (row.period || "") !== state.period) return false;
+        if (state.filters.project && (row.project || "") !== state.filters.project) return false;
+        if (state.filters.status && (row.status || "") !== state.filters.status) return false;
+        if (state.filters.owner && (row.owner || "") !== state.filters.owner) return false;
+        return true;
+      });
+      filtered.sort(function (a, b) {
+        return Number(b.days_late || 0) - Number(a.days_late || 0);
+      });
+      state.total = filtered.length;
+      state.tasks = filtered.slice(state.offset, state.offset + PAGE_SIZE);
+      state.rowMeta = state.tasks.map(function () { return {}; });
+      renderTasks();
+      return;
+    }
+    if (!state.period) {
+      state.tasks = [];
+      state.rowMeta = [];
+      state.total = 0;
+      renderTasks();
+      return;
+    }
+    var res = await SDK.listRows({
+      table: MAIN,
+      filters: currentFilters(),
+      sort: "-days_late",
+      limit: PAGE_SIZE,
+      offset: state.offset
+    });
+    state.tasks = res.rows || [];
+    state.rowMeta = res.row_meta || [];
+    state.total = Number(res.total || 0);
+    renderTasks();
+  }
+
+  function taskTable(rows, meta) {
+    if (!rows.length) return empty(t("noTasks"));
+    var head = el("thead", null, [
+      el("tr", null, [
+        el("th", { text: t("project") }),
+        el("th", { text: t("task") }),
+        el("th", { text: t("owner") }),
+        el("th", { text: t("status") }),
+        el("th", { text: t("progress") }),
+        el("th", { text: t("due") }),
+        el("th", { text: t("health") }),
+        el("th", { text: t("late") })
+      ])
+    ]);
+    var body = el("tbody");
+    rows.forEach(function (task, index) {
+      var late = Number(task.days_late || 0);
+      var tr = el("tr", null, [
+        el("td", { text: projectLabel(task.project) }),
+        el("td", { className: "task-name", text: task.task_name || "—" }),
+        el("td", { text: task.owner || "—" }),
+        el("td", null, [badge("status", task.status)]),
+        el("td", null, [progressBar(task.progress)]),
+        el("td", { text: task.due_date || "—" }),
+        el("td", null, [badge("health", task.health)]),
+        el("td", { className: late ? "late" : "", text: late ? late + " " + t("days") : "—" })
+      ]);
+      tr.addEventListener("click", function () {
+        openDrawer(task, meta[index] || {});
+      });
+      body.appendChild(tr);
+    });
+    return el("table", null, [head, body]);
+  }
+
+  function renderTasks() {
+    var host = $("period-table");
+    clear(host);
+    host.appendChild(taskTable(state.tasks, state.rowMeta));
+    $("period-total").textContent = state.total + " " + t("total");
+    var pages = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+    var page = Math.floor(state.offset / PAGE_SIZE) + 1;
+    $("period-page").textContent = t("page", { page: page, total: pages });
+    $("page-prev").disabled = state.offset <= 0;
+    $("page-next").disabled = state.offset + PAGE_SIZE >= state.total;
+  }
+
+  async function loadOverview() {
+    if (state.publicMode) {
+      if (!state.overview) {
+        state.overview = buildOverview(
+          state.publicRows.filter(function (row) {
+            return (row.period || "") === state.period;
+          })
+        );
+      }
+      renderOverview();
+      return;
+    }
+    var filters = state.period ? { period: state.period } : {};
+    var results = await Promise.all([
+      SDK.aggregate({ table: MAIN, groupBy: "project", agg: "count", filters: filters, limit: 200 }),
+      SDK.aggregate({ table: MAIN, groupBy: "status", agg: "count", filters: filters, limit: 20 }),
+      SDK.aggregate({ table: MAIN, groupBy: "project", metric: "progress", agg: "avg", filters: filters, limit: 200 }),
+      SDK.aggregate({ table: MAIN, groupBy: "project", agg: "count", filters: Object.assign({}, filters, { health: "delayed" }), limit: 200 }),
+      SDK.aggregate({ table: MAIN, groupBy: "project", agg: "count", filters: Object.assign({}, filters, { status: "blocked" }), limit: 200 }),
+      SDK.aggregate({ table: MAIN, groupBy: "project", agg: "count", filters: Object.assign({}, filters, { status: "done" }), limit: 200 })
+    ]);
+    var projects = {};
+    function ensure(key) {
+      if (!projects[key]) projects[key] = { project: key, total: 0, done: 0, delayed: 0, blocked: 0, progress: 0 };
+      return projects[key];
+    }
+    (results[0].groups || []).forEach(function (group) { ensure(group.key).total = Number(group.count || 0); });
+    (results[2].groups || []).forEach(function (group) { ensure(group.key).progress = Number(group.value || 0); });
+    (results[3].groups || []).forEach(function (group) { ensure(group.key).delayed = Number(group.count || 0); });
+    (results[4].groups || []).forEach(function (group) { ensure(group.key).blocked = Number(group.count || 0); });
+    (results[5].groups || []).forEach(function (group) { ensure(group.key).done = Number(group.count || 0); });
+    state.overview = {
+      projects: Object.keys(projects).map(function (key) { return projects[key]; }).sort(function (a, b) { return b.total - a.total; }),
+      matched: Number(results[0].matched_rows || 0),
+      statusGroups: results[1].groups || []
+    };
+    renderOverview();
+  }
+
+  function renderOverview() {
+    var host = $("overview-grid");
+    clear(host);
+    var data = state.overview;
+    if (!data || !data.projects.length) {
+      host.appendChild(empty(t("noOverview")));
+      return;
+    }
+    data.projects.forEach(function (project) {
+      var rate = project.total ? Math.round((project.done / project.total) * 100) : 0;
+      var meta = state.projectMeta[project.project] || {};
+      var details = [];
+      if (meta.owner) details.push(meta.owner);
+      if (meta.status) details.push(label(PROJECT_STATUS, meta.status));
+      var children = [
+        el("h3", { text: projectLabel(project.project) }),
+        el("div", { className: "meta" }, [
+          el("span", { text: project.total + " " + t("total") }),
+          el("span", { text: t("avgProgress") + " " + Math.round(project.progress) + "%" })
+        ])
+      ];
+      if (details.length) {
+        children.splice(1, 0, el("div", { className: "muted", text: details.join(" · ") }));
+      }
+      children.push(el("div", { className: "numbers" }, [
+        el("div", null, [el("b", { text: rate + "%" }), el("span", { text: t("doneRate") })]),
+        el("div", null, [el("b", { className: "late", text: project.delayed }), el("span", { text: t("delayed") })]),
+        el("div", null, [el("b", { text: project.blocked }), el("span", { text: t("blocked") })])
+      ]));
+      var card = el("div", { className: "project-card" }, children);
+      card.addEventListener("click", function () {
+        state.filters.project = project.project;
+        state.offset = 0;
+        renderProjectSelect();
+        switchView("period");
+      });
+      host.appendChild(card);
+    });
+  }
+
+  async function loadReports() {
+    if (state.publicMode || !state.hasReportsTable) {
+      state.reports = [];
+      state.reportsLoaded = true;
+      state.hasReportsTable = false;
+      return;
+    }
+    try {
+      var res = await SDK.listRows({ table: REPORTS, sort: "-period", limit: 500 });
+      state.reports = res.rows || [];
+      state.reportsLoaded = true;
+    } catch (error) {
+      state.reports = [];
+      state.reportsLoaded = false;
+      state.hasReportsTable = false;
+      $("tab-history").hidden = true;
+    }
+  }
+
+  function renderHistory() {
+    var host = $("history-table");
+    clear(host);
+    if (!state.reports.length) {
+      host.appendChild(empty(t("noHistory")));
+      return;
+    }
+    var head = el("thead", null, [
+      el("tr", null, [
+        el("th", { text: t("periodCol") }),
+        el("th", { text: t("typeCol") }),
+        el("th", { text: t("project") }),
+        el("th", { text: t("rowsCol") }),
+        el("th", { text: t("importedCol") }),
+        el("th", { text: t("importStatus") })
+      ])
+    ]);
+    var body = el("tbody");
+    state.reports.forEach(function (report) {
+      var tr = el("tr", null, [
+        el("td", { text: report.period || "—" }),
+        el("td", { text: label(PERIOD_TYPE, report.period_type) }),
+        el("td", { text: report.project || "—" }),
+        el("td", { text: report.row_count || "0" }),
+        el("td", { text: report.imported_at || "—" }),
+        el("td", { text: report.status || "—" })
+      ]);
+      tr.addEventListener("click", function () {
+        state.period = report.period;
+        state.offset = 0;
+        renderPeriodSelect();
+        switchView("period");
+      });
+      body.appendChild(tr);
+    });
+    host.appendChild(el("table", null, [head, body]));
+  }
+
+  async function loadRisks() {
+    if (state.publicMode) {
+      state.risks = state.publicRows
+        .filter(function (row) {
+          return (row.period || "") === state.period
+            && (row.health === "delayed" || row.status === "blocked");
+        })
+        .map(function (row) { return { row: row, meta: {} }; })
+        .sort(function (a, b) {
+          return Number(b.row.days_late || 0) - Number(a.row.days_late || 0);
+        });
+      renderRisks();
+      return;
+    }
+    var filters = state.period ? { period: state.period } : {};
+    var results = await Promise.all([
+      SDK.listRows({ table: MAIN, filters: Object.assign({}, filters, { health: "delayed" }), sort: "-days_late", limit: 500 }),
+      SDK.listRows({ table: MAIN, filters: Object.assign({}, filters, { status: "blocked" }), sort: "-days_late", limit: 500 })
+    ]);
+    var merged = [];
+    var seen = {};
+    [results[0], results[1]].forEach(function (result) {
+      (result.rows || []).forEach(function (row, index) {
+        var key = [row.project, row.period, row.task_id].join("::");
+        if (seen[key]) return;
+        seen[key] = true;
+        merged.push({ row: row, meta: (result.row_meta || [])[index] || {} });
+      });
+    });
+    merged.sort(function (a, b) {
+      return Number(b.row.days_late || 0) - Number(a.row.days_late || 0);
+    });
+    state.risks = merged;
+    renderRisks();
+  }
+
+  function renderRisks() {
+    var host = $("risks-table");
+    clear(host);
+    if (!state.risks.length) {
+      host.appendChild(empty(t("noRisks")));
+      return;
+    }
+    var head = el("thead", null, [
+      el("tr", null, [
+        el("th", { text: t("project") }),
+        el("th", { text: t("task") }),
+        el("th", { text: t("owner") }),
+        el("th", { text: t("status") }),
+        el("th", { text: t("due") }),
+        el("th", { text: t("late") })
+      ])
+    ]);
+    var body = el("tbody");
+    state.risks.forEach(function (item) {
+      var task = item.row;
+      var late = Number(task.days_late || 0);
+      var tr = el("tr", null, [
+        el("td", { text: projectLabel(task.project) }),
+        el("td", { className: "task-name", text: task.task_name || "—" }),
+        el("td", { text: task.owner || "—" }),
+        el("td", null, [badge("status", task.status)]),
+        el("td", { text: task.due_date || "—" }),
+        el("td", { className: late ? "late" : "", text: late ? late + " " + t("days") : "—" })
+      ]);
+      tr.addEventListener("click", function () { openDrawer(task, item.meta); });
+      body.appendChild(tr);
+    });
+    host.appendChild(el("table", null, [head, body]));
+  }
+
+  async function openDrawer(task, meta) {
+    $("drawer").hidden = false;
+    $("drawer-backdrop").hidden = false;
+    $("drawer-title").textContent = task.task_name || "—";
+    $("drawer-subtitle").textContent = [projectLabel(task.project), task.period, task.task_id]
+      .filter(Boolean)
+      .join(" · ");
+    var body = $("drawer-body");
+    clear(body);
+    var list = el("dl");
+    [
+      [t("project"), task.project],
+      [t("owner"), task.owner],
+      [t("status"), label(STATUS, task.status)],
+      [t("priorityLabel"), label(PRIORITY, task.priority)],
+      [t("progress"), (task.progress || "0") + "%"],
+      [t("due"), task.due_date],
+      [t("health"), label(HEALTH, task.health)],
+      [t("late"), task.days_late ? task.days_late + " " + t("days") : "—"],
+      [t("notes"), task.notes]
+    ].forEach(function (pair) {
+      if (!pair[1]) return;
+      list.appendChild(el("div", { className: "field" }, [
+        el("dt", { text: pair[0] }),
+        el("dd", { text: pair[1] })
+      ]));
+    });
+    body.appendChild(list);
+
+    var source = null;
+    if (state.hasReportsTable) {
+      if (!state.reportsLoaded) await loadReports();
+      source = state.reports.filter(function (report) {
+        return report.batch_id && task.batch_id && report.batch_id === task.batch_id;
+      })[0] || null;
+    }
+    if (source) {
+      list.appendChild(el("div", { className: "field" }, [
+        el("dt", { text: t("source") }),
+        el("dd", { text: source.source_file || "—" })
+      ]));
+    }
+
+    body.appendChild(el("h3", { text: t("trajectory") }));
+    try {
+      var historyRows;
+      if (state.publicMode) {
+        historyRows = sortByPeriod(
+          state.publicRows.filter(function (row) {
+            return row.project === task.project && row.task_id === task.task_id;
+          }),
+          false
+        );
+      } else {
+        var res = await SDK.listRows({
+          table: MAIN,
+          filters: { project: task.project, task_id: task.task_id },
+          sort: "period",
+          limit: 200
+        });
+        historyRows = res.rows || [];
+      }
+      var timeline = el("ul", { className: "timeline" });
+      historyRows.forEach(function (row) {
+        timeline.appendChild(el("li", null, [
+          el("div", { className: "when", text: row.period || "—" }),
+          el("div", { className: "what" }, [
+            badge("status", row.status),
+            document.createTextNode(" " + (row.progress ? row.progress + "%" : "")),
+            el("div", { className: "muted", text: label(HEALTH, row.health) + (row.days_late && Number(row.days_late) ? " · " + row.days_late + " " + t("days") : "") })
+          ])
+        ]));
+      });
+      body.appendChild(timeline);
+    } catch (error) {
+      body.appendChild(empty(t("loadFailed") + (error && error.message ? error.message : String(error))));
+    }
+    if (meta && meta.row_id) {
+      body.dataset.rowId = meta.row_id;
+    }
+  }
+
+  function closeDrawer() {
+    $("drawer").hidden = true;
+    $("drawer-backdrop").hidden = true;
+  }
+
+  function renderKpis() {
+    var host = $("kpis");
+    clear(host);
+    var data = state.overview;
+    var total = data ? data.matched : 0;
+    var done = 0;
+    var delayed = 0;
+    var blocked = 0;
+    if (data) {
+      data.statusGroups.forEach(function (group) {
+        if (group.key === "done") done = Number(group.count || 0);
+        if (group.key === "blocked") blocked = Number(group.count || 0);
+      });
+      data.projects.forEach(function (project) { delayed += Number(project.delayed || 0); });
+      if (!total) total = data.projects.reduce(function (sum, project) { return sum + Number(project.total || 0); }, 0);
+    }
+    var rate = total ? Math.round((done / total) * 100) : 0;
+    [
+      [t("total"), total],
+      [t("doneRate"), rate + "%"],
+      [t("delayed"), delayed],
+      [t("blocked"), blocked]
+    ].forEach(function (pair) {
+      host.appendChild(el("div", { className: "kpi" }, [
+        el("span", { text: pair[0] }),
+        el("strong", { text: pair[1] })
+      ]));
+    });
+  }
+
+  function resetViews() {
+    state.loaded = { period: false, overview: false, history: false, risks: false };
+    state.offset = 0;
+    state.tasks = [];
+    state.risks = [];
+    state.overview = null;
+  }
+
+  async function refreshAll() {
+    if (state.publicMode) {
+      try {
+        await loadPublic();
+      } catch (error) {
+        showError(error);
+      }
+      return;
+    }
+    $("period-pill").textContent = state.period || "—";
+    try {
+      await loadPeriods();
+      await Promise.all([
+        loadProjects(),
+        loadReports(),
+        loadOverview().catch(function (error) {
+          state.overview = null;
+          showError(error);
+        })
+      ]);
+      renderKpis();
+      await refreshCurrent();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  async function refreshCurrent() {
+    if (state.loading) {
+      state.pendingRefresh = true;
+      return;
+    }
+    state.loading = true;
+    try {
+      if (state.view === "period") await loadTasks();
+      else if (state.view === "overview") { if (!state.overview) { await loadOverview(); } renderKpis(); }
+      else if (state.view === "history") { if (!state.reportsLoaded) await loadReports(); renderHistory(); }
+      else if (state.view === "risks") await loadRisks();
+    } catch (error) {
+      showError(error);
+    } finally {
+      state.loading = false;
+      if (state.pendingRefresh) {
+        state.pendingRefresh = false;
+        refreshCurrent();
+      }
+    }
+  }
+
+  function switchView(view) {
+    state.view = view;
+    document.querySelectorAll(".tab").forEach(function (button) {
+      button.classList.toggle("active", button.dataset.view === view);
+    });
+    $("view-period").hidden = view !== "period";
+    $("view-overview").hidden = view !== "overview";
+    $("view-history").hidden = view !== "history";
+    $("view-risks").hidden = view !== "risks";
+    state.offset = 0;
+    refreshCurrent();
+  }
+
+  function bindEvents() {
+    document.querySelectorAll(".tab").forEach(function (button) {
+      button.addEventListener("click", function () { switchView(button.dataset.view); });
+    });
+    $("refresh-btn").addEventListener("click", function () { resetViews(); refreshAll(); });
+    $("period-select").addEventListener("change", function (event) {
+      state.period = event.target.value;
+      state.offset = 0;
+      $("period-pill").textContent = state.period || "—";
+      resetViews();
+      refreshAll();
+    });
+    $("project-select").addEventListener("change", function (event) {
+      state.filters.project = event.target.value;
+      state.offset = 0;
+      loadTasks().catch(showError);
+    });
+    $("status-select").addEventListener("change", function (event) {
+      state.filters.status = event.target.value;
+      state.offset = 0;
+      loadTasks().catch(showError);
+    });
+    $("owner-select").addEventListener("change", function (event) {
+      state.filters.owner = event.target.value;
+      state.offset = 0;
+      loadTasks().catch(showError);
+    });
+    $("page-prev").addEventListener("click", function () {
+      state.offset = Math.max(0, state.offset - PAGE_SIZE);
+      loadTasks().catch(showError);
+    });
+    $("page-next").addEventListener("click", function () {
+      if (state.offset + PAGE_SIZE < state.total) state.offset += PAGE_SIZE;
+      loadTasks().catch(showError);
+    });
+    $("drawer-close").addEventListener("click", closeDrawer);
+    $("drawer-backdrop").addEventListener("click", closeDrawer);
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") closeDrawer();
+    });
+  }
+
+  async function boot() {
+    bindEvents();
+    state.publicMode = typeof SDK.aggregate !== "function";
+    document.title = t("title");
+    $("app-title").textContent = t("title");
+    $("app-subtitle").textContent = state.publicMode ? t("publicHint") : t("subtitle");
+    $("app-title").setAttribute("title", t("title"));
+    $("refresh-btn").textContent = t("refresh");
+    $("drawer-close").textContent = t("close");
+    $("page-prev").textContent = t("prev");
+    $("page-next").textContent = t("next");
+    $("heading-period").textContent = t("period");
+    $("heading-overview").textContent = t("overview");
+    $("heading-history").textContent = t("history");
+    $("heading-risks").textContent = t("risks");
+    $("overview-hint").textContent = t("overviewHint");
+    $("history-hint").textContent = t("historyHint");
+    $("risks-hint").textContent = t("risksHint");
+    document.querySelectorAll(".tab").forEach(function (button) {
+      button.textContent = t(button.dataset.view);
+    });
+    renderStatusSelect();
+    try {
+      var tables = await SDK.tables();
+      var list = (tables && tables.tables) || [];
+      state.hasReportsTable = list.some(function (item) { return item.table_key === REPORTS; });
+      state.hasProjectsTable = list.some(function (item) { return item.table_key === "projects"; });
+    } catch (error) {
+      state.hasReportsTable = false;
+    }
+    if (!state.hasReportsTable) $("tab-history").hidden = true;
+    await refreshAll();
+    if (typeof SDK.onDataChange === "function") {
+      SDK.onDataChange(debounce(function () { resetViews(); refreshAll(); }, 700));
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>
