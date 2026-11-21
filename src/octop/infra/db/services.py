@@ -8,11 +8,13 @@ from octop.config import OctopConfig
 from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos.agents import AgentRepo
 from octop.infra.db.repos.app_access import AppAccessRequestRepo
+from octop.infra.db.repos.app_access_codes import AppAccessCodeRepo
 from octop.infra.db.repos.app_bindings import LightAppBindingRepo
 from octop.infra.db.repos.app_events import AppEventRepo
 from octop.infra.db.repos.app_ingress import LightAppIngressRepo
 from octop.infra.db.repos.app_schedules import LightAppScheduleRepo
 from octop.infra.db.repos.app_services import LightAppServiceRepo
+from octop.infra.db.repos.app_setup_plans import AppSetupPlanRepo
 from octop.infra.db.repos.app_webhooks import LightAppWebhookRepo
 from octop.infra.db.repos.apps import LightAppRepo
 from octop.infra.db.repos.audit import AuditRepo
@@ -21,6 +23,10 @@ from octop.infra.db.repos.backends import BackendRepo
 from octop.infra.db.repos.boards import LightAppBoardRepo
 from octop.infra.db.repos.bridge_connections import BridgeConnectionRepo
 from octop.infra.db.repos.care_push import CarePushRepo
+from octop.infra.db.repos.channel_identities import (
+    ChannelBindCodeRepo,
+    ChannelIdentityRepo,
+)
 from octop.infra.db.repos.channels import ChannelRepo
 from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.cron import CronJobRepo
@@ -69,6 +75,8 @@ class RepoBundle:
     agent_repo: AgentRepo
     provider_repo: ProviderRepo
     channel_repo: ChannelRepo
+    channel_identity_repo: ChannelIdentityRepo
+    channel_bind_code_repo: ChannelBindCodeRepo
     cron_repo: CronJobRepo
     session_repo: SessionRepo
     thread_repo: ThreadRepo
@@ -88,12 +96,14 @@ class RepoBundle:
     light_app_repo: LightAppRepo
     light_app_board_repo: LightAppBoardRepo
     app_access_repo: AppAccessRequestRepo
+    app_access_code_repo: AppAccessCodeRepo
     app_binding_repo: LightAppBindingRepo
     app_service_repo: LightAppServiceRepo
     app_event_repo: AppEventRepo
     app_ingress_repo: LightAppIngressRepo
     app_webhook_repo: LightAppWebhookRepo
     app_schedule_repo: LightAppScheduleRepo
+    app_setup_plan_repo: AppSetupPlanRepo
     voice_provider_repo: VoiceProviderRepo
     care_push_repo: CarePushRepo
     proactive_care_config_repo: ProactiveCareConfigRepo
@@ -124,6 +134,8 @@ class RepoBundle:
             agent_repo=AgentRepo(db),
             provider_repo=ProviderRepo(db),
             channel_repo=ChannelRepo(db),
+            channel_identity_repo=ChannelIdentityRepo(db),
+            channel_bind_code_repo=ChannelBindCodeRepo(db),
             cron_repo=CronJobRepo(db),
             session_repo=SessionRepo(db),
             thread_repo=ThreadRepo(db),
@@ -143,12 +155,14 @@ class RepoBundle:
             light_app_repo=LightAppRepo(db),
             light_app_board_repo=LightAppBoardRepo(db),
             app_access_repo=AppAccessRequestRepo(db),
+            app_access_code_repo=AppAccessCodeRepo(db),
             app_binding_repo=LightAppBindingRepo(db),
             app_service_repo=LightAppServiceRepo(db),
             app_event_repo=AppEventRepo(db),
             app_ingress_repo=LightAppIngressRepo(db),
             app_webhook_repo=LightAppWebhookRepo(db),
             app_schedule_repo=LightAppScheduleRepo(db),
+            app_setup_plan_repo=AppSetupPlanRepo(db),
             voice_provider_repo=VoiceProviderRepo(db),
             care_push_repo=CarePushRepo(db),
             proactive_care_config_repo=ProactiveCareConfigRepo(db),
@@ -204,6 +218,14 @@ class SharedServices:
     @property
     def channel_repo(self) -> ChannelRepo:
         return self.repos.channel_repo
+
+    @property
+    def channel_identity_repo(self) -> ChannelIdentityRepo:
+        return self.repos.channel_identity_repo
+
+    @property
+    def channel_bind_code_repo(self) -> ChannelBindCodeRepo:
+        return self.repos.channel_bind_code_repo
 
     @property
     def cron_repo(self) -> CronJobRepo:
@@ -282,6 +304,10 @@ class SharedServices:
         return self.repos.app_access_repo
 
     @property
+    def app_access_code_repo(self) -> AppAccessCodeRepo:
+        return self.repos.app_access_code_repo
+
+    @property
     def app_binding_repo(self) -> LightAppBindingRepo:
         return self.repos.app_binding_repo
 
@@ -296,6 +322,10 @@ class SharedServices:
     @property
     def app_schedule_repo(self) -> LightAppScheduleRepo:
         return self.repos.app_schedule_repo
+
+    @property
+    def app_setup_plan_repo(self) -> AppSetupPlanRepo:
+        return self.repos.app_setup_plan_repo
 
     @property
     def voice_provider_repo(self) -> VoiceProviderRepo:

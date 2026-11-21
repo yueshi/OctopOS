@@ -4,16 +4,23 @@ import zhCN from "antd/locale/zh_CN";
 import enUS from "antd/locale/en_US";
 import dayjs from "dayjs";
 import "dayjs/locale/zh-cn";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import DesktopWindowControls from "./components/DesktopWindowControls";
 import {
   DesktopChromeProvider,
   useDesktopChrome,
 } from "./hooks/useDesktopChrome";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import MainLayout from "./layouts/MainLayout";
 import LoginPage from "./pages/Login";
+import AppAccessComplete from "./pages/Login/AppAccessComplete";
 import OidcComplete from "./pages/Login/OidcComplete";
 import SetupPage from "./pages/Setup";
 import InvitePage from "./pages/Invite";
@@ -28,11 +35,14 @@ import { VoiceOutputProvider } from "./context/VoiceOutputContext";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { useUnauthorizedRedirect } from "./hooks/useUnauthorizedRedirect";
 import { installDesktopExternalLinks } from "./utils/desktopExternalLinks";
+import { getAppScope } from "./api";
 import { brandTokensFor } from "./styles/themePalettes";
 import "./styles/theme-vars.css";
 import "./styles/layout.css";
 import "./styles/form-override.css";
 import "./styles/spin-override.css";
+
+const AppRuntimePage = lazy(() => import("./pages/Apps/Detail"));
 
 const GlobalStyle = createGlobalStyle`
 * {
@@ -46,6 +56,10 @@ function ThemedApp() {
   const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
   const desktopChrome = useDesktopChrome();
+  // Subscribing to the location makes the tree switch as soon as the one-time
+  // link exchanges its code and navigates into the app.
+  const location = useLocation();
+  const scopedAppId = getAppScope()?.app_id ?? "";
   const brandTokens = brandTokensFor(palette, isDark, customColor);
   // Make antd built-ins (Popconfirm OK/Cancel, Modal default footer, Empty,
   // Pagination, DatePicker, Table… ) follow the current UI language.
@@ -131,26 +145,62 @@ function ThemedApp() {
           {desktopChrome ? (
             <DesktopWindowControls chrome={desktopChrome} />
           ) : null}
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/login/oidc/complete" element={<OidcComplete />} />
-            <Route path="/setup" element={<SetupPage />} />
-            <Route path="/invite" element={<InvitePage />} />
-            <Route
-              path="/*"
-              element={
-                <AuthGuard>
-                  <AgentProvider>
-                    <LayoutModeProvider>
-                      <VoiceOutputProvider>
-                        <MainLayout />
-                      </VoiceOutputProvider>
-                    </LayoutModeProvider>
-                  </AgentProvider>
-                </AuthGuard>
-              }
-            />
-          </Routes>
+          {scopedAppId ? (
+            // A one-time personal link holds an app-scoped token. Keep the
+            // dashboard shell (AuthGuard/AgentProvider/MainLayout) unmounted:
+            // it would only fire global requests that the scoped token blocks.
+            <Routes key={location.pathname}>
+              <Route path="/login/app-access" element={<AppAccessComplete />} />
+              <Route
+                path="/apps/:appId"
+                element={
+                  <Suspense
+                    fallback={
+                      <div
+                        style={{
+                          position: "fixed",
+                          inset: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <OctopSpinner />
+                      </div>
+                    }
+                  >
+                    <AppRuntimePage forceRuntime />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="*"
+                element={<Navigate replace to={`/apps/${scopedAppId}`} />}
+              />
+            </Routes>
+          ) : (
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/login/oidc/complete" element={<OidcComplete />} />
+              <Route path="/login/app-access" element={<AppAccessComplete />} />
+              <Route path="/setup" element={<SetupPage />} />
+              <Route path="/invite" element={<InvitePage />} />
+              <Route
+                path="/*"
+                element={
+                  <AuthGuard>
+                    <AgentProvider>
+                      <LayoutModeProvider>
+                        <VoiceOutputProvider>
+                          <MainLayout />
+                        </VoiceOutputProvider>
+                      </LayoutModeProvider>
+                    </AgentProvider>
+                  </AuthGuard>
+                }
+              />
+            </Routes>
+          )}
         </DesktopChromeProvider>
       </AntdAppProvider>
     </ConfigProvider>

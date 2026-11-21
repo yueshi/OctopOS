@@ -18,6 +18,7 @@ from octop.infra.apps.tools import APP_DELETE_TOOL_NAME, APP_TOOL_NAMES, build_a
 from octop.infra.db.migrate import run_migrations
 from octop.infra.db.pool import SqlitePool
 from octop.infra.db.repos.agents import AgentRepo
+from octop.infra.db.repos.app_access_codes import AppAccessCodeRepo
 from octop.infra.db.repos.apps import LightAppRepo
 from octop.infra.db.repos.audit import AuditRepo
 from octop.infra.db.repos.secrets import SecretRepo
@@ -82,6 +83,7 @@ def world(tmp_path: Path) -> World:
             workspaces=_Workspaces(agent_id, workspace),
             secret_repo=SecretRepo(db),
             audit_repo=audit_repo,
+            access_code_repo=AppAccessCodeRepo(db),
         ),
         agent_repo=agent_repo,
         agent_id=agent_id,
@@ -103,6 +105,9 @@ def test_build_app_tools_names(world: World) -> None:
     names = {tool.name for tool in build_app_tools(world.service)}
     assert names == {
         "app_inspect_file",
+        "app_propose_plan",
+        "app_get_plan",
+        "app_cancel_plan",
         "app_list",
         "app_list_bindings",
         "app_add_service",
@@ -587,11 +592,19 @@ async def test_shared_agent_members_can_create_and_use_their_own_apps(world: Wor
         )
         assert appended["row_id"].startswith("row_")
 
-    # The agent owner neither sees nor touches an app another member created.
+    # The agent owner can see and read (view) an app another member created,
+    # but cannot edit its data without an explicit collaborator grant.
     with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
-        assert json.loads(await list_tool.ainvoke({})) == {"apps": []}
-        denied = json.loads(await read_data.ainvoke({"app_id": app_id}))
-    assert "no 'view' permission" in denied["error"]
+        listed = json.loads(await list_tool.ainvoke({}))["apps"]
+        assert [item["app_id"] for item in listed] == [app_id]
+        read = json.loads(await read_data.ainvoke({"app_id": app_id}))
+        assert read["total"] == 1
+        denied = json.loads(
+            await append.ainvoke(
+                {"app_id": app_id, "row": {"title": "Owner edit", "status": "new"}}
+            )
+        )
+    assert "edit_data" in denied["error"]
 
 
 async def test_collaborator_can_append_but_not_change_structure(world: World) -> None:
@@ -825,3 +838,214 @@ async def test_app_set_table_visibility_and_share_warning(world: World) -> None:
         after = json.loads(await share.ainvoke({"app_id": app_id}))
 
     assert all("Private tables" not in block.get("text", "") for block in after)
+
+
+def _session_key(world: World, chat_type: str = "dm", subject: str = "wx-1") -> str:
+    return f"{world.agent_id}:weixin:{subject}:{chat_type}"
+
+
+async def test_app_share_link_returns_personal_link_for_bound_dm(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id}))
+
+    text = out[0]["text"]
+    assert "https://octop.test/login/app-access?code=" in text
+    assert out[1]["text"] == "single_use=true\nvalid_for_seconds=600"
+    code = text.split("?code=", 1)[1].strip()
+    preview = world.service.preview_access_link(code)
+    assert preview is not None
+    assert preview.app_id == app_id
+    audit_rows = world.audit_repo.query(action="light_app.access_link.create", target=app_id)
+    assert audit_rows
+    assert json.loads(audit_rows[0].payload or "{}")["origin"] == "app_share_link"
+
+
+async def test_app_share_link_group_gets_public_link(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world, "group"),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id}))
+
+    text = out[0]["text"]
+    assert "https://octop.test/p/" in text
+    assert "/login/app-access" not in text
+
+
+async def test_app_share_link_unverified_sender_gets_public_link(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id}))
+
+    assert "https://octop.test/p/" in out[0]["text"]
+
+
+async def test_app_share_link_auth_mode_requires_bound_dm(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world, "group"),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id, "mode": "auth"}))
+
+    assert "error" in out
+    assert "auth links require" in out["error"]
+
+
+async def test_app_share_link_auth_mode_from_dashboard_guides_im(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="dashboard/2",
+        session_key=_session_key(world),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id, "mode": "auth"}))
+
+    assert "error" in out
+    assert "dashboard" in out["error"]
+    assert "Do not create the link" in out["error"]
+
+
+async def test_app_share_link_bound_viewer_gets_personal_link(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+    world.service.set_shares(world.service.get(app_id), [("bob", "view")])
+    world.agent_repo.set_shared(world.agent_id, True)
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.bob_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id}))
+
+    assert "https://octop.test/login/app-access?code=" in out[0]["text"]
+
+
+async def test_app_share_link_rotate_keeps_public_link(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id, "rotate": True}))
+
+    assert "https://octop.test/p/" in out[0]["text"]
+    assert "/login/app-access" not in out[0]["text"]
+
+
+async def test_app_open_bound_dm_returns_personal_link(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    open_app = _tool_by_name(tools, "app_open")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+        octop_identity_verified=True,
+    ):
+        out = json.loads(await open_app.ainvoke({"app_id": app_id}))
+
+    assert "https://octop.test/login/app-access?code=" in out[0]["text"]
+    audit_rows = world.audit_repo.query(action="light_app.access_link.create", target=app_id)
+    assert audit_rows
+    assert json.loads(audit_rows[0].payload or "{}")["origin"] == "app_open"
+
+
+async def test_app_share_link_uses_resume_scope_when_configurable_lacks_channel(
+    world: World,
+) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test")
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+
+    # HITL resume: configurable only carries agent/user; the manager restores
+    # the IM channel through tool_scope.
+    with (
+        _configurable(agent_id=world.agent_id, user=str(world.alice_id)),
+        tool_scope(
+            world.agent_id,
+            world.alice_id,
+            source="weixin/ch1",
+            session_key=_session_key(world),
+            chat_type="dm",
+            identity_verified=True,
+        ),
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id, "mode": "auth"}))
+
+    assert "https://octop.test/login/app-access?code=" in out[0]["text"]

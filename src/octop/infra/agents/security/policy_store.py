@@ -8,7 +8,7 @@ from typing import Any
 
 from octop_harness.security.models import SecurityPolicy
 
-from octop.infra.agents.security.hitl_session import MANDATORY_HITL_TOOLS
+from octop.infra.agents.security.hitl_session import FORCED_HITL_TOOLS
 from octop.infra.db.repos.settings import SettingsRepo
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ class SecuritySettingsStore:
         policy = self.load()
         data = _with_mandatory_filesystem_rule(policy.to_dict())
         resolved = SecurityPolicy.from_dict(data).resolve_interrupt_on() or {}
-        missing = MANDATORY_HITL_TOOLS - resolved.keys()
+        missing = FORCED_HITL_TOOLS - resolved.keys()
         if missing:
             data["hitl"] = {
                 **data["hitl"],

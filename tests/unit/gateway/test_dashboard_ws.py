@@ -36,7 +36,7 @@ _STEER_PROTOCOL_TYPES = frozenset(
 
 
 def _stream_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop mid-turn steer protocol frames for legacy stream assertions."""
+    """Drop protocol frames and turn ids for legacy stream assertions."""
     out: list[dict[str, Any]] = []
     for frame in frames:
         ftype = frame.get("type")
@@ -44,7 +44,7 @@ def _stream_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         if ftype == "user" and isinstance(frame.get("meta"), dict) and frame["meta"].get("steer"):
             continue
-        out.append(frame)
+        out.append({key: value for key, value in frame.items() if key != "turn_id"})
     return out
 
 
@@ -240,10 +240,17 @@ async def test_ws_channel_streams_chunks() -> None:
     )
     await channel.handle_inbound(msg)
 
-    assert {"type": "token", "content": "hello", "thread_id": "thread-1"} in frames
-    assert {"type": "done", "thread_id": "thread-1"} in frames
+    stream = _stream_frames(frames)
+    assert {"type": "token", "content": "hello", "thread_id": "thread-1"} in stream
+    assert {"type": "done", "thread_id": "thread-1"} in stream
+    turn_id = frames[-1]["turn_id"]
     assert frames[-1]["type"] == "turn.ended"
     assert frames[-1]["thread_id"] == "thread-1"
+    assert all(
+        frame.get("turn_id") == turn_id
+        for frame in frames
+        if frame.get("type") in ("token", "done")
+    )
     assert hub.is_turn_active("thread-1") is False
 
 
@@ -861,7 +868,11 @@ async def test_ws_channel_preempts_at_tool_boundary_when_steer_pending() -> None
     types = [f["type"] for f in frames]
     assert "steer.drained" in types
     assert "turn.resumed" in types
-    assert {"type": "token", "content": "steered answer", "thread_id": "thread-1"} in frames
+    assert {
+        "type": "token",
+        "content": "steered answer",
+        "thread_id": "thread-1",
+    } in _stream_frames(frames)
     assert types[-1] == "turn.ended"
     assert hub.is_turn_active("thread-1") is False
 

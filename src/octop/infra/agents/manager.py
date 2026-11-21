@@ -65,6 +65,7 @@ from octop.infra.agents.settings.runtime_limits import (
     resolve_context_max_tokens as config_context_max_tokens,
 )
 from octop.infra.agents.tool_scope import tool_scope
+from octop.infra.auth.channel_binding import is_owner_verified
 from octop.infra.backend.docker_spec import (
     enrich_docker_backend_spec,
     inject_docker_global_environment,
@@ -1950,6 +1951,53 @@ class AgentManager:
             return {"result": result}
         return result
 
+    def _hitl_resume_context(
+        self,
+        thread_id: str,
+        *,
+        acting_user_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Restore the channel context lost when HITL resumes a fresh graph invocation."""
+        hitl_repo = getattr(self._repos, "hitl_repo", None)
+        if hitl_repo is None or not thread_id:
+            return {}
+        rows = hitl_repo.list_by_thread(thread_id)
+        if not rows:
+            return {}
+        pending = rows[0]
+        session = self._repos.session_repo.get(pending.session_key)
+        channel_type = (
+            session.channel_type
+            if session is not None
+            else str(pending.payload.get("channel_type") or "")
+        )
+        if not channel_type:
+            return {}
+        channel_id = session.channel_id if session is not None else None
+        chat_type = (session.channel_chat_type or session.chat_type) if session is not None else ""
+        source = f"{channel_type}/{channel_id}" if channel_id else channel_type
+        subject = session.channel_subject_id if session is not None else ""
+        agent_id = session.agent_id if session is not None else ""
+        agent_row = self._repos.agent_repo.get(agent_id) if agent_id else None
+        owner_user_id = agent_row.user_id if agent_row is not None else None
+        identity_verified = is_owner_verified(
+            identity_repo=self._repos.channel_identity_repo,
+            channel_type=channel_type,
+            subject_id=subject,
+            chat_type=chat_type,
+            owner_user_id=owner_user_id,
+        )
+        if acting_user_id is not None and acting_user_id != owner_user_id:
+            # A different user resumed the pause (e.g. an admin approving from
+            # the dashboard); the channel identity no longer describes them.
+            identity_verified = False
+        return {
+            "source": source,
+            "session_key": pending.session_key,
+            "chat_type": chat_type,
+            "identity_verified": identity_verified,
+        }
+
     async def resume_hitl(
         self,
         agent_id: str,
@@ -1962,10 +2010,12 @@ class AgentManager:
 
         ``user_id`` is the acting user who approved the paused call; the resume
         invocation carries no request ``configurable``, so tools read it from
-        :func:`tool_scope` instead.
+        :func:`tool_scope` instead. The pending approval's session restores the
+        IM source/chat type so channel-aware tools keep working after resume.
         """
         if self._harness_manager is None:
             raise self._unavailable_error(agent_id)
+        context = self._hitl_resume_context(thread_id, acting_user_id=user_id)
         async with (
             self._thread_execution_lock(agent_id, thread_id),
             self._track_invocation(agent_id),
@@ -1973,7 +2023,7 @@ class AgentManager:
             self._apply_pending_bootstrap_graph_refresh(agent_id)
             with (
                 hitl_thread_scope(thread_id),
-                tool_scope(agent_id, user_id),
+                tool_scope(agent_id, user_id, **context),
                 turn_model_scope(self._stream_model_label(agent_id, {}, thread_id)),
             ):
                 async for chunk in self._harness_manager.resume_hitl(
@@ -4288,15 +4338,44 @@ class AgentManager:
         if interrupt_on is not applied.interrupt_on:
             applied = replace(applied, interrupt_on=interrupt_on)
         if not team_host:
-            # Deleting an app destroys its data; keep approval mandatory even
-            # when the thread chose an allow-all HITL bypass.
-            applied = replace(
-                applied,
-                interrupt_on={
-                    **(applied.interrupt_on or {}),
-                    "app_delete": {"allowed_decisions": ["approve", "reject"]},
-                },
+            from octop.infra.apps.hitl_preflight import (  # noqa: PLC0415
+                approval_needed as _app_approval_needed,
             )
+
+            # Deleting an app destroys its data; keep approval mandatory even
+            # when the thread chose an allow-all HITL bypass. Setup tools and
+            # argument-conditional tools skip the card when the call is
+            # already known to fail or is owner-reversible, so a user does
+            # not pay for a pointless approval.
+            interrupt_on = dict(applied.interrupt_on or {})
+            ingress_repo = getattr(self._repos, "app_ingress_repo", None)
+            for tool_name in (
+                "app_add_service",
+                "app_import_rows",
+                "app_integration_test_ingress",
+                "app_integration_update_ingress",
+                "app_integration_update_webhook",
+                "app_set_table_visibility",
+            ):
+                entry = dict(
+                    interrupt_on.get(tool_name) or {"allowed_decisions": ["approve", "reject"]}
+                )
+                original_when = entry.get("when")
+
+                def _preflight_when(
+                    req: Any,
+                    *,
+                    _orig: Any = original_when,
+                    _repo: Any = ingress_repo,
+                ) -> bool:
+                    if _orig is not None and not _orig(req):
+                        return False
+                    return _app_approval_needed(req, ingress_repo=_repo)
+
+                entry["when"] = _preflight_when
+                interrupt_on[tool_name] = entry
+            interrupt_on["app_delete"] = {"allowed_decisions": ["approve", "reject"]}
+            applied = replace(applied, interrupt_on=interrupt_on)
         if applied.model_retry_enabled:
             factory = (
                 self._harness_manager.shared_factory if self._harness_manager is not None else None

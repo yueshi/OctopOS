@@ -95,6 +95,7 @@ from octop.infra.db.repos.app_access import (
     AppAccessRequestRow,
     is_unique_violation,
 )
+from octop.infra.db.repos.app_access_codes import AppAccessCodeRepo, AppAccessCodeRow
 from octop.infra.db.repos.app_bindings import (
     BINDING_PROVIDERS,
     BUILTIN_BINDING_ID,
@@ -112,6 +113,22 @@ from octop.infra.db.repos.app_schedules import (
 from octop.infra.db.repos.app_services import (
     LightAppServiceRepo,
     LightAppServiceRow,
+)
+from octop.infra.db.repos.app_setup_plans import (
+    CANCELLABLE_PLAN_STATUSES,
+    CONFIRMABLE_PLAN_STATUSES,
+    EXECUTABLE_PLAN_STATUSES,
+    PLAN_CANCELLED,
+    PLAN_CONFIRMED,
+    PLAN_DRY_RUN_FAILED,
+    PLAN_DRY_RUN_READY,
+    PLAN_EXPIRED,
+    PLAN_IMPORT_PARTIAL,
+    PLAN_IMPORTED,
+    PLAN_IMPORTING,
+    PLAN_SUPERSEDED,
+    AppSetupPlanRepo,
+    AppSetupPlanRow,
 )
 from octop.infra.db.repos.app_webhooks import LightAppWebhookRepo
 from octop.infra.db.repos.apps import (
@@ -462,6 +479,22 @@ class ImportResult:
     """Up to ``MAX_FAILED_ROWS`` rejected rows with their errors, for retry."""
 
 
+def import_result_payload(result: ImportResult) -> dict[str, Any]:
+    """Serializable summary stored on a setup plan and returned to the card."""
+    return {
+        "imported": result.imported,
+        "updated": result.updated,
+        "skipped": result.skipped,
+        "errors": list(result.errors),
+        "warnings": list(result.warnings),
+        "would_import": result.would_import,
+        "dry_run": result.dry_run,
+        "pii_columns": list(result.pii_columns),
+        "blocked_pii": list(result.blocked_pii),
+        "failed_rows": list(result.failed_rows),
+    }
+
+
 @dataclass(frozen=True)
 class BindingView:
     """A service binding as the dashboard and agent tools see it."""
@@ -525,6 +558,57 @@ def _safe_import_filename(filename: str) -> str:
 def _file_stem(filename: str) -> str:
     name = _safe_import_filename(filename)
     return name.rsplit(".", 1)[0].strip()[:100] or "工作表"
+
+
+def _plan_tables_from_payload(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Read the plan's table list, accepting the legacy single-table shape."""
+    tables = payload.get("tables")
+    if isinstance(tables, list) and tables:
+        return [dict(item) for item in tables if isinstance(item, Mapping)]
+    if payload.get("columns"):
+        return [dict(payload)]
+    return []
+
+
+def _plan_services_from_payload(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return []
+    return [dict(item) for item in services if isinstance(item, Mapping)]
+
+
+def _plan_capabilities_from_payload(payload: Mapping[str, Any]) -> list[str] | None:
+    capabilities = payload.get("capabilities")
+    if capabilities is None:
+        return None
+    if not isinstance(capabilities, list):
+        return None
+    return [str(item) for item in capabilities]
+
+
+def _aggregate_import_payloads(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Combine per-table dry-run/import payloads for the plan card summary."""
+
+    def collect(key: str) -> list[Any]:
+        out: list[Any] = []
+        for item in items:
+            value = item.get(key)
+            if isinstance(value, list):
+                out.extend(value)
+        return out
+
+    return {
+        "imported": sum(int(item.get("imported") or 0) for item in items),
+        "updated": sum(int(item.get("updated") or 0) for item in items),
+        "skipped": sum(int(item.get("skipped") or 0) for item in items),
+        "would_import": sum(int(item.get("would_import") or 0) for item in items),
+        "dry_run": all(bool(item.get("dry_run")) for item in items) if items else False,
+        "errors": collect("errors")[: MAX_IMPORT_ERRORS * max(1, len(items))],
+        "warnings": collect("warnings"),
+        "pii_columns": list(dict.fromkeys(str(value) for value in collect("pii_columns"))),
+        "blocked_pii": list(dict.fromkeys(str(value) for value in collect("blocked_pii"))),
+        "failed_rows": collect("failed_rows")[:MAX_FAILED_ROWS],
+    }
 
 
 def _select_sheet_report(report: Mapping[str, Any], sheet: str | None) -> dict[str, Any]:
@@ -985,6 +1069,7 @@ class AppService:
         secret_repo: SecretRepo | None = None,
         audit_repo: AuditRepo | None = None,
         access_repo: AppAccessRequestRepo | None = None,
+        access_code_repo: AppAccessCodeRepo | None = None,
         binding_repo: LightAppBindingRepo | None = None,
         service_repo: LightAppServiceRepo | None = None,
         connector_repo: ConnectorRepo | None = None,
@@ -994,6 +1079,7 @@ class AppService:
         ingress_repo: LightAppIngressRepo | None = None,
         external_source_repo: ExternalSourceRepo | None = None,
         external_subscription_repo: ExternalSubscriptionRepo | None = None,
+        setup_plan_repo: AppSetupPlanRepo | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._app_repo = app_repo
@@ -1004,6 +1090,7 @@ class AppService:
         self._secret_repo = secret_repo
         self._audit_repo = audit_repo
         self._access_repo = access_repo
+        self._access_code_repo = access_code_repo
         self._binding_repo = binding_repo
         self._service_repo = service_repo
         self._connector_repo = connector_repo
@@ -1013,6 +1100,7 @@ class AppService:
         self._ingress_repo = ingress_repo
         self._external_source_repo = external_source_repo
         self._external_subscription_repo = external_subscription_repo
+        self._setup_plan_repo = setup_plan_repo
         self._clock = clock or time.time
 
     # ----- lookup / ACL -----
@@ -1026,7 +1114,15 @@ class AppService:
     def permission_for(self, row: AppRecord, user_id: int, *, is_admin: bool) -> str | None:
         if is_admin or row.owner_user_id == user_id:
             return "edit_structure"
-        return self._app_repo.permission_for(row.app_id, user_id)
+        granted = self._app_repo.permission_for(row.app_id, user_id)
+        if granted is not None:
+            return granted
+        # An agent owner can read every app hosted in their agent, including
+        # apps another user created there. Explicit collaborator grants above
+        # keep edit access intact; this fallback is read-only.
+        if self.is_agent_owner(row.agent_id, user_id):
+            return "view"
+        return None
 
     def require(
         self,
@@ -1046,15 +1142,23 @@ class AppService:
         # shared. Direct access to a known app id still bypasses ACL through
         # ``permission_for``; only the catalogue is scoped.
         del is_admin
-        entries: list[tuple[LightAppRow, str]] = [
-            (row, "edit_structure") for row in self._app_repo.list_owned(user_id)
-        ]
+        entries: dict[str, tuple[LightAppRow, str]] = {
+            row.app_id: (row, "edit_structure") for row in self._app_repo.list_owned(user_id)
+        }
         for row in self._app_repo.list_shared(user_id):
             permission = self._app_repo.permission_for(row.app_id, user_id)
             if permission is not None:
-                entries.append((row, permission))
-        entries.sort(key=lambda item: item[0].updated_at, reverse=True)
-        return entries
+                entries[row.app_id] = (row, permission)
+        # The agent owner can read every app hosted in their agents, even when
+        # another user created it; explicit owned/shared grants win above.
+        for agent in self._agent_repo.list_by_user(user_id, include_disabled=False):
+            for row in self._app_repo.list_by_agent(agent.agent_id):
+                entries.setdefault(row.app_id, (row, "view"))
+        return sorted(
+            entries.values(),
+            key=lambda item: item[0].updated_at,
+            reverse=True,
+        )
 
     def view(
         self,
@@ -2120,7 +2224,12 @@ class AppService:
         description: str = "",
         columns: object,
         capabilities: Iterable[str] | None = None,
+        setup_plan_id: str | None = None,
     ) -> LightAppRow:
+        if setup_plan_id:
+            existing = self._app_repo.get_by_setup_plan_id(setup_plan_id)
+            if existing is not None:
+                return existing
         clean_name = validate_name(name)
         clean_description = validate_description(description)
         schema = parse_schema_payload(columns)
@@ -2145,6 +2254,7 @@ class AppService:
             description=clean_description,
             storage_version=2,
             capabilities_json=app_capabilities.dump(selected_capabilities),
+            setup_plan_id=setup_plan_id,
         )
         try:
             # v2 rows live in the control-plane DB. The workspace keeps a
@@ -3634,6 +3744,958 @@ class AppService:
             blocked_pii=list(dict.fromkeys(blocked_pii)),
             failed_rows=failed_rows[:MAX_FAILED_ROWS],
         )
+
+    # ----- setup plans -------------------------------------------------
+
+    def _plan_repo(self) -> AppSetupPlanRepo:
+        if self._setup_plan_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "setup plan repo is not configured")
+        return self._setup_plan_repo
+
+    def _require_setup_plan(
+        self,
+        plan_id: str,
+        user_id: int,
+    ) -> tuple[AppSetupPlanRow, bool]:
+        plan = self._plan_repo().get(plan_id)
+        if plan is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        is_admin = self.is_admin(user_id)
+        if not is_admin and plan.user_id != user_id:
+            raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
+        return plan, is_admin
+
+    def _plan_is_expired(self, plan: AppSetupPlanRow) -> bool:
+        return plan.expires_at is not None and plan.expires_at < int(self._clock())
+
+    def _audit_plan(
+        self,
+        action: str,
+        plan: AppSetupPlanRow,
+        *,
+        actor: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        if self._audit_repo is None:
+            return
+        self._audit_repo.write(
+            actor=actor,
+            action=action,
+            target=plan.plan_id,
+            payload=json.dumps(dict(payload or {}), ensure_ascii=False),
+        )
+
+    async def _expire_plan_if_needed(self, plan: AppSetupPlanRow) -> AppSetupPlanRow:
+        """Persist and audit expiry; remove an empty app left by a stale plan."""
+        if not self._plan_is_expired(plan):
+            return plan
+        if plan.status not in (
+            "draft",
+            PLAN_CONFIRMED,
+            PLAN_DRY_RUN_READY,
+            PLAN_DRY_RUN_FAILED,
+        ):
+            return plan
+        expired = self._plan_repo().transition(
+            plan.plan_id,
+            expected_status=plan.status,
+            status=PLAN_EXPIRED,
+            error="",
+        )
+        if expired is None:
+            return self._plan_repo().get(plan.plan_id) or plan
+        await self._rollback_plan_app(plan.plan_id)
+        self._audit_plan(
+            "miniapp.setup_plan.expire",
+            expired,
+            actor="_system",
+            payload={
+                "previous_status": plan.status,
+                "expires_at": plan.expires_at,
+            },
+        )
+        return expired
+
+    def _normalize_plan_tables(
+        self,
+        report: Mapping[str, Any],
+        tables: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Validate a multi-sheet plan and fill each table's detected header."""
+        if not tables:
+            raise _invalid(ErrorCode.APP_SCHEMA_INVALID, "a plan needs at least one table")
+        if len(tables) > MAX_TABLES_PER_APP:
+            raise _invalid(
+                ErrorCode.APP_LIMIT_EXCEEDED,
+                f"at most {MAX_TABLES_PER_APP} tables can be planned at once",
+            )
+        normalized: list[dict[str, Any]] = []
+        used: set[str] = set()
+        for index, raw in enumerate(tables):
+            if not isinstance(raw, Mapping):
+                raise _invalid(ErrorCode.APP_SCHEMA_INVALID, "each table must be an object")
+            key = (
+                MAIN_TABLE_KEY
+                if index == 0
+                else validate_table_key(str(raw.get("key") or f"table_{index + 1}"))
+            )
+            if key in used:
+                raise _invalid(
+                    ErrorCode.APP_SCHEMA_INVALID,
+                    f"duplicate table key: {key}",
+                )
+            used.add(key)
+            sheet_name = str(raw.get("sheet") or "").strip()
+            selected = _select_sheet_report(report, sheet_name or None)
+            header_row = raw.get("header_row")
+            if not isinstance(header_row, int) or header_row < 0:
+                detected = selected.get("header_row")
+                header_row = detected if isinstance(detected, int) and detected >= 0 else 0
+            schema = parse_schema_payload({"columns": list(raw.get("columns") or [])})
+            label = str(raw.get("label") or selected.get("name") or key)[:MAX_LABEL_LEN]
+            mapping = raw.get("mapping")
+            upsert_key = raw.get("upsert_key")
+            normalized.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "sheet": str(selected.get("name") or ""),
+                    "header_row": int(header_row),
+                    "columns": schema.to_dict()["columns"],
+                    "mapping": dict(mapping) if isinstance(mapping, Mapping) else {},
+                    "upsert_key": [str(item) for item in (upsert_key or [])]
+                    if isinstance(upsert_key, (list, tuple))
+                    else [],
+                    "include_pii": bool(raw.get("include_pii")),
+                }
+            )
+        return normalized
+
+    def _normalize_plan_services(
+        self,
+        services: Sequence[Mapping[str, Any]],
+        *,
+        owner_user_id: int,
+        is_admin: bool,
+    ) -> list[dict[str, Any]]:
+        """Preflight the setup manifest's services without creating anything.
+
+        Mirrors ``save_service`` validation: connector existence/ownership,
+        auto-provisionable public kinds, tool allowlists, URL prefixes, headers,
+        cache TTL and rate limits.
+        """
+        normalized: list[dict[str, Any]] = []
+        used_names: set[str] = set()
+        for raw in services:
+            if not isinstance(raw, Mapping):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "each service must be an object")
+            name = str(raw.get("name") or "").strip().lower()
+            if not SERVICE_NAME_RE.fullmatch(name) or name == BUILTIN_BINDING_ID:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "service name must be lowercase letters, digits, '-' or '_'",
+                )
+            if name in used_names:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"duplicate service name: {name!r}",
+                )
+            used_names.add(name)
+            provider = str(raw.get("provider") or "").strip().lower()
+            if provider not in SERVICE_PROVIDERS:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "service provider must be connector or external",
+                )
+            if provider == "connector" and not self._connector_repo:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "connectors are not configured on this server",
+                )
+            instance_id = str(raw.get("connector_instance_id") or "").strip()
+            instance_kind: str | None = None
+            if provider == "external" and not instance_id:
+                auto_kind = str(raw.get("connector_kind") or "http-extract").strip().lower()
+                entry = get_catalog_entry(auto_kind)
+                if entry is None or entry.auth_kind != "none" or entry.mcp_mode != "gateway":
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"connector {auto_kind!r} cannot be auto-provisioned; it needs credentials",
+                    )
+                instance_kind = auto_kind
+                if self._connector_repo is not None:
+                    existing = self._connector_repo.get_by_user_kind(owner_user_id, auto_kind)
+                    if existing is not None:
+                        instance_id = existing.instance_id
+            elif not instance_id:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "connector_instance_id is required for provider=connector",
+                )
+            else:
+                if self._connector_repo is None:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        "connectors are not configured on this server",
+                    )
+                instance = self._connector_repo.get(instance_id)
+                if instance is None:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"unknown connector: {instance_id!r}",
+                    )
+                instance_kind = instance.kind
+                if not (is_admin or instance.user_id == owner_user_id or instance.shared):
+                    raise _invalid(
+                        ErrorCode.APP_FORBIDDEN,
+                        "only the connector owner can bind it to this app",
+                    )
+            tools = [
+                str(item).strip() for item in (raw.get("allowed_tools") or []) if str(item).strip()
+            ]
+            if not tools:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "at least one read-only tool is required",
+                )
+            tools = list(dict.fromkeys(tools))
+            prefixes = list(
+                dict.fromkeys(
+                    str(item).strip().rstrip("/")
+                    for item in (raw.get("allowed_url_prefixes") or [])
+                    if str(item).strip()
+                )
+            )
+            if instance_kind == "douban" and not prefixes:
+                prefixes = list(COVER_URL_PREFIXES)
+            for prefix in prefixes:
+                if not prefix.startswith(("https://", "http://")):
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"invalid URL prefix: {prefix!r}",
+                    )
+            gateway_tools = self._gateway_tool_names(instance_kind) if instance_kind else set()
+            if gateway_tools:
+                unknown = set(tools) - gateway_tools
+                if unknown:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"connector {instance_kind!r} does not provide tools: "
+                        f"{', '.join(sorted(unknown))}",
+                    )
+            if instance_kind == "http-extract" and not prefixes:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "http-extract services require at least one URL prefix",
+                )
+            try:
+                headers = normalize_request_headers(
+                    raw.get("request_headers")
+                    if isinstance(raw.get("request_headers"), Mapping)
+                    else None
+                )
+                if headers and instance_kind != "http-extract":
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        "request_headers are only supported by http-extract services",
+                    )
+                ttl_raw = raw.get("cache_ttl_seconds", 300)
+                calls_raw = raw.get("max_calls_per_minute", 30)
+                ttl = int(str(ttl_raw)) if ttl_raw is not None else 300
+                max_calls = int(str(calls_raw)) if calls_raw is not None else 30
+            except (TypeError, ValueError) as exc:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, str(exc)) from None
+            if not 0 <= ttl <= 86_400:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "cache_ttl_seconds must be 0..86400",
+                )
+            if not 1 <= max_calls <= 600:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "max_calls_per_minute must be 1..600",
+                )
+            normalized.append(
+                {
+                    "name": name,
+                    "provider": provider,
+                    "connector_instance_id": instance_id,
+                    "connector_kind": instance_kind
+                    if provider == "external" and instance_kind
+                    else (str(raw.get("connector_kind") or "").strip() or None),
+                    "allowed_tools": tools,
+                    "allowed_url_prefixes": prefixes,
+                    "request_headers": headers,
+                    "cache_ttl_seconds": ttl,
+                    "max_calls_per_minute": max_calls,
+                    "enabled": bool(raw.get("enabled", True)),
+                }
+            )
+        return normalized
+
+    def _apply_plan_extras(
+        self,
+        app: LightAppRow,
+        payload: Mapping[str, Any],
+        *,
+        user_id: int,
+    ) -> tuple[LightAppRow, dict[str, str], list[str]]:
+        """Apply the confirmed service/capability manifest after the import."""
+        steps: dict[str, str] = {}
+        errors: list[str] = []
+        capabilities = _plan_capabilities_from_payload(payload)
+        if capabilities is not None:
+            try:
+                app = self.set_capabilities(
+                    app,
+                    app_capabilities.validate_agent_settable(capabilities),
+                )
+                steps["capabilities"] = "ok"
+            except Exception as exc:
+                steps["capabilities"] = str(exc)
+                errors.append(str(exc))
+        for service in _plan_services_from_payload(payload):
+            name = str(service.get("name") or "")
+            try:
+                self.save_service(
+                    app,
+                    name=name,
+                    provider=str(service.get("provider") or ""),
+                    connector_instance_id=str(service.get("connector_instance_id") or ""),
+                    connector_kind=service.get("connector_kind"),
+                    allowed_tools=list(service.get("allowed_tools") or []),
+                    allowed_url_prefixes=list(service.get("allowed_url_prefixes") or []),
+                    request_headers=service.get("request_headers") or {},
+                    cache_ttl_seconds=int(service.get("cache_ttl_seconds") or 300),
+                    max_calls_per_minute=int(service.get("max_calls_per_minute") or 30),
+                    public_live=False,
+                    enabled=bool(service.get("enabled", True)),
+                    actor_user_id=user_id,
+                    is_admin=self.is_admin(user_id),
+                )
+                steps[f"service:{name}"] = "ok"
+            except Exception as exc:
+                steps[f"service:{name}"] = str(exc)
+                errors.append(f"{name}: {exc}")
+        return app, steps, errors
+
+    async def _plan_source_data(self, plan: AppSetupPlanRow) -> bytes:
+        """Read the plan's source and reject a file that changed after inspection."""
+        data = await self.read_workspace_file(plan.agent_id, plan.source_path)
+        if plan.source_hash and hashlib.sha256(data).hexdigest() != plan.source_hash:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the source file changed after inspection; re-propose the plan",
+            )
+        return data
+
+    async def propose_setup_plan(
+        self,
+        *,
+        agent_id: str,
+        user_id: int,
+        thread_id: str | None,
+        path: str,
+        name: str,
+        columns: Sequence[Mapping[str, Any]] | None = None,
+        sheet: str | None = None,
+        header_row: int | None = None,
+        mapping: Mapping[str, str] | None = None,
+        upsert_key: Sequence[str] | None = None,
+        include_pii: bool = False,
+        tables: Sequence[Mapping[str, Any]] | None = None,
+        services: Sequence[Mapping[str, Any]] | None = None,
+        capabilities: Sequence[str] | None = None,
+        expires_in: int = 24 * 3600,
+    ) -> AppSetupPlanRow:
+        """Create (or refresh) a draft setup plan; no side effects beyond the row."""
+        if not (self.is_admin(user_id) or self.is_agent_accessible(agent_id, user_id)):
+            raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
+        clean_name = validate_name(name)
+        clean_path = _safe_import_path(path)
+        data = await self.read_workspace_file(agent_id, clean_path)
+        report = inspect_file(clean_path, data)
+        if tables is not None:
+            requested = list(tables)
+        else:
+            if not columns:
+                raise _invalid(
+                    ErrorCode.APP_SCHEMA_INVALID,
+                    "provide columns for one table, or a tables list",
+                )
+            requested = [
+                {
+                    "key": MAIN_TABLE_KEY,
+                    "label": sheet or "",
+                    "sheet": sheet,
+                    "header_row": header_row,
+                    "columns": list(columns),
+                    "mapping": mapping,
+                    "upsert_key": upsert_key,
+                    "include_pii": include_pii,
+                }
+            ]
+        normalized = self._normalize_plan_tables(report, requested)
+        clean_services = self._normalize_plan_services(
+            list(services or []),
+            owner_user_id=user_id,
+            is_admin=self.is_admin(user_id),
+        )
+        clean_capabilities = (
+            list(app_capabilities.validate_agent_settable(capabilities))
+            if capabilities is not None
+            else None
+        )
+        table = {
+            "tables": normalized,
+            "services": clean_services,
+            "capabilities": clean_capabilities,
+        }
+        source_hash = hashlib.sha256(data).hexdigest()
+        expires_at = int(self._clock()) + max(60, int(expires_in))
+        repo = self._plan_repo()
+        if thread_id:
+            existing = repo.get_active_for_thread(thread_id)
+            if existing is not None:
+                if existing.user_id != user_id or existing.agent_id != agent_id:
+                    raise OctopError.localized(ErrorCode.APP_CONFLICT)
+                if existing.status != "draft":
+                    raise OctopError(
+                        ErrorCode.APP_CONFLICT,
+                        "a setup plan is already in progress; confirm or cancel it first",
+                    )
+                refreshed = repo.update_draft(
+                    existing.plan_id,
+                    expected_revision=existing.revision,
+                    source_path=clean_path,
+                    source_hash=source_hash,
+                    report=report,
+                    table=table,
+                    name=clean_name,
+                    expires_at=expires_at,
+                )
+                if refreshed is None:
+                    raise OctopError(
+                        ErrorCode.APP_CONFLICT,
+                        "the setup plan changed; refresh and try again",
+                    )
+                self._audit_plan(
+                    "miniapp.setup_plan.propose",
+                    refreshed,
+                    actor=f"user:{user_id}",
+                    payload={
+                        "agent_id": agent_id,
+                        "thread_id": thread_id,
+                        "source": clean_path,
+                        "revision": refreshed.revision,
+                        "tables": [item["key"] for item in normalized],
+                        "services": [item["name"] for item in clean_services],
+                        "capabilities": clean_capabilities,
+                        "refreshed": True,
+                    },
+                )
+                return refreshed
+        created = repo.create(
+            plan_id=f"plan_{new_ulid()}",
+            thread_id=thread_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            source_path=clean_path,
+            source_hash=source_hash,
+            report=report,
+            table=table,
+            name=clean_name,
+            expires_at=expires_at,
+        )
+        self._audit_plan(
+            "miniapp.setup_plan.propose",
+            created,
+            actor=f"user:{user_id}",
+            payload={
+                "agent_id": agent_id,
+                "thread_id": thread_id,
+                "source": clean_path,
+                "revision": created.revision,
+                "tables": [item["key"] for item in normalized],
+                "services": [item["name"] for item in clean_services],
+                "capabilities": clean_capabilities,
+                "refreshed": False,
+            },
+        )
+        return created
+
+    async def get_setup_plan(self, plan_id: str, user_id: int) -> AppSetupPlanRow:
+        plan, _ = self._require_setup_plan(plan_id, user_id)
+        return await self._expire_plan_if_needed(plan)
+
+    def active_setup_plan(self, thread_id: str | None) -> AppSetupPlanRow | None:
+        if not thread_id:
+            return None
+        return self._plan_repo().get_active_for_thread(thread_id)
+
+    async def confirm_setup_plan(
+        self,
+        plan_id: str,
+        *,
+        user_id: int,
+        revision: int,
+        name: str,
+        columns: Sequence[Mapping[str, Any]] | None = None,
+        include_pii: bool | None = None,
+        tables: Sequence[Mapping[str, Any]] | None = None,
+        services: Sequence[Mapping[str, Any]] | None = None,
+        capabilities: Sequence[str] | None = None,
+    ) -> AppSetupPlanRow:
+        """Freeze the confirmed schema, create the empty app and dry-run it."""
+        plan, _ = self._require_setup_plan(plan_id, user_id)
+        plan = await self._expire_plan_if_needed(plan)
+        # A crash between the CAS and the dry-run leaves the plan in
+        # ``confirmed``. After a short lease, allow the user to retry the same
+        # revision; the app is reused and no data has been written yet.
+        stale_confirmed = (
+            plan.status == PLAN_CONFIRMED and int(self._clock()) - plan.updated_at > 300
+        )
+        if plan.status not in CONFIRMABLE_PLAN_STATUSES and not stale_confirmed:
+            raise OctopError.localized(ErrorCode.APP_CONFLICT)
+        if plan.revision != revision:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the setup plan changed; refresh and confirm the latest revision",
+            )
+        if self._plan_is_expired(plan):
+            raise OctopError(ErrorCode.APP_CONFLICT, "the setup plan has expired")
+        source_data = await self._plan_source_data(plan)
+        if stale_confirmed:
+            # The app/schema from the interrupted attempt is authoritative.
+            clean_name = validate_name(plan.name)
+            normalized = _plan_tables_from_payload(plan.table)
+            if not normalized:
+                raise _invalid(ErrorCode.APP_SCHEMA_INVALID, "the plan has no tables")
+        else:
+            clean_name = validate_name(name)
+            if tables is not None:
+                requested = [dict(item) for item in tables]
+            else:
+                if not columns:
+                    raise _invalid(
+                        ErrorCode.APP_SCHEMA_INVALID,
+                        "provide columns for one table, or a tables list",
+                    )
+                base_tables = _plan_tables_from_payload(plan.table)
+                base = base_tables[0] if base_tables else {"key": MAIN_TABLE_KEY}
+                requested = [{**base, "columns": list(columns)}]
+                if include_pii is not None:
+                    requested[0]["include_pii"] = bool(include_pii)
+            normalized = self._normalize_plan_tables(plan.report, requested)
+        if stale_confirmed:
+            extras = {
+                key: plan.table[key] for key in ("services", "capabilities") if key in plan.table
+            }
+        else:
+            extras = {}
+            if services is not None:
+                extras["services"] = self._normalize_plan_services(
+                    list(services),
+                    owner_user_id=plan.user_id,
+                    is_admin=self.is_admin(user_id),
+                )
+            elif "services" in plan.table:
+                extras["services"] = plan.table["services"]
+            if capabilities is not None:
+                extras["capabilities"] = list(
+                    app_capabilities.validate_agent_settable(capabilities)
+                )
+            elif "capabilities" in plan.table:
+                extras["capabilities"] = plan.table["capabilities"]
+        table = {"tables": normalized, **extras}
+        main_table = normalized[0]
+        next_revision = plan.revision + 1 if plan.status == PLAN_DRY_RUN_FAILED else plan.revision
+        confirmed = self._plan_repo().transition(
+            plan_id,
+            expected_status=plan.status,
+            status=PLAN_CONFIRMED,
+            expected_revision=plan.revision,
+            name=clean_name,
+            table_json=table,
+            revision=next_revision,
+            dry_run_json={},
+            result_json={},
+            error="",
+            confirmed_at=int(self._clock()),
+        )
+        if confirmed is None:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the setup plan changed; refresh and confirm again",
+            )
+        try:
+            app = self._app_repo.get_by_setup_plan_id(plan_id)
+            new_app = app is None
+            if app is None:
+                app = await self.create(
+                    agent_id=confirmed.agent_id,
+                    owner_user_id=confirmed.user_id,
+                    name=clean_name,
+                    description="",
+                    columns={"columns": main_table["columns"]},
+                    setup_plan_id=plan_id,
+                )
+            if confirmed.app_id != app.app_id:
+                linked = self._plan_repo().transition(
+                    plan_id,
+                    expected_status=PLAN_CONFIRMED,
+                    status=PLAN_CONFIRMED,
+                    app_id=app.app_id,
+                )
+                if linked is None:
+                    await self._rollback_plan_app(plan_id)
+                    raise OctopError(
+                        ErrorCode.APP_CONFLICT,
+                        "the setup plan changed while creating the app; refresh",
+                    )
+            if new_app:
+                for item in normalized[1:]:
+                    await self.create_table(
+                        app,
+                        table_key=item["key"],
+                        label=item["label"],
+                        columns={"columns": item["columns"]},
+                    )
+            dry_results: dict[str, dict[str, Any]] = {}
+            for item in normalized:
+                result = await self.import_from_file(
+                    app,
+                    path=confirmed.source_path,
+                    data=source_data,
+                    table=item["key"],
+                    sheet=str(item.get("sheet") or "") or None,
+                    header_row=item.get("header_row"),
+                    mapping=item.get("mapping") or None,
+                    dry_run=True,
+                    upsert_key=item.get("upsert_key") or None,
+                    include_pii=bool(item.get("include_pii")),
+                    created_by=confirmed.user_id,
+                    record_history=False,
+                )
+                dry_results[item["key"]] = import_result_payload(result)
+        except Exception as exc:
+            await self._rollback_plan_app(plan_id)
+            failed = self._plan_repo().transition(
+                plan_id,
+                expected_status=PLAN_CONFIRMED,
+                status=PLAN_DRY_RUN_FAILED,
+                app_id=None,
+                error=str(exc),
+            )
+            if failed is not None:
+                self._audit_plan(
+                    "miniapp.setup_plan.confirm",
+                    failed,
+                    actor=f"user:{user_id}",
+                    payload={"status": failed.status, "error": failed.error},
+                )
+                return failed
+            raise
+        dry_summary = _aggregate_import_payloads(list(dry_results.values()))
+        failed_tables = [
+            key
+            for key, payload in dry_results.items()
+            if payload.get("errors") and int(payload.get("would_import") or 0) == 0
+        ]
+        if failed_tables:
+            await self._rollback_plan_app(plan_id)
+            failed = self._plan_repo().transition(
+                plan_id,
+                expected_status=PLAN_CONFIRMED,
+                status=PLAN_DRY_RUN_FAILED,
+                app_id=None,
+                error="; ".join(dry_summary["errors"][:MAX_IMPORT_ERRORS]),
+            )
+            if failed is not None:
+                self._audit_plan(
+                    "miniapp.setup_plan.confirm",
+                    failed,
+                    actor=f"user:{user_id}",
+                    payload={"status": failed.status, "error": failed.error},
+                )
+                return failed
+            raise OctopError(ErrorCode.APP_ROW_INVALID, "dry run found no importable rows")
+        ready = self._plan_repo().transition(
+            plan_id,
+            expected_status=PLAN_CONFIRMED,
+            status=PLAN_DRY_RUN_READY,
+            dry_run_json={**dry_summary, "tables": dry_results},
+        )
+        if ready is None:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the setup plan changed while running the dry run; refresh",
+            )
+        self._audit_plan(
+            "miniapp.setup_plan.confirm",
+            ready,
+            actor=f"user:{user_id}",
+            payload={
+                "status": ready.status,
+                "revision": ready.revision,
+                "app_id": ready.app_id,
+                "tables": list(dry_results),
+                "services": [item.get("name") for item in _plan_services_from_payload(ready.table)],
+                "capabilities": _plan_capabilities_from_payload(ready.table),
+                "would_import": dry_summary["would_import"],
+                "errors": dry_summary["errors"][:5],
+            },
+        )
+        return ready
+
+    async def execute_setup_plan(
+        self,
+        plan_id: str,
+        *,
+        user_id: int,
+        revision: int,
+    ) -> AppSetupPlanRow:
+        """Run the real import once for an approved, dry-run-ready plan."""
+        plan, _ = self._require_setup_plan(plan_id, user_id)
+        plan = await self._expire_plan_if_needed(plan)
+        if plan.status not in EXECUTABLE_PLAN_STATUSES:
+            raise OctopError.localized(ErrorCode.APP_CONFLICT)
+        if plan.revision != revision:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the setup plan changed; refresh before importing",
+            )
+        if self._plan_is_expired(plan):
+            raise OctopError(ErrorCode.APP_CONFLICT, "the setup plan has expired")
+        if not plan.app_id:
+            raise OctopError(ErrorCode.APP_CONFLICT, "the setup plan has no app")
+        app = self._app_repo.get(plan.app_id)
+        if app is None:
+            raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        source_data = await self._plan_source_data(plan)
+        importing = self._plan_repo().transition(
+            plan_id,
+            expected_status=plan.status,
+            status=PLAN_IMPORTING,
+            expected_revision=plan.revision,
+            error="",
+        )
+        if importing is None:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the setup plan is already being imported; refresh",
+            )
+        tables = _plan_tables_from_payload(importing.table)
+        if not tables:
+            failed = self._plan_repo().transition(
+                plan_id,
+                expected_status=PLAN_IMPORTING,
+                status=PLAN_DRY_RUN_FAILED,
+                error="the plan has no tables",
+            )
+            if failed is not None:
+                self._audit_plan(
+                    "miniapp.setup_plan.execute",
+                    failed,
+                    actor=f"user:{user_id}",
+                    payload={"status": failed.status, "error": failed.error},
+                )
+            raise OctopError(ErrorCode.APP_SCHEMA_INVALID, "the plan has no tables")
+        results: dict[str, dict[str, Any]] = {}
+        try:
+            for item in tables:
+                result = await self.import_from_file(
+                    app,
+                    path=importing.source_path,
+                    data=source_data,
+                    table=item["key"],
+                    sheet=str(item.get("sheet") or "") or None,
+                    header_row=item.get("header_row"),
+                    mapping=item.get("mapping") or None,
+                    dry_run=False,
+                    upsert_key=item.get("upsert_key") or None,
+                    include_pii=bool(item.get("include_pii")),
+                    created_by=importing.user_id,
+                    idempotency_source=(f"plan:{plan_id}:r{importing.revision}:{item['key']}"),
+                )
+                results[item["key"]] = import_result_payload(result)
+        except Exception as exc:
+            failed = self._plan_repo().transition(
+                plan_id,
+                expected_status=PLAN_IMPORTING,
+                status=PLAN_DRY_RUN_READY,
+                error=str(exc),
+            )
+            if failed is not None:
+                self._audit_plan(
+                    "miniapp.setup_plan.execute",
+                    failed,
+                    actor=f"user:{user_id}",
+                    payload={"status": failed.status, "error": failed.error},
+                )
+            raise
+        app, steps, extra_errors = self._apply_plan_extras(
+            app,
+            importing.table,
+            user_id=user_id,
+        )
+        summary = _aggregate_import_payloads(list(results.values()))
+        summary["errors"].extend(extra_errors)
+        status = PLAN_IMPORT_PARTIAL if summary["errors"] else PLAN_IMPORTED
+        finished = self._plan_repo().transition(
+            plan_id,
+            expected_status=PLAN_IMPORTING,
+            status=status,
+            result_json={**summary, "tables": results, "steps": steps},
+            executed_at=int(self._clock()),
+        )
+        if finished is None:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the setup plan changed while importing; refresh",
+            )
+        self._audit_plan(
+            "miniapp.setup_plan.execute",
+            finished,
+            actor=f"user:{user_id}",
+            payload={
+                "status": finished.status,
+                "revision": finished.revision,
+                "app_id": finished.app_id,
+                "tables": list(results),
+                "services": [
+                    item.get("name") for item in _plan_services_from_payload(finished.table)
+                ],
+                "capabilities": _plan_capabilities_from_payload(finished.table),
+                "imported": summary["imported"],
+                "errors": summary["errors"][:5],
+                "steps": steps,
+            },
+        )
+        try:
+            latest = self._app_repo.get(app.app_id) or app
+            if latest.html_bytes == 0:
+                views: list[dict[str, Any]] = []
+                for item in tables:
+                    selected = _select_sheet_report(importing.report, item.get("sheet") or None)
+                    schema = await self.read_schema(app, item["key"])
+                    spec = suggest_view(
+                        selected,
+                        schema,
+                        view="dashboard",
+                        title=importing.name,
+                    )
+                    views.append(
+                        {
+                            "key": item["key"],
+                            "label": item["label"],
+                            "schema": schema,
+                            "spec": spec,
+                        }
+                    )
+                if len(views) == 1:
+                    html = render_view_html(
+                        views[0]["schema"],
+                        views[0]["spec"],
+                        title=importing.name,
+                        description="",
+                    )
+                else:
+                    html = render_multi_html(
+                        views,
+                        title=importing.name,
+                        description="",
+                    )
+                await self.write_html(app, html)
+        except Exception:
+            # The rows are already imported; a deterministic view is a bonus,
+            # and the agent can still write a custom UI with app_write_html.
+            logger.warning(
+                "failed to render setup plan view for %s",
+                plan_id,
+                exc_info=True,
+            )
+        return finished
+
+    async def supersede_setup_plan(
+        self,
+        plan_id: str,
+        *,
+        reason: str,
+        app_id: str | None = None,
+        actor_user_id: int | None = None,
+    ) -> AppSetupPlanRow | None:
+        """Close a still-active plan when another app creation wins the thread."""
+        plan = self._plan_repo().get(plan_id)
+        if plan is None:
+            return None
+        if plan.status not in (
+            "draft",
+            PLAN_CONFIRMED,
+            PLAN_DRY_RUN_READY,
+            PLAN_DRY_RUN_FAILED,
+        ):
+            return plan
+        superseded = self._plan_repo().transition(
+            plan_id,
+            expected_status=plan.status,
+            status=PLAN_SUPERSEDED,
+            app_id=None,
+            error="",
+        )
+        if superseded is None:
+            return self._plan_repo().get(plan_id)
+        await self._rollback_plan_app(plan_id)
+        self._audit_plan(
+            "miniapp.setup_plan.supersede",
+            superseded,
+            actor=f"user:{actor_user_id}" if actor_user_id is not None else "_system",
+            payload={
+                "previous_status": plan.status,
+                "reason": reason,
+                "new_app_id": app_id,
+            },
+        )
+        return superseded
+
+    async def cancel_setup_plan(self, plan_id: str, *, user_id: int) -> AppSetupPlanRow:
+        plan, _ = self._require_setup_plan(plan_id, user_id)
+        if plan.status not in CANCELLABLE_PLAN_STATUSES:
+            raise OctopError.localized(ErrorCode.APP_CONFLICT)
+        app = self._app_repo.get_by_setup_plan_id(plan_id)
+        if app is not None and app.row_count > 0:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                "the plan has already imported data; delete the app explicitly instead",
+            )
+        cancelled = self._plan_repo().transition(
+            plan_id,
+            expected_status=plan.status,
+            status=PLAN_CANCELLED,
+            app_id=None,
+        )
+        if cancelled is None:
+            raise OctopError(ErrorCode.APP_CONFLICT, "the setup plan changed; refresh")
+        await self._rollback_plan_app(plan_id)
+        self._audit_plan(
+            "miniapp.setup_plan.cancel",
+            cancelled,
+            actor=f"user:{user_id}",
+            payload={"previous_status": plan.status},
+        )
+        return cancelled
+
+    async def _rollback_plan_app(self, plan_id: str) -> None:
+        """Delete the empty app created by a failed/cancelled plan."""
+        app = self._app_repo.get_by_setup_plan_id(plan_id)
+        if app is None:
+            return
+        if app.row_count > 0:
+            return
+        try:
+            await self.delete(app)
+        except Exception:
+            logger.warning("failed to roll back setup plan app %s", app.app_id, exc_info=True)
 
     async def read_workspace_file(self, agent_id: str, path: str) -> bytes:
         """Read a workspace file (a path outside the app's own directory)."""
@@ -5964,6 +7026,91 @@ class AppService:
         if publication.expires_at is not None and publication.expires_at <= int(time.time()):
             return None
         return self._app_repo.get(publication.app_id)
+
+    # ----- one-time authenticated links -----
+
+    ACCESS_LINK_TTL_SECONDS = 600
+    _ACCESS_LINK_CLEANUP_SECONDS = 86400
+
+    @staticmethod
+    def _hash_access_code(code: str) -> str:
+        return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+    def create_access_link(
+        self,
+        row: AppRecord,
+        *,
+        user_id: int,
+        channel_type: str = "",
+        channel_subject_id: str = "",
+        ttl_seconds: int = ACCESS_LINK_TTL_SECONDS,
+        origin: str = "",
+    ) -> tuple[str, int]:
+        """Create a one-time personal sign-in code for this app; returns it once.
+
+        ``origin`` records who asked for the code (``app_share_link`` for the
+        agent tool). Direct service/script calls leave it empty and are flagged
+        in the audit trail.
+        """
+        if self._access_code_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "access links are not configured")
+        permission = self.permission_for(row, user_id, is_admin=self.is_admin(user_id))
+        if permission is None:
+            raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
+        token = secrets.token_urlsafe(32)
+        now = int(self._clock())
+        expires_at = now + max(60, min(int(ttl_seconds), self._ACCESS_LINK_CLEANUP_SECONDS))
+        origin_value = origin.strip() or "unknown"
+        if origin_value not in {"app_share_link", "app_open"}:
+            logger.warning(
+                "access link created outside MiniApp tools app=%s user=%s origin=%s",
+                row.app_id,
+                user_id,
+                origin_value,
+            )
+        self._access_code_repo.delete_expired(before=now - self._ACCESS_LINK_CLEANUP_SECONDS)
+        self._access_code_repo.create(
+            code_hash=self._hash_access_code(token),
+            app_id=row.app_id,
+            user_id=user_id,
+            permission=permission,
+            channel_type=channel_type.strip(),
+            channel_subject_id=channel_subject_id.strip(),
+            expires_at=expires_at,
+        )
+        self._audit_access(
+            actor=f"user:{user_id}",
+            action="light_app.access_link.create",
+            target=row.app_id,
+            payload={
+                "permission": permission,
+                "channel_type": channel_type.strip(),
+                "expires_at": expires_at,
+                "origin": origin_value,
+            },
+        )
+        return token, expires_at
+
+    def preview_access_link(self, code: str) -> AppAccessCodeRow | None:
+        """Read a live access code without consuming it."""
+        repo = self._access_code_repo
+        clean = code.strip()
+        if repo is None or not clean:
+            return None
+        row = repo.get_by_hash(self._hash_access_code(clean))
+        if row is None or row.consumed_at is not None:
+            return None
+        if row.expires_at <= int(self._clock()):
+            return None
+        return row
+
+    def consume_access_link(self, code: str) -> AppAccessCodeRow | None:
+        """Consume a one-time access code atomically."""
+        repo = self._access_code_repo
+        clean = code.strip()
+        if repo is None or not clean:
+            return None
+        return repo.consume(self._hash_access_code(clean), now=int(self._clock()))
 
     # ----- service bindings -----
 

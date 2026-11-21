@@ -1053,6 +1053,154 @@ def _tool_runner(server: OctopServer) -> GatewayToolRunner:
     )
 
 
+def _setup_plan_out(
+    plan: Any,
+    *,
+    include_report: bool = False,
+    audit: list[SetupPlanAuditOut] | None = None,
+) -> SetupPlanOut:
+    table = plan.table if isinstance(plan.table, dict) else {}
+    raw_tables = table.get("tables")
+    if not isinstance(raw_tables, list) or not raw_tables:
+        raw_tables = [table] if table.get("columns") else []
+    raw_services = table.get("services")
+    services = (
+        [SetupPlanServiceOut(**item) for item in raw_services if isinstance(item, dict)]
+        if isinstance(raw_services, list)
+        else []
+    )
+    raw_capabilities = table.get("capabilities")
+    capabilities = (
+        [str(item) for item in raw_capabilities] if isinstance(raw_capabilities, list) else None
+    )
+    out_tables = [
+        SetupPlanTableOut(
+            key=str(item.get("key") or ""),
+            label=str(item.get("label") or ""),
+            sheet=str(item.get("sheet") or ""),
+            header_row=int(item.get("header_row") or 0),
+            columns=[
+                AppColumn(**column)
+                for column in (item.get("columns") or [])
+                if isinstance(column, dict)
+            ],
+            mapping={str(key): str(value) for key, value in (item.get("mapping") or {}).items()}
+            if isinstance(item.get("mapping"), dict)
+            else {},
+            upsert_key=[str(value) for value in (item.get("upsert_key") or [])],
+            include_pii=bool(item.get("include_pii")),
+        )
+        for item in raw_tables
+        if isinstance(item, dict)
+    ]
+    main = out_tables[0] if out_tables else None
+    columns = main.columns if main is not None else []
+    expired = plan.expires_at is not None and plan.expires_at < int(time.time())
+    status = (
+        "expired"
+        if expired and plan.status in ("draft", "confirmed", "dry_run_ready", "dry_run_failed")
+        else plan.status
+    )
+    stale_confirmed = plan.status == "confirmed" and plan.updated_at < int(time.time()) - 300
+    if status in ("draft", "dry_run_failed") or stale_confirmed:
+        actions = ["confirm", "cancel"]
+    elif status == "dry_run_ready":
+        actions = ["execute", "cancel"]
+    elif status == "import_partial":
+        actions = ["execute"]
+    else:
+        actions = []
+    return SetupPlanOut(
+        plan_id=plan.plan_id,
+        status=status,
+        revision=plan.revision,
+        name=plan.name,
+        file=plan.source_path,
+        sheet=main.sheet if main is not None else "",
+        header_row=main.header_row if main is not None else 0,
+        columns=columns,
+        include_pii=main.include_pii if main is not None else False,
+        tables=out_tables,
+        services=services,
+        capabilities=capabilities,
+        allowed_capabilities=sorted(app_capabilities.AGENT_SETTABLE_CAPABILITIES),
+        app_id=plan.app_id,
+        dry_run=plan.dry_run,
+        result=plan.result,
+        error=plan.error,
+        expires_at=plan.expires_at,
+        report=plan.report if include_report else None,
+        allowed_actions=actions,
+        audit=audit or [],
+    )
+
+
+def _setup_plan_summary(plan: Any) -> SetupPlanSummaryOut:
+    table = plan.table if isinstance(plan.table, dict) else {}
+    raw_tables = table.get("tables")
+    if not isinstance(raw_tables, list) or not raw_tables:
+        raw_tables = [table] if table.get("columns") else []
+    raw_services = table.get("services")
+    services = raw_services if isinstance(raw_services, list) else []
+    raw_capabilities = table.get("capabilities")
+    capabilities = (
+        [str(item) for item in raw_capabilities] if isinstance(raw_capabilities, list) else None
+    )
+    dry = plan.dry_run if isinstance(plan.dry_run, dict) else {}
+    result = plan.result if isinstance(plan.result, dict) else {}
+    errors = [
+        *[str(item) for item in (dry.get("errors") or [])[:5]],
+        *[str(item) for item in (result.get("errors") or [])[:5]],
+    ]
+    return SetupPlanSummaryOut(
+        plan_id=plan.plan_id,
+        status=plan.status,
+        name=plan.name,
+        user_id=plan.user_id,
+        agent_id=plan.agent_id,
+        thread_id=plan.thread_id,
+        app_id=plan.app_id,
+        file=plan.source_path,
+        table_count=len([item for item in raw_tables if isinstance(item, dict)]),
+        service_count=len([item for item in services if isinstance(item, dict)]),
+        capabilities=capabilities,
+        created_at=plan.created_at,
+        confirmed_at=plan.confirmed_at,
+        executed_at=plan.executed_at,
+        expires_at=plan.expires_at,
+        error=plan.error,
+        would_import=int(dry.get("would_import") or 0),
+        imported=int(result.get("imported") or 0),
+        updated=int(result.get("updated") or 0),
+        skipped=int(result.get("skipped") or 0),
+        errors=errors,
+    )
+
+
+def _setup_plan_audit(server: OctopServer, plan_id: str) -> list[SetupPlanAuditOut]:
+    if server.services is None:
+        return []
+    rows = server.services.audit_repo.query(target=plan_id, limit=200)
+    events: list[SetupPlanAuditOut] = []
+    for row in reversed(rows):
+        payload: dict[str, Any] | None = None
+        if row.payload:
+            try:
+                parsed = json.loads(row.payload)
+                payload = parsed if isinstance(parsed, dict) else {"value": parsed}
+            except ValueError:
+                payload = {"raw": row.payload}
+        events.append(
+            SetupPlanAuditOut(
+                ts=row.ts,
+                actor=row.actor,
+                action=row.action,
+                payload=payload,
+            )
+        )
+    return events
+
+
 def _service_with_runner(server: OctopServer) -> AppService:
     """AppService wired with the gateway tool runner (external sources)."""
     if server.services is None or server.app_runtime is None:
@@ -1191,6 +1339,163 @@ class QuickSheetBody(BaseModel):
     view: Literal["dashboard", "ledger", "board"] = Field(
         default="dashboard", description="Generated view style for this sheet."
     )
+
+
+class SetupPlanTableOut(BaseModel):
+    key: str = Field(description="Table key; the first table is main.")
+    label: str = Field(default="", description="Display label.")
+    sheet: str = Field(default="", description="Worksheet imported into this table.")
+    header_row: int = Field(default=0, description="0-based header row.")
+    columns: list[AppColumn] = Field(default_factory=list, description="Proposed fields.")
+    mapping: dict[str, str] = Field(default_factory=dict, description="Source column map.")
+    upsert_key: list[str] = Field(default_factory=list, description="Dedupe columns.")
+    include_pii: bool = Field(default=False, description="Import sensitive columns.")
+
+
+class SetupPlanAuditOut(BaseModel):
+    ts: int = Field(description="Unix timestamp of the audit event.")
+    actor: str | None = Field(default=None, description="Actor label, e.g. user:2 or _system.")
+    action: str = Field(description="Audit action, e.g. miniapp.setup_plan.confirm.")
+    payload: dict[str, Any] | None = Field(
+        default=None, description="Structured audit payload, when parseable."
+    )
+
+
+class SetupPlanServiceOut(BaseModel):
+    name: str = Field(description="Page-facing service name.")
+    provider: str = Field(description="connector or external.")
+    connector_instance_id: str = Field(default="", description="Connector instance id.")
+    connector_kind: str | None = Field(default=None, description="Public connector kind.")
+    allowed_tools: list[str] = Field(default_factory=list, description="Allowed read-only tools.")
+    allowed_url_prefixes: list[str] = Field(
+        default_factory=list, description="Allowed http(s) URL prefixes."
+    )
+    request_headers: dict[str, str] = Field(
+        default_factory=dict, description="Allowlisted presentation headers."
+    )
+    cache_ttl_seconds: int = Field(default=300, description="Response cache TTL.")
+    max_calls_per_minute: int = Field(default=30, description="Live call budget.")
+    enabled: bool = Field(default=True, description="Whether the page may call it.")
+
+
+class SetupPlanServiceBody(SetupPlanServiceOut):
+    """Editable service declaration submitted with a plan confirmation."""
+
+
+class SetupPlanSummaryOut(BaseModel):
+    plan_id: str = Field(description="Durable setup plan id.")
+    status: str = Field(description="Current plan status.")
+    name: str = Field(description="App name.")
+    user_id: int = Field(description="Owner user id.")
+    agent_id: str = Field(description="Owning agent id.")
+    thread_id: str | None = Field(default=None, description="Originating thread id.")
+    app_id: str | None = Field(default=None, description="Created app id.")
+    file: str = Field(description="Workspace-relative source file.")
+    table_count: int = Field(default=0, description="Number of planned tables.")
+    service_count: int = Field(default=0, description="Number of planned services.")
+    capabilities: list[str] | None = Field(
+        default=None, description="Capabilities in the plan; null means app defaults."
+    )
+    created_at: int = Field(description="Creation timestamp.")
+    confirmed_at: int | None = Field(default=None, description="Confirmation timestamp.")
+    executed_at: int | None = Field(default=None, description="Import timestamp.")
+    expires_at: int | None = Field(default=None, description="Expiry timestamp.")
+    error: str = Field(default="", description="Last error summary.")
+    would_import: int = Field(default=0, description="Rows the dry run would import.")
+    imported: int = Field(default=0, description="Rows actually imported.")
+    updated: int = Field(default=0, description="Rows updated by upsert.")
+    skipped: int = Field(default=0, description="Rows skipped.")
+    errors: list[str] = Field(default_factory=list, description="Dry-run/import errors.")
+
+
+class SetupPlanListOut(BaseModel):
+    plans: list[SetupPlanSummaryOut] = Field(default_factory=list)
+    total: int = Field(default=0, description="Matching plans across all pages.")
+    limit: int = Field(description="Page size.")
+    offset: int = Field(description="Page offset.")
+
+
+class SetupPlanOut(BaseModel):
+    plan_id: str = Field(description="Durable setup plan id.")
+    status: str = Field(description="draft, dry_run_ready, imported, cancelled, …")
+    revision: int = Field(description="Schema revision; stale clients receive 409.")
+    name: str = Field(description="Proposed app name.")
+    file: str = Field(description="Workspace-relative source file.")
+    sheet: str = Field(default="", description="Worksheet selected for the import.")
+    header_row: int = Field(default=0, description="0-based header row.")
+    columns: list[AppColumn] = Field(
+        default_factory=list, description="Main table fields (compatibility field)."
+    )
+    include_pii: bool = Field(
+        default=False, description="Main table PII decision (compatibility field)."
+    )
+    tables: list[SetupPlanTableOut] = Field(
+        default_factory=list, description="All planned tables, main first."
+    )
+    services: list[SetupPlanServiceOut] = Field(
+        default_factory=list, description="Service declarations applied after the import."
+    )
+    capabilities: list[str] | None = Field(
+        default=None,
+        description="Page capabilities to apply; null means leave the app defaults.",
+    )
+    allowed_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Agent-settable capability names available for editing.",
+    )
+    app_id: str | None = Field(default=None, description="App created after confirmation.")
+    dry_run: dict[str, Any] = Field(default_factory=dict, description="Dry-run summary.")
+    result: dict[str, Any] = Field(default_factory=dict, description="Real import result.")
+    error: str = Field(default="", description="Last failure reason, if any.")
+    expires_at: int | None = Field(
+        default=None, description="Unix timestamp when the plan expires."
+    )
+    report: dict[str, Any] | None = Field(
+        default=None, description="Deterministic inspection report (GET only)."
+    )
+    allowed_actions: list[str] = Field(
+        default_factory=list,
+        description="Actions the current user may take next: confirm, execute, cancel.",
+    )
+    audit: list[SetupPlanAuditOut] = Field(
+        default_factory=list, description="Plan audit events (detail endpoint only)."
+    )
+
+
+class SetupPlanTableBody(BaseModel):
+    key: str | None = Field(default=None, description="Table key; first table becomes main.")
+    label: str = Field(default="", description="Display label.")
+    sheet: str = Field(description="Worksheet to import.")
+    header_row: int | None = Field(default=None, ge=0, le=100, description="0-based header.")
+    columns: list[AppColumn] = Field(description="Final field definitions.")
+    mapping: dict[str, str] | None = Field(default=None, description="Source column map.")
+    upsert_key: list[str] | None = Field(default=None, description="Dedupe columns.")
+    include_pii: bool | None = Field(default=None, description="Import sensitive columns.")
+
+
+class SetupPlanConfirmBody(BaseModel):
+    revision: int = Field(description="Revision the client is confirming.")
+    name: str = Field(description="Final app name.", max_length=100)
+    columns: list[AppColumn] = Field(
+        default_factory=list,
+        description="Final fields for a single-table plan (compatibility field).",
+    )
+    include_pii: bool | None = Field(
+        default=None, description="Override the proposed main-table PII decision."
+    )
+    tables: list[SetupPlanTableBody] | None = Field(
+        default=None, description="Multi-table plan; when present, columns is ignored."
+    )
+    services: list[SetupPlanServiceBody] | None = Field(
+        default=None, description="Final service declarations; omit to keep the proposal."
+    )
+    capabilities: list[str] | None = Field(
+        default=None, description="Final capability list; omit to keep the proposal."
+    )
+
+
+class SetupPlanExecuteBody(BaseModel):
+    revision: int = Field(description="Revision being executed.")
 
 
 class QuickCreateBody(BaseModel):
@@ -1418,6 +1723,166 @@ async def quick_create_app(
         blocked_pii=result.blocked_pii,
         failed_rows=[FailedRowOut(**item) for item in result.failed_rows],
     )
+
+
+@router.get(
+    "/setup-plans",
+    response_model=SetupPlanListOut,
+    summary="List MiniApp setup plans",
+    description=(
+        "Admin/support read-only list of durable setup plans with status, source "
+        "file, table/service counts and dry-run/import summaries. Use the detail "
+        "endpoint for the audit timeline and per-step results."
+    ),
+)
+async def list_setup_plans(
+    status: str | None = Query(default=None, description="Exact plan status."),
+    agent_id: str | None = Query(default=None, description="Filter by agent."),
+    user_id: int | None = Query(default=None, description="Filter by owner user id."),
+    app_id: str | None = Query(default=None, description="Filter by created app id."),
+    thread_id: str | None = Query(default=None, description="Filter by thread id."),
+    has_error: bool | None = Query(
+        default=None, description="Only plans with (true) or without (false) an error."
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> SetupPlanListOut:
+    if not user.is_admin:
+        raise OctopError(ErrorCode.APP_FORBIDDEN, "admin access is required")
+    if server.services is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
+    repo = server.services.repos.app_setup_plan_repo
+    plans = repo.list_plans(
+        status=status,
+        agent_id=agent_id,
+        user_id=user_id,
+        app_id=app_id,
+        thread_id=thread_id,
+        has_error=has_error,
+        limit=limit,
+        offset=offset,
+    )
+    total = repo.count_plans(
+        status=status,
+        agent_id=agent_id,
+        user_id=user_id,
+        app_id=app_id,
+        thread_id=thread_id,
+        has_error=has_error,
+    )
+    return SetupPlanListOut(
+        plans=[_setup_plan_summary(plan) for plan in plans],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/setup-plans/{plan_id}",
+    response_model=SetupPlanOut,
+    summary="Read a MiniApp setup plan",
+    description=(
+        "Returns the durable plan state, the inspection report and the actions "
+        "the current user may take. The chat plan card polls this endpoint so "
+        "history always renders the latest status instead of a stale prompt."
+    ),
+)
+async def get_setup_plan(
+    plan_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> SetupPlanOut:
+    service = _service(server)
+    plan = await service.get_setup_plan(plan_id, user.id)
+    return _setup_plan_out(
+        plan,
+        include_report=True,
+        audit=_setup_plan_audit(server, plan.plan_id),
+    )
+
+
+@router.post(
+    "/setup-plans/{plan_id}/confirm",
+    response_model=SetupPlanOut,
+    summary="Confirm a MiniApp setup plan",
+    description=(
+        "Freezes the confirmed schema, creates the empty app and runs a read-only "
+        "dry-run. No user data is written; a failure rolls the empty app back."
+    ),
+)
+async def confirm_setup_plan(
+    plan_id: str,
+    body: SetupPlanConfirmBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> SetupPlanOut:
+    service = _service(server)
+    plan = await service.confirm_setup_plan(
+        plan_id,
+        user_id=user.id,
+        revision=body.revision,
+        name=body.name,
+        columns=[column.model_dump(exclude_none=True) for column in body.columns],
+        include_pii=body.include_pii,
+        tables=(
+            [table.model_dump(exclude_none=True) for table in body.tables]
+            if body.tables is not None
+            else None
+        ),
+        services=(
+            [service.model_dump(exclude_none=True) for service in body.services]
+            if body.services is not None
+            else None
+        ),
+        capabilities=body.capabilities,
+    )
+    return _setup_plan_out(plan)
+
+
+@router.post(
+    "/setup-plans/{plan_id}/execute",
+    response_model=SetupPlanOut,
+    summary="Execute a confirmed MiniApp setup plan",
+    description=(
+        "Runs the real import for a dry-run-ready plan. The plan revision and "
+        "content-addressed import prefix make retries idempotent."
+    ),
+)
+async def execute_setup_plan(
+    plan_id: str,
+    body: SetupPlanExecuteBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> SetupPlanOut:
+    service = _service(server)
+    plan = await service.execute_setup_plan(
+        plan_id,
+        user_id=user.id,
+        revision=body.revision,
+    )
+    return _setup_plan_out(plan)
+
+
+@router.post(
+    "/setup-plans/{plan_id}/cancel",
+    response_model=SetupPlanOut,
+    summary="Cancel a MiniApp setup plan",
+    description=(
+        "Cancels a plan before its real import and removes the empty app. After "
+        "import, use POST /apps/{app_id}/delete with its normal approval."
+    ),
+)
+async def cancel_setup_plan(
+    plan_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> SetupPlanOut:
+    service = _service(server)
+    plan = await service.cancel_setup_plan(plan_id, user_id=user.id)
+    return _setup_plan_out(plan)
 
 
 @router.post(

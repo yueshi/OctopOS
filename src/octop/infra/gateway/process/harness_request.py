@@ -305,6 +305,7 @@ def build_harness_request(
     auto_route: bool = False,
     message_kwargs: dict[str, Any] | None = None,
     reasoning_overrides: dict[str, Any] | None = None,
+    identity_verified: bool = False,
 ) -> dict[str, Any]:
     if messages is not None:
         req: dict[str, Any] = {
@@ -322,6 +323,8 @@ def build_harness_request(
             configurable["session_key"] = session_key
         if reasoning_overrides:
             configurable["octop_reasoning_overrides"] = reasoning_overrides
+        if identity_verified:
+            configurable["octop_identity_verified"] = True
         if configurable:
             req["configurable"] = configurable
         if model:
@@ -351,15 +354,17 @@ def build_harness_request(
     }
     if agent_id is not None:
         req["agent_id"] = agent_id
-    configurable = {"octop_source": source}
+    configurable_turn: dict[str, Any] = {"octop_source": source}
     if auto_route:
-        configurable["octop_auto_route"] = True
+        configurable_turn["octop_auto_route"] = True
     if session_key is not None:
-        configurable["session_key"] = session_key
+        configurable_turn["session_key"] = session_key
     if reasoning_overrides:
-        configurable["octop_reasoning_overrides"] = reasoning_overrides
-    if configurable:
-        req["configurable"] = configurable
+        configurable_turn["octop_reasoning_overrides"] = reasoning_overrides
+    if identity_verified:
+        configurable_turn["octop_identity_verified"] = True
+    if configurable_turn:
+        req["configurable"] = configurable_turn
     if model:
         req["model"] = model
     return req

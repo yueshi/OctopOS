@@ -12,6 +12,7 @@ import {
   loadDesktopWindows,
   saveDesktopWindows,
   systemWindowId,
+  terminalWindowId,
   type DesktopWindowState,
 } from "./desktopWindows";
 
@@ -102,6 +103,24 @@ describe("desktopWindows", () => {
     expect(win.id).toBe(browserWindowId("agent_1"));
     expect(win.url).toBeUndefined();
     expect(win.w).toBeGreaterThanOrEqual(WINDOW_REGISTRY.browser.minWidth);
+    expect(win.y + win.h).toBeLessThanOrEqual(800 - DOCK_SPACE);
+  });
+
+  it("creates one terminal window per expert above the dock", () => {
+    const win = createDesktopWindow({
+      kind: "terminal",
+      agentId: "agent_1",
+      spaceId: "agent_1",
+      z: 1,
+      list: [],
+      appSpace,
+      viewportWidth: 1280,
+      viewportHeight: 800,
+    })!;
+    expect(win.id).toBe(terminalWindowId("agent_1"));
+    expect(win.agentId).toBe("agent_1");
+    expect(win.w).toBeGreaterThanOrEqual(WINDOW_REGISTRY.terminal.minWidth);
+    expect(win.h).toBeGreaterThanOrEqual(WINDOW_REGISTRY.terminal.minHeight);
     expect(win.y + win.h).toBeLessThanOrEqual(800 - DOCK_SPACE);
   });
 

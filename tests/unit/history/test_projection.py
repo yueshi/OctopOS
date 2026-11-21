@@ -142,6 +142,77 @@ def test_turn_tracker_does_not_duplicate_state_assistant() -> None:
     assert any(text == "hello world" for text in texts)
 
 
+def test_completed_turn_skips_synthetic_stream_row_when_state_has_answer() -> None:
+    tracker = TurnHistoryTracker.from_request(
+        {"messages": [{"role": "user", "content": "hi", "id": "u1"}]}
+    )
+    tracker.observe({"type": "token", "content": "preamble:"})
+    tracker.observe(
+        {
+            "type": "state_snapshot",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": "hi", "id": "u1"},
+                    {"role": "assistant", "content": "final answer", "id": "a1"},
+                ]
+            },
+        }
+    )
+    tracker.completed = True
+
+    items = tracker.inputs
+    texts = [_wire_text(item) for item in items]
+    assert "final answer" in texts
+    assert "preamble:" not in texts
+    assert all(not (item.message_id or "").startswith("stream:") for item in items)
+
+
+def test_incomplete_stream_row_has_stable_id_and_caps_content_and_reasoning() -> None:
+    tracker = TurnHistoryTracker.from_request(
+        {"messages": [{"role": "user", "content": "hi", "id": "u1"}]}
+    )
+    tracker.observe({"type": "token", "content": "x" * 40_000})
+    tracker.observe({"type": "reasoning", "content": "r" * 40_000})
+
+    first = tracker.inputs
+    synthetic = next(item for item in first if (item.message_id or "").startswith("stream:"))
+    wire = json.loads(synthetic.message_json)
+    content = wire["data"]["content"]
+    reasoning = wire["data"]["additional_kwargs"]["reasoning_content"]
+    assert len(content) <= 32_100
+    assert "truncated" in content
+    assert len(reasoning) <= 32_100
+    assert "truncated" in reasoning
+
+    second = tracker.inputs
+    assert [item.message_id for item in first] == [item.message_id for item in second]
+
+
+def test_incomplete_turn_skips_synthetic_when_state_covers_stream_tail() -> None:
+    tracker = TurnHistoryTracker.from_request(
+        {"messages": [{"role": "user", "content": "hi", "id": "u1"}]}
+    )
+    tracker.observe({"type": "token", "content": "first preamble "})
+    tracker.observe({"type": "token", "content": "last preamble"})
+    tracker.observe(
+        {
+            "type": "state_snapshot",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": "hi", "id": "u1"},
+                    {"role": "assistant", "content": "last preamble", "id": "a1"},
+                ]
+            },
+        }
+    )
+
+    items = tracker.inputs
+    texts = [_wire_text(item) for item in items]
+    assert "last preamble" in texts
+    assert "first preamble " not in texts
+    assert all(not (item.message_id or "").startswith("stream:") for item in items)
+
+
 @pytest.mark.asyncio
 async def test_backfill_queue_runs_one_job_at_a_time_and_dedupes() -> None:
     queue = HistoryBackfillQueue(max_pending=2)

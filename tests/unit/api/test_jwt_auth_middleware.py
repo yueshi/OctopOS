@@ -31,6 +31,8 @@ def test_exempt_paths() -> None:
     assert is_jwt_exempt_path("/api/auth/oidc/start")
     assert is_jwt_exempt_path("/api/auth/oidc/callback")
     assert is_jwt_exempt_path("/api/auth/oidc/exchange")
+    assert is_jwt_exempt_path("/api/auth/app-access/preview")
+    assert is_jwt_exempt_path("/api/auth/app-access/exchange")
     assert is_jwt_exempt_path("/api/game-sessions/abc/results")
     assert is_jwt_exempt_path("/api/auth/oauth/status")
     assert is_jwt_exempt_path("/api/auth/oauth/start")
@@ -177,3 +179,98 @@ async def test_game_token_is_not_accepted_as_access_token(client) -> None:
     r = await c.get("/api/auth/me", headers=bearer(token))
     assert r.status_code == 401
     assert r.json()["error"]["code"] == "AUTH_FAILED"
+
+
+async def test_app_scoped_token_only_reaches_its_app(client) -> None:
+    c, srv, home = client
+    await bootstrap_admin(c, home)
+    assert srv.user_manager is not None
+    assert srv.services is not None
+    user = srv.user_manager.get("admin")
+    assert user is not None
+    secret = srv.services.secret_repo.get("jwt")
+    assert secret is not None
+    scoped = sign_token(
+        secret,
+        sub=user.id,
+        uname=user.username,
+        role=user.role,
+        ttl_seconds=600,
+        extra={"scope": "app", "app_id": "app-123"},
+    )
+
+    # The app subtree is reachable; 404 only because the app does not exist.
+    r = await c.get("/api/apps/app-123", headers=bearer(scoped))
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "APP_NOT_FOUND"
+
+    # Read-only bootstrap endpoints keep the SPA usable.
+    assert (await c.get("/api/auth/me", headers=bearer(scoped))).status_code == 200
+    assert (await c.get("/api/settings/timezone", headers=bearer(scoped))).status_code == 200
+
+    # Everything else is denied with a dedicated code.
+    r = await c.get("/api/agents", headers=bearer(scoped))
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_SCOPE_FORBIDDEN"
+    r = await c.post(
+        "/api/auth/change-password",
+        headers=bearer(scoped),
+        json={"old_password": "TestPass12", "new_password": "AnotherPass12"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_SCOPE_FORBIDDEN"
+
+
+async def test_app_scoped_token_is_not_sliding_renewed(client) -> None:
+    c, srv, home = client
+    await bootstrap_admin(c, home)
+    assert srv.user_manager is not None
+    assert srv.services is not None
+    user = srv.user_manager.get("admin")
+    assert user is not None
+    secret = srv.services.secret_repo.get("jwt")
+    assert secret is not None
+    short = sign_token(
+        secret,
+        sub=user.id,
+        uname=user.username,
+        role=user.role,
+        ttl_seconds=60,
+        extra={"scope": "app", "app_id": "app-123"},
+    )
+    r = await c.get("/api/auth/me", headers=bearer(short))
+    assert r.status_code == 200
+    assert ACCESS_TOKEN_RESPONSE_HEADER not in r.headers
+
+
+def test_sign_token_extra_cannot_override_identity_claims(client) -> None:
+    _c, srv, _home = client
+    assert srv.services is not None
+    secret = srv.services.secret_repo.get("jwt")
+    assert secret is not None
+    token = sign_token(
+        secret,
+        sub=1,
+        uname="alice",
+        role="user",
+        ttl_seconds=600,
+        extra={"sub": 999, "uname": "mallory", "role": "admin", "scope": "app", "app_id": "a"},
+    )
+    payload = decode_token(secret, token)
+    assert payload["sub"] == 1
+    assert payload["uname"] == "alice"
+    assert payload["role"] == "user"
+    assert payload["scope"] == "app"
+    assert payload["app_id"] == "a"
+
+
+async def test_wechat_mangled_access_link_redirects(client) -> None:
+    c, _srv, _home = client
+    # WeChat drops '#' from '#code=...' and appends 'code=' to the path.
+    r = await c.get("/login/app-accesscode=ABC123", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login/app-access?code=ABC123"
+
+    encoded = await c.get("/login/app-accesscode%3DABC123", follow_redirects=False)
+    assert encoded.status_code == 302
+    assert encoded.headers["location"] == "/login/app-access?code=ABC123"

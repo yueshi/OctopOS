@@ -258,16 +258,23 @@ interface TerminalPageProps {
   isVisible?: boolean;
   /** Hide standalone page chrome when hosted inside Workbench. */
   embedded?: boolean;
+  /**
+   * Pin the terminal to one expert (desktop windows). Defaults to the
+   * dashboard active agent. Sessions keep their own agent once connected.
+   */
+  agentId?: string;
 }
 
 export default function TerminalPage({
   isVisible = true,
   embedded = false,
+  agentId,
 }: TerminalPageProps) {
   const { t } = useTranslation();
   const { isDark } = useTheme();
   const isMobile = useIsMobile();
   const { activeAgentId, agents, loading: agentsLoading, refresh } = useAgent();
+  const surfaceAgentId = agentId ?? activeAgentId;
   const {
     sessionIds,
     activeId,
@@ -413,13 +420,13 @@ export default function TerminalPage({
   // Drop stale agent ids from restored terminal tabs (e.g. after an agent delete).
   useEffect(() => {
     if (agentsLoading || agents.length === 0) return;
-    const fallback = activeAgentId ?? agents[0]?.agent_id ?? "";
+    const fallback = surfaceAgentId ?? agents[0]?.agent_id ?? "";
     if (!fallback) return;
     reconcileAgentIds(
       agents.map((a) => a.agent_id),
       fallback,
     );
-  }, [agents, agentsLoading, activeAgentId, reconcileAgentIds]);
+  }, [agents, agentsLoading, surfaceAgentId, reconcileAgentIds]);
 
   // Create the first tab on first visit (not on app startup). Uses the live
   // store so a remounted chat-dock TerminalPage cannot race-create extras.
@@ -628,7 +635,7 @@ export default function TerminalPage({
                       unbind={unbind}
                       onReconnect={reconnect}
                       themeDefinition={themeDefinition}
-                      agentId={activeAgentId || ""}
+                      agentId={surfaceAgentId || ""}
                       onOutputCapture={handleOutputCapture}
                     />
                   </div>
@@ -662,8 +669,8 @@ export default function TerminalPage({
             />
             <AiPanel
               activeAgent={
-                activeAgentId
-                  ? agents.find((a) => a.agent_id === activeAgentId) ?? null
+                surfaceAgentId
+                  ? agents.find((a) => a.agent_id === surfaceAgentId) ?? null
                   : null
               }
               agents={agents}

@@ -44,6 +44,68 @@ def test_json_chunk_default_keeps_tool_message_artifact() -> None:
     assert "episodes" not in wire_msg["content"]
 
 
+def test_serialize_history_message_uses_fallback_id_for_synthetic_rows() -> None:
+    entry = _serialize_history_message(AIMessage(content="hi"), fallback_id="row:42")
+    assert entry is not None
+    assert entry["id"] == "row:42"
+
+    with_id = _serialize_history_message(
+        AIMessage(content="hi", id="a1"),
+        fallback_id="row:42",
+    )
+    assert with_id is not None
+    assert with_id["id"] == "a1"
+
+
+def test_serialize_history_message_emits_hitl_decision_card() -> None:
+    entry = _serialize_history_message(
+        AIMessage(
+            content="",
+            id="hitl:p1",
+            additional_kwargs={
+                "octop_hitl": {
+                    "pending_id": "p1",
+                    "action_requests": [{"name": "execute", "args": {"cmd": "ls"}}],
+                    "status": "approved",
+                    "resolution": "allow_tool",
+                }
+            },
+        )
+    )
+    assert entry is not None
+    assert entry["content"] == []
+    assert entry["id"] == "hitl:p1"
+    assert entry["hitl"]["status"] == "approved"
+    assert entry["hitl"]["resolution"] == "allow_tool"
+
+
+def test_serialize_history_message_strips_memory_retention_json() -> None:
+    leaked = (
+        '{"matches": [{"atom_id": "a1", "relation": "unrelated", "document": '
+        '"USER.md", "quote": "", "confidence": "high", "same_subject": false, '
+        '"same_scope": false}]}记下了：以后用小程序这个说法。'
+    )
+    entry = _serialize_history_message(AIMessage(content=leaked))
+    assert entry is not None
+    text = "".join(block["text"] for block in entry["content"] if block["type"] == "text")
+    assert "atom_id" not in text
+    assert "same_scope" not in text
+    assert text.startswith("记下了")
+
+
+def test_serialize_history_message_caps_reasoning_replay() -> None:
+    entry = _serialize_history_message(
+        AIMessage(
+            content="answer",
+            additional_kwargs={"reasoning_content": "r" * 40_000},
+        )
+    )
+    assert entry is not None
+    thinking = next(block["thinking"] for block in entry["content"] if block["type"] == "thinking")
+    assert len(thinking) <= 32_100
+    assert "truncated" in thinking
+
+
 def test_serialize_history_message_includes_tool_artifact() -> None:
     msg = ToolMessage(
         content='{"octop_ui": {"renderer": "bilibili_player"}, "data_ref": "artifact"}',

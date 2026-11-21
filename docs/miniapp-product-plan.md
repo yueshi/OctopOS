@@ -194,7 +194,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | 声明式规则 | ✅ | 状态机（`state_field` + `transitions`）（v34） |
 | 工作台 | ✅ | 个人多 Board、12 列网格、缩放/锁定/撤销/全屏/自动排列 |
 | 游戏 | ✅ | 白名单外部游戏、一次性会话 token、结果回写、侧栏运行 |
-| IM | ✅ | `app_share_link` 一次调用交付、纯文本格式化、单轮预算 |
+| IM | ✅ | `app_share_link` 一次调用交付、纯文本格式化、单轮预算；owner 绑定后返回 app-scoped 免密链接 |
 | 运维 | ✅ | 指标、审计、限流（每进程） |
 
 规模：24 个 `app_*` Agent 工具；约 77 个 HTTP 路由 + 1 个公开宿主页；后端 `infra/apps/` 约 1 万行。
@@ -421,8 +421,9 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
   CLI：`octop app export/import`。
 - **6b IM 认证链接**：owner 一次性认证链接，**不要用会被链接预览消耗的 `GET /auth/app?code=`**，
   改成中转确认页 / POST，单次消费、短 TTL、`no-referrer`。群聊/非 owner 只发公开只读链接。
-- **6c 渠道身份绑定**：`channel_identities` 表 + `/bind <code>` 流程；默认 `identity_mode=owner`
-  不改变现有行为，按渠道 opt-in。
+- **6c 渠道身份绑定（D4-lite）**：Dashboard 个人设置生成一次性绑定码，用户在 IM 私聊发送
+  `/bind <code>`，写入 `channel_identities`。仅绑定到 agent owner 本人的发送者会签发个人链接；
+  不切换 acting user，群聊不生效。同一 IM 身份不可覆盖绑定到其他用户。
 - **建议**：把「作用域能力令牌（capability token）」从 MiniApp 私有（game token / share token）
   提升为**平台级**身份原语，MiniApp、IM 认证链接、外部 origin 应用（游戏、外部工具）共用一套。
 

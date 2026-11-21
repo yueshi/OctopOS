@@ -117,6 +117,36 @@ def test_wrap_never_skips_mandatory_interrupts() -> None:
     assert wrapped == {"app_delete": entry}
 
 
+def test_wrap_allows_setup_tools_but_not_destructive_app_tools() -> None:
+    store = HitlSessionPolicyStore()
+    store.set(
+        "thr_1",
+        HitlSessionPolicy(
+            mode="allow_tools",
+            tools=("app_import_rows", "app_remove_service"),
+        ),
+    )
+    entry = {"allowed_decisions": ["approve", "reject"]}
+    wrapped = apply_session_bypass(
+        {
+            "app_import_rows": entry,
+            "app_remove_service": entry,
+            "app_delete_row": entry,
+            "app_delete": entry,
+        },
+        store,
+    )
+    assert wrapped is not None
+    with hitl_thread_scope("thr_1"):
+        assert wrapped["app_import_rows"]["when"](None) is False
+        assert wrapped["app_remove_service"]["when"](None) is False
+        # Destructive app tools never gain a bypass predicate.
+        assert "when" not in wrapped["app_delete_row"]
+        assert "when" not in wrapped["app_delete"]
+    with hitl_thread_scope("other"):
+        assert wrapped["app_import_rows"]["when"](None) is True
+
+
 def test_wrap_skips_execute_from_langgraph_config_without_scope() -> None:
     store = HitlSessionPolicyStore()
     store.set("thr_1", HitlSessionPolicy(mode="allow_all"))
@@ -165,6 +195,7 @@ async def test_resume_hitl_binds_thread_scope() -> None:
 
     manager = AgentManager.__new__(AgentManager)
     manager._harness_manager = SimpleNamespace(resume_hitl=fake_resume)
+    manager._repos = SimpleNamespace(hitl_repo=None)
     manager._history_backfills = {}
     manager._reclaim_pending = set()
     manager._reclaim_holds = {}
@@ -202,7 +233,18 @@ def test_build_harness_config_skips_interrupt_for_allowed_thread(
     with hitl_thread_scope("other"):
         assert write_cfg["when"](None) is True
 
-    # Deleting an app stays mandatory even for an allow-all thread.
-    app_delete = cfg.interrupt_on["app_delete"]
-    assert "when" not in app_delete
-    assert app_delete["allowed_decisions"] == ["approve", "reject"]
+    # Setup tools may be remembered for this thread; they also carry the
+    # session-bypass (and, for import/add_service, argument-preflight) `when`.
+    for name in ("app_import_rows", "app_add_service", "app_remove_service"):
+        entry = cfg.interrupt_on[name]
+        assert callable(entry.get("when"))
+        with hitl_thread_scope("thr_1"):
+            assert entry["when"](None) is False
+        with hitl_thread_scope("other"):
+            assert entry["when"](None) is True
+
+    # Destructive app tools stay mandatory even for an allow-all thread.
+    for name in ("app_delete", "app_delete_row", "app_alter_schema"):
+        entry = cfg.interrupt_on[name]
+        assert "when" not in entry
+        assert entry["allowed_decisions"] == ["approve", "reject"]

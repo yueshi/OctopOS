@@ -37,8 +37,10 @@ import {
   parseDecisionNotice,
   type ChatAttachment,
   type ChatMessage,
+  type HitlRequestData,
   type UserComposerContext,
 } from "./sseHelpers";
+import { normalizeHitlRequest } from "../../../api/types/hitl";
 
 export type {
   ToolCallData,
@@ -356,6 +358,40 @@ function resolveEntryTimestamp(entry: CallEntry): number {
   return resolveMessageTimestampMs(entry.timestamp);
 }
 
+/** Parse a persisted HITL decision card (approve/reject) from history. */
+function parseHistoryHitl(raw: unknown): HitlRequestData | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const normalized = normalizeHitlRequest(record);
+  const requests = Array.isArray(normalized.action_requests)
+    ? normalized.action_requests
+    : [];
+  if (requests.length === 0) return undefined;
+  const status =
+    record.status === "approved" || record.status === "rejected"
+      ? record.status
+      : undefined;
+  const resolution =
+    record.resolution === "approve" ||
+    record.resolution === "allow_tool" ||
+    record.resolution === "allow_all"
+      ? (record.resolution as HitlRequestData["resolution"])
+      : undefined;
+  const pendingId =
+    typeof record.pending_id === "string" && record.pending_id.trim()
+      ? record.pending_id.trim()
+      : undefined;
+  return {
+    action_requests: requests as HitlRequestData["action_requests"],
+    review_configs: Array.isArray(normalized.review_configs)
+      ? (normalized.review_configs as HitlRequestData["review_configs"])
+      : undefined,
+    ...(status ? { status } : {}),
+    ...(resolution ? { resolution } : {}),
+    ...(pendingId ? { pending_id: pendingId } : {}),
+  };
+}
+
 function enrichAttachmentPreviewUrls(
   messages: ChatMessage[],
   agentId: string,
@@ -447,6 +483,7 @@ function convertCallEntries(entries: CallEntry[]): ChatMessage[] {
             )
           : undefined,
       toolData: tool?.data,
+      hitlData: parseHistoryHitl(entry.hitl),
       usage: normalizeTokenUsage(entry.usage ?? undefined) ?? undefined,
       metadata: normalizeMessageMetadata(entry.metadata ?? undefined),
       errorInfo:
@@ -684,6 +721,7 @@ export function convertHistoryMessages(
     team_wrapup?: boolean;
     edited_files?: string[];
     decision?: unknown;
+    hitl?: unknown;
   }>,
   agentId?: string,
 ): ChatMessage[] {
@@ -712,6 +750,7 @@ export function convertHistoryMessages(
           : undefined,
       team_wrapup: message.team_wrapup === true,
       decision: message.decision,
+      hitl: message.hitl,
       edited_files: Array.isArray(message.edited_files)
         ? message.edited_files.filter(
             (p): p is string => typeof p === "string" && p.trim().length > 0,

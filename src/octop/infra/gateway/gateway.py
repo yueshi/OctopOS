@@ -340,6 +340,8 @@ class Gateway:
             agent_repo=self._repos.agent_repo,
             user_repo=self._repos.user_repo,
             connector_repo=self._repos.connector_repo,
+            channel_identity_repo=self._repos.channel_identity_repo,
+            channel_bind_code_repo=self._repos.channel_bind_code_repo,
             knowledge_repo=self._repos.knowledge_repo,
             settings_repo=self._repos.settings_repo,
             provider_repo=self._repos.provider_repo,

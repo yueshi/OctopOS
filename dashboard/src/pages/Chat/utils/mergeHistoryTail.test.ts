@@ -61,6 +61,47 @@ describe("mergeHistoryWithLocalTail", () => {
     );
   });
 
+  it("drops an orphaned live assistant when the server page has the turn", () => {
+    const loaded = [
+      msg("old-a", "assistant", "之前的回复", 1_000),
+      msg("srv-user", "user", "继续做", 5_000),
+      msg("srv-a", "assistant", "做好了", 5_200),
+    ];
+    // Page reloaded mid-turn: the optimistic user row was lost, only the
+    // streaming assistant bubble survived locally.
+    const current = [
+      msg("old-a", "assistant", "之前的回复", 1_000),
+      msg("local-a", "assistant", "做好", 5_100),
+    ];
+    expect(mergeHistoryWithLocalTail(loaded, current).map((m) => m.id)).toEqual(
+      ["old-a", "srv-user", "srv-a"],
+    );
+  });
+
+  it("drops a cached old turn when the page window moved past it", () => {
+    // The local page starts with an old turn; the new page is the tail of a
+    // much longer turn, so no ids overlap at all.
+    const loaded = [
+      msg("srv-user", "user", "新问题", 20_000),
+      msg("srv-a", "assistant", "新回答", 20_500),
+    ];
+    const current = [
+      msg("old-user", "user", "旧问题", 5_000),
+      msg("old-a", "assistant", "旧回答", 5_500),
+    ];
+    expect(mergeHistoryWithLocalTail(loaded, current).map((m) => m.id)).toEqual(
+      ["srv-user", "srv-a"],
+    );
+  });
+
+  it("drops an orphaned live assistant when no page row overlaps", () => {
+    const loaded = [msg("srv-a", "assistant", "做好了", 5_200)];
+    const current = [msg("local-a", "assistant", "做好", 5_100)];
+    expect(mergeHistoryWithLocalTail(loaded, current).map((m) => m.id)).toEqual(
+      ["srv-a"],
+    );
+  });
+
   it("keeps older pages already prepended above the latest server page", () => {
     const loaded = [msg("m2", "user", "第二页", 2_000)];
     const current = [

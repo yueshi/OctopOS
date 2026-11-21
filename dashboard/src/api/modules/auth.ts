@@ -81,6 +81,38 @@ export interface PublicCaptcha {
   site_key?: string;
 }
 
+export interface AppAccessPreview {
+  app_id: string;
+  app_name: string;
+  username: string;
+  display_name: string;
+  expires_at: number;
+}
+
+export interface AppAccessExchange extends LoginResponse {
+  redirect: string;
+  /** Always ``app``: the token only unlocks this MiniApp's routes. */
+  scope: string;
+  app_id: string;
+}
+
+export interface ChannelBindCode {
+  code: string;
+  /** Unix timestamp when the code stops working. */
+  expires_at: number;
+  ttl_seconds: number;
+}
+
+export interface ChannelBinding {
+  channel_type: string;
+  subject_id: string;
+  verified_at: number;
+}
+
+export interface ChannelBindingList {
+  identities: ChannelBinding[];
+}
+
 export interface OidcStatus {
   enabled: boolean;
   display_name: string;
@@ -249,6 +281,43 @@ export const authApi = {
     });
     return { ...raw, token: raw.access_token };
   },
+
+  /** Read a MiniApp access link without consuming it. */
+  previewAppAccess: (code: string) =>
+    request<AppAccessPreview>("/auth/app-access/preview", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  /** Consume a MiniApp access link and return an app-scoped login response. */
+  exchangeAppAccess: async (code: string): Promise<AppAccessExchange> => {
+    const raw = await request<
+      RawLoginResponse & { redirect: string; scope: string; app_id: string }
+    >("/auth/app-access/exchange", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    return { ...raw, token: raw.access_token };
+  },
+
+  /** Mint a one-time code to send to an agent's IM bot as `/bind <code>`. */
+  createChannelBindCode: () =>
+    request<ChannelBindCode>("/auth/channel-bindings/code", {
+      method: "POST",
+    }),
+
+  /** IM identities already bound to this account. */
+  listChannelBindings: () =>
+    request<ChannelBindingList>("/auth/channel-bindings"),
+
+  /** Remove one IM identity from this account. */
+  deleteChannelBinding: (channelType: string, subjectId: string) =>
+    request<void>(
+      `/auth/channel-bindings?channel_type=${encodeURIComponent(
+        channelType,
+      )}&subject_id=${encodeURIComponent(subjectId)}`,
+      { method: "DELETE" },
+    ),
 
   /** Server-side logout (best-effort; client clears token regardless). */
   logout: () =>

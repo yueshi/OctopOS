@@ -54,6 +54,8 @@ _JWT_EXEMPT_EXACT = (
     "/api/auth/oidc/start",
     "/api/auth/oidc/callback",
     "/api/auth/oidc/exchange",
+    "/api/auth/app-access/preview",
+    "/api/auth/app-access/exchange",
     "/api/auth/oauth/status",
     "/api/auth/oauth/start",
     "/api/auth/oauth/callback",
@@ -116,8 +118,66 @@ def _decode(server: OctopServer, token: str) -> dict[str, Any]:
         raise OctopError(ErrorCode.AUTH_FAILED, "invalid token") from exc
 
 
-def resolve_user_from_token(server: OctopServer, token: str) -> User:
+_APP_SCOPE_READ_PATHS = frozenset(
+    {
+        "/api/auth/me",
+        "/api/settings/timezone",
+        "/api/preferences",
+        "/api/notifications",
+    }
+)
+_APP_SCOPE_READ_PREFIXES = ("/api/i18n/",)
+
+
+def _app_scope_forbidden() -> OctopError:
+    return OctopError.localized(ErrorCode.APP_SCOPE_FORBIDDEN)
+
+
+def _app_scope_allows(*, method: str, path: str, app_id: str, user_id: int) -> bool:
+    """Paths a MiniApp-scoped session may use.
+
+    The app's own subtree is fully allowed (its routes still apply their own
+    ACL). Everything else is limited to read-only bootstrap calls the SPA
+    makes before rendering; the rest of the dashboard stays out of reach.
+    """
+    prefix = f"/api/apps/{app_id}"
+    if path == prefix or path.startswith(f"{prefix}/"):
+        return True
+    if method.upper() != "GET":
+        return False
+    if path in _APP_SCOPE_READ_PATHS:
+        return True
+    if any(path.startswith(item) for item in _APP_SCOPE_READ_PREFIXES):
+        return True
+    avatar = f"/api/users/{user_id}/avatar"
+    return path == avatar or path.startswith(f"{avatar}/")
+
+
+def _check_app_scope(payload: dict[str, Any], *, method: str, path: str | None) -> None:
+    if payload.get("scope") != "app":
+        return
+    app_id = str(payload.get("app_id") or "")
+    subject = payload.get("sub")
+    if not app_id or subject is None or path is None:
+        raise _app_scope_forbidden()
+    if not _app_scope_allows(
+        method=method,
+        path=path,
+        app_id=app_id,
+        user_id=int(subject),
+    ):
+        raise _app_scope_forbidden()
+
+
+def resolve_user_from_token(
+    server: OctopServer,
+    token: str,
+    *,
+    method: str = "GET",
+    path: str | None = None,
+) -> User:
     payload = _decode(server, token)
+    _check_app_scope(payload, method=method, path=path)
     assert server.user_manager is not None
     # The same secret signs other, narrower tokens (a MiniApp game session).
     # Only a token carrying ``sub`` is an access token; the rest must fail as
@@ -139,6 +199,10 @@ def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> st
     """
     assert server.services is not None
     payload = _decode(server, token)
+    if payload.get("scope") == "app":
+        # A scoped MiniApp session must not be upgraded into a full dashboard
+        # token by sliding renewal.
+        return None
     ttl = int(server.services.config.access_token_ttl_seconds)
     remaining = int(payload["exp"]) - int(time.time())
     threshold = max(1, int(ttl * _SLIDING_RENEW_REMAINING_FRACTION))
@@ -163,7 +227,12 @@ def authenticate_request(request: Request, server: OctopServer) -> User:
     )
     if not raw:
         raise OctopError(ErrorCode.AUTH_FAILED, "missing credentials")
-    return resolve_user_from_token(server, raw)
+    return resolve_user_from_token(
+        server,
+        raw,
+        method=request.method,
+        path=request.url.path,
+    )
 
 
 async def current_user(
@@ -178,7 +247,12 @@ async def current_user(
     raw = extract_raw_token(authorization=authorization, access_token=access_token)
     if not raw:
         raise OctopError(ErrorCode.AUTH_FAILED, "missing credentials")
-    return resolve_user_from_token(server, raw)
+    return resolve_user_from_token(
+        server,
+        raw,
+        method=request.method,
+        path=request.url.path,
+    )
 
 
 def require_permission(key: str) -> Callable[..., Awaitable[User]]:

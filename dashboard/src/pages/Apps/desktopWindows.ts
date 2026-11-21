@@ -5,6 +5,7 @@ import {
   Globe,
   MessageSquare,
   Settings2,
+  SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,7 +30,8 @@ export type DesktopWindowKind =
   | "files"
   | "html"
   | "browser"
-  | "system";
+  | "system"
+  | "terminal";
 
 export type DesktopFilesTab = "generated" | "all";
 
@@ -216,6 +218,16 @@ export const WINDOW_REGISTRY: Record<DesktopWindowKind, DesktopWindowKindSpec> =
       identity: ({ agentId }) => (agentId ? `browser:${agentId}` : null),
       isValid: (win) => Boolean(win.agentId),
     },
+    terminal: {
+      kind: "terminal",
+      labelKey: "apps.desktop.terminal.label",
+      labelFallback: "Terminal",
+      icon: SquareTerminal,
+      minWidth: 560,
+      minHeight: 360,
+      identity: ({ agentId }) => (agentId ? `terminal:${agentId}` : null),
+      isValid: (win) => Boolean(win.agentId),
+    },
     system: {
       kind: "system",
       labelKey: "apps.desktop.systemWindow",
@@ -256,6 +268,10 @@ export function browserWindowId(agentId: string): string {
   return WINDOW_REGISTRY.browser.identity({ agentId })!;
 }
 
+export function terminalWindowId(agentId: string): string {
+  return WINDOW_REGISTRY.terminal.identity({ agentId })!;
+}
+
 export function systemWindowId(agentId: string, systemKey: string): string {
   return WINDOW_REGISTRY.system.identity({ agentId, systemKey })!;
 }
@@ -282,6 +298,7 @@ export function windowSpaceId(
     win.kind === "files" ||
     win.kind === "html" ||
     win.kind === "browser" ||
+    win.kind === "terminal" ||
     win.kind === "system"
   ) {
     return win.agentId;
@@ -313,6 +330,9 @@ export function desktopWindowTitle(
   }
   if (win.kind === "browser") {
     return win.title || (win.url ? externalWindowTitle(win.url) : "");
+  }
+  if (win.kind === "terminal") {
+    return win.title || space?.name || win.agentId || "";
   }
   if (win.kind === "system") {
     return win.title || space?.name || "";
@@ -390,6 +410,11 @@ export function createDesktopWindow(
     height = Math.max(spec.minHeight, Math.min(700, maxWindowH));
     x = 44 + cascade * 24;
     y = 54 + cascade * 20;
+  } else if (input.kind === "terminal") {
+    width = Math.max(spec.minWidth, Math.min(900, maxW - 48));
+    height = Math.max(spec.minHeight, Math.min(620, maxWindowH));
+    x = 52 + cascade * 24;
+    y = 52 + cascade * 22;
   } else {
     width = Math.max(spec.minWidth, Math.min(760, maxW - 40));
     height = Math.max(spec.minHeight, Math.min(560, maxWindowH));

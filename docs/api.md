@@ -31,7 +31,8 @@ admin can clear the lockout with `POST /api/users/{id}/unlock-login`.
 
 `/api/docs`, `/api/openapi.json`, `/api/health`, `/api/setup/*`,
 `/api/auth/login`, `/api/auth/captcha`, `/api/auth/oidc/status`, `/api/auth/oidc/start`,
-`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`, `/api/auth/oauth/status`,
+`/api/auth/oidc/callback`, `/api/auth/oidc/exchange`,
+`/api/auth/app-access/preview`, `/api/auth/app-access/exchange`, `/api/auth/oauth/status`,
 `/api/auth/oauth/start`, `/api/auth/oauth/callback`, `/api/auth/oauth/exchange`,
 `/api/auth/ldap/status`,
 `/api/connectors/oauth/callback`, and `/api/internal/mcp/*`. All other routes are JWT-gated by
@@ -83,6 +84,11 @@ does not set these headers itself.
 | `POST`   | `/auth/oidc/start` | public | body `{redirect_after?}` → identity-provider authorization URL |
 | `GET`    | `/auth/oidc/callback` | public | Identity-provider callback; redirects to dashboard login completion |
 | `POST`   | `/auth/oidc/exchange` | public | body `{code}` → same JWT response as `/auth/login` |
+| `POST`   | `/auth/app-access/preview` | public | body `{code}` → `{app_id, app_name, username, display_name, expires_at}`; read-only, does not consume |
+| `POST`   | `/auth/app-access/exchange` | public | body `{code}` → app-scoped JWT (`scope: "app"`, `app_id`, 2h TTL) plus `redirect`; consumes the one-time MiniApp access link. Only this app's routes and read-only bootstrap endpoints are allowed. The redirect opens the MiniApp full-screen runtime (no dashboard shell) |
+| `POST`   | `/auth/channel-bindings/code` | user | Mint a one-time IM bind code (5 min) to send as `/bind <code>` in a private chat |
+| `GET`    | `/auth/channel-bindings` | user | `{identities: [{channel_type, subject_id, verified_at}]}` bound to this account |
+| `DELETE` | `/auth/channel-bindings` | user | Query `channel_type`, `subject_id` → `204`; only removes bindings owned by the caller |
 | `GET`    | `/auth/oidc/config` | admin | OIDC provider configuration and callback URL; client secret is omitted |
 | `PUT`    | `/auth/oidc/config` | admin | Write OIDC provider configuration; `client_secret` is write-only |
 | `POST`   | `/auth/oidc/config/test` | admin | Verify configured discovery metadata and JWKS endpoint |

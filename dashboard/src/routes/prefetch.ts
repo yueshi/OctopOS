@@ -32,6 +32,7 @@ const ROUTE_PREFETCHERS: Record<string, () => Promise<unknown>> = {
   "/memory": () => import("../pages/Agent/Personalization"),
   "/admin/models": () => import("../pages/Settings/Models"),
   "/admin/users": () => import("../pages/Admin/Users"),
+  "/admin/setup-plans": () => import("../pages/Admin/SetupPlans"),
   "/admin/backend": () => import("../pages/Admin/Storage"),
   "/admin/plugins": () => import("../pages/Admin/Plugins"),
   "/admin/security": () => import("../pages/Settings/Security"),

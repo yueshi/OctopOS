@@ -10,7 +10,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.config import get_config
 from pydantic import Field
 
-from octop.infra.agents.tool_scope import current_tool_scope
+from octop.infra.agents.tool_scope import current_tool_context, current_tool_scope
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps.integration_ops import (
     integration_health,
@@ -34,6 +34,9 @@ APP_DELETE_TOOL_NAME = "app_delete"
 
 APP_TOOL_NAMES: tuple[str, ...] = (
     "app_inspect_file",
+    "app_propose_plan",
+    "app_get_plan",
+    "app_cancel_plan",
     "app_list",
     "app_list_bindings",
     "app_add_service",
@@ -117,7 +120,7 @@ def _tool_ctx() -> tuple[str, int]:
     scope = current_tool_scope()
     if scope is not None:
         return scope
-    cfg = get_config().get("configurable") or {}
+    cfg = _tool_config()
     agent_id = cfg.get("agent_id")
     user_raw = cfg.get("user")
     if not agent_id:
@@ -127,14 +130,93 @@ def _tool_ctx() -> tuple[str, int]:
     return str(agent_id), int(user_raw)
 
 
+def _tool_config() -> dict[str, Any]:
+    """Harness ``configurable`` plus the HITL-resume channel scope.
+
+    A resume invocation carries only ``thread_id``; the manager restores the
+    original IM context through :func:`current_tool_context`.
+    """
+    try:
+        config = dict(get_config().get("configurable") or {})
+    except RuntimeError:
+        config = {}
+    scope = current_tool_context()
+    if scope is not None:
+        if not str(config.get("octop_source") or "").strip() and scope.source:
+            config["octop_source"] = scope.source
+        if not str(config.get("session_key") or "").strip() and scope.session_key:
+            config["session_key"] = scope.session_key
+        if scope.identity_verified and not config.get("octop_identity_verified"):
+            config["octop_identity_verified"] = True
+    return config
+
+
 def _tool_source() -> str:
     """Channel source for the current turn, e.g. ``weixin/01M5...``."""
-    cfg = get_config().get("configurable") or {}
-    return str(cfg.get("octop_source") or "").strip()
+    return str(_tool_config().get("octop_source") or "").strip()
 
 
 def _is_dashboard_source(source: str) -> bool:
     return not source or source.split("/", 1)[0] in {"dashboard", "web"}
+
+
+def _tool_identity_verified() -> bool:
+    return bool(_tool_config().get("octop_identity_verified"))
+
+
+def _session_chat_type() -> str:
+    """Chat type from the session key, with the HITL-scope value as fallback."""
+    session_key = str(_tool_config().get("session_key") or "")
+    if session_key:
+        _subject, _, chat_type = session_key.rpartition(":")
+        if chat_type:
+            return chat_type.strip().lower()
+    scope = current_tool_context()
+    return scope.chat_type.strip().lower() if scope is not None else ""
+
+
+def _source_channel_type(source: str) -> str:
+    return source.split("/", 1)[0].strip().lower() if source else ""
+
+
+def _current_thread_id() -> str | None:
+    thread_id = _tool_config().get("thread_id")
+    return str(thread_id).strip() or None if thread_id else None
+
+
+def _reject_if_plan_app(service: AppService, app_id: str) -> None:
+    """Keep the plan's app untouched by direct writes until the plan executes."""
+    plan = service.active_setup_plan(_current_thread_id())
+    if plan is not None and plan.app_id == app_id:
+        raise ValueError(
+            "this app is owned by an active MiniApp setup plan; use the plan card to import data"
+        )
+
+
+def _setup_plan_payload(plan: Any, *, include_report: bool = False) -> dict[str, Any]:
+    raw_table = plan.table if isinstance(plan.table, dict) else {}
+    tables = raw_table.get("tables")
+    if not isinstance(tables, list) or not tables:
+        tables = [raw_table] if raw_table.get("columns") else []
+    data: dict[str, Any] = {
+        "plan_id": plan.plan_id,
+        "status": plan.status,
+        "revision": plan.revision,
+        "name": plan.name,
+        "app_id": plan.app_id,
+        "file": plan.source_path,
+        "table": plan.table,
+        "tables": tables,
+        "services": raw_table.get("services") or [],
+        "capabilities": raw_table.get("capabilities"),
+        "dry_run": plan.dry_run,
+        "result": plan.result,
+        "error": plan.error,
+        "expires_at": plan.expires_at,
+    }
+    if include_report:
+        data["report"] = plan.report
+    return data
 
 
 def _ok(data: Any) -> str:
@@ -416,6 +498,162 @@ async def _share_link_payload(
     return blocks
 
 
+def _session_subject() -> str:
+    """Subject segment of ``agent:channel:subject:chat_type`` (may contain colons)."""
+    session_key = str(_tool_config().get("session_key") or "")
+    parts = session_key.split(":", 2)
+    if len(parts) != 3:
+        return ""
+    subject, _, _chat_type = parts[2].rpartition(":")
+    return subject
+
+
+def _resolve_app_by_name(
+    service: AppService,
+    agent_id: str,
+    user_id: int,
+    name: str,
+) -> LightAppRow:
+    """Find an app by name among apps the user can actually view."""
+    is_admin = service.is_admin(user_id)
+    if not (is_admin or service.is_agent_accessible(agent_id, user_id)):
+        raise _access_error(
+            service,
+            agent_id=agent_id,
+            app_id=None,
+            user_id=user_id,
+            needed="view",
+            code="APP_AGENT_NOT_ACCESSIBLE",
+            message="agent is not accessible to this user",
+        )
+    if is_admin:
+        rows = service.apps_for_agent(agent_id)
+    else:
+        rows = [
+            row
+            for row, _permission in service.list_for_user(user_id, is_admin=False)
+            if row.agent_id == agent_id
+        ]
+    needle = name.strip().lower()
+    exact = [candidate for candidate in rows if candidate.name.strip().lower() == needle]
+    matches = exact or [candidate for candidate in rows if needle in candidate.name.lower()]
+    if not matches:
+        raise ValueError(f"MiniApp not found: {name}")
+    if len(matches) > 1:
+        options = ", ".join(f"{item.name} ({item.app_id})" for item in matches[:5])
+        raise ValueError(f"more than one MiniApp matches {name!r}: {options}")
+    row = matches[0]
+    service.require(row, user_id, "view", is_admin=is_admin)
+    return row
+
+
+def _auth_link_missing(source: str, public_base_url: str) -> list[str]:
+    missing: list[str] = []
+    if not public_base_url.strip():
+        missing.append("public_base_url")
+    if _is_dashboard_source(source):
+        missing.append("im_source")
+    if _session_chat_type() != "dm":
+        missing.append("dm_chat")
+    if not _tool_identity_verified():
+        missing.append("identity_verified")
+    return missing
+
+
+def _can_issue_auth_link(source: str, public_base_url: str) -> bool:
+    return not _auth_link_missing(source, public_base_url)
+
+
+async def _channel_link_payload(
+    service: AppService,
+    row: LightAppRow,
+    *,
+    user_id: int,
+    source: str,
+    public_base_url: str,
+    mode: str,
+    rotate: bool,
+    ttl_days: int,
+    origin: str = "app_share_link",
+) -> list[dict[str, Any]]:
+    """Return either a personal sign-in link or the public read-only link."""
+    if mode not in {"auto", "public", "auth"}:
+        raise ValueError("mode must be auto, public or auth")
+    if mode == "auth" and rotate:
+        raise ValueError("rotate only applies to public links")
+    permission = service.permission_for(
+        row,
+        user_id,
+        is_admin=service.is_admin(user_id),
+    )
+    if permission is None:
+        raise ValueError("this user has no permission on this MiniApp")
+    auth_ready = _can_issue_auth_link(source, public_base_url)
+    is_manager = service.is_admin(user_id) or row.owner_user_id == user_id
+
+    if mode == "auth":
+        missing = _auth_link_missing(source, public_base_url)
+        if missing:
+            guidance = (
+                " This turn is from the dashboard; personal links require a verified "
+                "channel identity in a private IM chat."
+                if _is_dashboard_source(source)
+                else " Personal links require the sender to be /bind-verified as the "
+                "app owner in a private IM chat; use a public link otherwise."
+            )
+            raise ValueError(
+                "auth links require a verified channel identity in a private IM chat and a configured "
+                f"public_base_url (missing: {', '.join(missing)}; "
+                f"source={source or 'unknown'}; chat_type={_session_chat_type() or 'unknown'})."
+                f"{guidance} Do not create the link with a script, shell command, database "
+                "query or platform source; retry app_share_link from the IM chat."
+            )
+        use_auth = True
+    elif mode == "public":
+        use_auth = False
+    elif rotate:
+        # Rotating a public link must not silently return a personal auth link.
+        use_auth = False
+    else:
+        use_auth = auth_ready
+
+    if use_auth:
+        token, _expires_at = service.create_access_link(
+            row,
+            user_id=user_id,
+            channel_type=_source_channel_type(source),
+            channel_subject_id=_session_subject(),
+            origin=origin,
+        )
+        # Query, not fragment: IM clients (notably the WeChat in-app browser)
+        # mangle `#code=...` into a broken path, so the confirm page never
+        # renders. The SPA reads both forms (see AppAccessComplete).
+        url = f"{public_base_url.rstrip('/')}/login/app-access?code={token}"
+        return [
+            {"type": "text", "text": f"{row.name}\n{url}"},
+            {
+                "type": "text",
+                "text": (f"single_use=true\nvalid_for_seconds={service.ACCESS_LINK_TTL_SECONDS}"),
+            },
+        ]
+
+    if not is_manager:
+        raise ValueError("only the app owner or an admin can manage public links")
+    service.require(row, user_id, "edit_structure", is_admin=service.is_admin(user_id))
+    payload = await _share_link_payload(
+        service,
+        row,
+        user_id=user_id,
+        rotate=rotate,
+        ttl_days=ttl_days,
+        public_base_url=public_base_url,
+    )
+    warning = await _share_link_warning(service, row)
+    if warning:
+        payload.append({"type": "text", "text": warning})
+    return payload
+
+
 def build_app_tools(
     service: AppService,
     *,
@@ -463,6 +701,142 @@ def build_app_tools(
         except Exception as exc:
             return _err(exc)
 
+    async def app_propose_plan(
+        path: Annotated[
+            str,
+            Field(description="Workspace-relative path of the inspected spreadsheet."),
+        ],
+        name: Annotated[
+            str,
+            Field(description="Short display name shown in the app list (max 100 characters)."),
+        ],
+        columns: Annotated[
+            list[dict[str, Any]] | None,
+            Field(
+                description=(_COLUMNS_HELP + " Omit when passing `tables` for a multi-sheet plan.")
+            ),
+        ] = None,
+        sheet: Annotated[
+            str | None,
+            Field(description="Sheet name from the inspection report."),
+        ] = None,
+        header_row: Annotated[
+            int | None,
+            Field(description="0-based header row from the inspection report."),
+        ] = None,
+        mapping: Annotated[
+            dict[str, str] | None,
+            Field(description="Optional source header -> schema column map."),
+        ] = None,
+        upsert_key: Annotated[
+            list[str] | None,
+            Field(description="Columns whose combined value identifies an existing row."),
+        ] = None,
+        include_pii: Annotated[
+            bool,
+            Field(description="Import values of columns detected as sensitive."),
+        ] = False,
+        tables: Annotated[
+            list[dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Multi-sheet plan: a list of {key?, label?, sheet, header_row?, "
+                    "columns, mapping?, upsert_key?, include_pii?}. The first table "
+                    "becomes main; keys must be unique. Omit for a single table."
+                )
+            ),
+        ] = None,
+        services: Annotated[
+            list[dict[str, Any]] | None,
+            Field(
+                description=(
+                    "Optional service declarations applied after the import: "
+                    "{name, provider, connector_instance_id?, connector_kind?, "
+                    "allowed_tools, allowed_url_prefixes?, request_headers?, "
+                    "cache_ttl_seconds?, max_calls_per_minute?, enabled?}."
+                )
+            ),
+        ] = None,
+        capabilities: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Optional page capability list applied after the import. "
+                    "Owner-only capabilities are rejected during proposal."
+                )
+            ),
+        ] = None,
+    ) -> str:
+        """Create a durable setup plan and show the confirmation card.
+
+        The tool has no MiniApp side effects: it only writes the draft plan. The
+        user confirms it in the dashboard card; the backend then creates the
+        app and runs a dry-run before the explicit import action.
+        """
+        try:
+            agent_id, user_id = _tool_ctx()
+            if not _is_dashboard_source(_tool_source()):
+                raise ValueError(
+                    "app_propose_plan is available in the dashboard only; "
+                    "use app_create/app_import_rows directly in this channel"
+                )
+            plan = await service.propose_setup_plan(
+                agent_id=agent_id,
+                user_id=user_id,
+                thread_id=_current_thread_id(),
+                path=path,
+                name=name,
+                columns=columns,
+                sheet=sheet,
+                header_row=header_row,
+                mapping=mapping,
+                upsert_key=upsert_key,
+                include_pii=include_pii,
+                tables=tables,
+                services=services,
+                capabilities=capabilities,
+            )
+            return _ok(
+                {
+                    "octop_ui": {"renderer": "app_inspect_card", "version": 2},
+                    "data": _setup_plan_payload(plan),
+                    "text": (
+                        f"Setup plan {plan.plan_id} proposed for {plan.name}; "
+                        "wait for the user to confirm it in the plan card."
+                    ),
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_get_plan(
+        plan_id: Annotated[
+            str,
+            Field(description="Plan id returned by app_propose_plan."),
+        ],
+    ) -> str:
+        """Read a setup plan's compact state and confirmed schema."""
+        try:
+            _, user_id = _tool_ctx()
+            plan = await service.get_setup_plan(plan_id, user_id)
+            return _ok(_setup_plan_payload(plan))
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_cancel_plan(
+        plan_id: Annotated[
+            str,
+            Field(description="Plan id returned by app_propose_plan."),
+        ],
+    ) -> str:
+        """Cancel a setup plan and remove its empty app, before import."""
+        try:
+            _, user_id = _tool_ctx()
+            plan = await service.cancel_setup_plan(plan_id, user_id=user_id)
+            return _ok(_setup_plan_payload(plan))
+        except Exception as exc:
+            return _err(exc)
+
     async def app_list() -> str:
         try:
             agent_id, user_id = _tool_ctx()
@@ -472,7 +846,11 @@ def build_app_tools(
             rows = (
                 service.apps_for_agent(agent_id)
                 if is_admin
-                else service.list_for_agent(agent_id, user_id)
+                else [
+                    row
+                    for row, _permission in service.list_for_user(user_id, is_admin=is_admin)
+                    if row.agent_id == agent_id
+                ]
             )
             return _ok(
                 {
@@ -523,7 +901,12 @@ def build_app_tools(
         ],
         provider: Annotated[
             str,
-            Field(description="connector (authenticated) or external (public source)."),
+            Field(
+                description=(
+                    "connector (authenticated; requires connector_instance_id) or "
+                    "external (public source; the server auto-provisions a connector)."
+                )
+            ),
         ],
         allowed_tools: Annotated[
             list[str],
@@ -547,8 +930,8 @@ def build_app_tools(
             Field(
                 description=(
                     "Existing connector instance owned by the app owner/admin. "
-                    "Omit for a credential-free public source; the server "
-                    "reuses or auto-creates the connector."
+                    "Required when provider=connector. Omit for provider=external; "
+                    "the server auto-provisions the public connector."
                 )
             ),
         ] = "",
@@ -556,8 +939,9 @@ def build_app_tools(
             str | None,
             Field(
                 description=(
-                    "Connector kind to auto-provision when the instance is "
-                    "empty: http-extract (default) or douban."
+                    "Connector kind to auto-provision for provider=external: "
+                    "http-extract (default) or douban. Ignored when "
+                    "connector_instance_id is set."
                 )
             ),
         ] = None,
@@ -664,21 +1048,21 @@ def build_app_tools(
             source = _tool_source()
             if _is_dashboard_source(source):
                 return _ok(await _app_card(service, row))
-            # IM channels cannot render the dashboard app_card. A public link
-            # plus a plain-text description is the channel-safe equivalent.
+            # IM channels cannot render the dashboard app_card. Prefer a
+            # personal sign-in link for bound private chats; otherwise fall
+            # back to the public link or a plain-text description.
             try:
-                _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-                payload = await _share_link_payload(
+                payload = await _channel_link_payload(
                     service,
                     row,
                     user_id=user_id,
+                    source=source,
+                    public_base_url=public_base_url,
+                    mode="auto",
                     rotate=False,
                     ttl_days=0,
-                    public_base_url=public_base_url,
+                    origin="app_open",
                 )
-                warning = await _share_link_warning(service, row)
-                if warning:
-                    payload.append({"type": "text", "text": warning})
                 return _ok(payload)
             except ValueError:
                 lines = [row.name]
@@ -710,46 +1094,35 @@ def build_app_tools(
             int,
             Field(ge=0, le=3650, description="Link lifetime in days; 0 means no expiry."),
         ] = 0,
+        mode: Annotated[
+            str,
+            Field(
+                description=(
+                    "auto (default): a personal one-time sign-in link in a bound private "
+                    "IM chat, otherwise the public link; public: force the public link; "
+                    "auth: require a personal one-time sign-in link."
+                )
+            ),
+        ] = "auto",
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            is_admin = service.is_admin(user_id)
             if app_id:
-                row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
+                row = _get_for_actor(service, app_id, agent_id, user_id, "view")
             elif name and name.strip():
-                needle = name.strip().lower()
-                rows = (
-                    service.apps_for_agent(agent_id)
-                    if is_admin
-                    else service.list_for_agent(agent_id, user_id)
-                )
-                exact = [
-                    candidate for candidate in rows if candidate.name.strip().lower() == needle
-                ]
-                matches = exact or [
-                    candidate for candidate in rows if needle in candidate.name.lower()
-                ]
-                if not matches:
-                    raise ValueError(f"MiniApp not found: {name}")
-                if len(matches) > 1:
-                    options = ", ".join(f"{item.name} ({item.app_id})" for item in matches[:5])
-                    raise ValueError(f"more than one MiniApp matches {name!r}: {options}")
-                row = matches[0]
-                service.require(row, user_id, "edit_structure", is_admin=is_admin)
+                row = _resolve_app_by_name(service, agent_id, user_id, name)
             else:
                 raise ValueError("app_id or name is required")
-            _require_manager(service, row, user_id)
-            payload = await _share_link_payload(
+            payload = await _channel_link_payload(
                 service,
                 row,
                 user_id=user_id,
+                source=_tool_source(),
+                public_base_url=public_base_url,
+                mode=mode,
                 rotate=rotate,
                 ttl_days=ttl_days,
-                public_base_url=public_base_url,
             )
-            warning = await _share_link_warning(service, row)
-            if warning:
-                payload.append({"type": "text", "text": warning})
             return _ok(payload)
         except Exception as exc:
             return _err(exc)
@@ -782,6 +1155,12 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
+            active_plan = service.active_setup_plan(_current_thread_id())
+            if active_plan is not None:
+                raise ValueError(
+                    "a MiniApp setup plan is active in this conversation; "
+                    "confirm or cancel it before calling app_create"
+                )
             is_admin = service.is_admin(user_id)
             if not (is_admin or service.is_agent_accessible(agent_id, user_id)):
                 raise _access_error(
@@ -837,6 +1216,7 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
+            _reject_if_plan_app(service, app_id)
             schema = await service.add_columns(row, columns, table=table)
             return _ok(
                 {
@@ -943,7 +1323,8 @@ def build_app_tools(
                     "Complete page capability list. Pass [] to deny every page action; "
                     "high-risk actions (ai.generate, game.launch, external.fetch, "
                     "events.emit, schedules.manage) must be enabled by the owner in the "
-                    "app detail page and are rejected here."
+                    "app detail page and are rejected here. Do not retry a rejected "
+                    "call; ask the owner to enable the capability instead."
                 )
             ),
         ],
@@ -1012,6 +1393,7 @@ def build_app_tools(
                     code="APP_AGENT_NOT_ACCESSIBLE",
                     message="agent is not accessible to this user",
                 )
+            active_plan = service.active_setup_plan(_current_thread_id())
             row = await service.create_from_template(
                 agent_id=agent_id,
                 owner_user_id=user_id,
@@ -1020,6 +1402,13 @@ def build_app_tools(
                 name=name,
                 description=description,
             )
+            if active_plan is not None:
+                await service.supersede_setup_plan(
+                    active_plan.plan_id,
+                    reason="app_create_from_template",
+                    app_id=row.app_id,
+                    actor_user_id=user_id,
+                )
             if is_admin and not service.is_agent_owner(agent_id, user_id):
                 service.audit_admin_override(
                     user_id=user_id,
@@ -1157,6 +1546,7 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            _reject_if_plan_app(service, app_id)
             index, stored = await service.append_row_record(
                 app,
                 row,
@@ -1197,6 +1587,7 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            _reject_if_plan_app(service, app_id)
             updated = await service.update_row(
                 app,
                 row_id,
@@ -1231,6 +1622,7 @@ def build_app_tools(
         try:
             agent_id, user_id = _tool_ctx()
             app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            _reject_if_plan_app(service, app_id)
             deleted = await service.delete_row(
                 app,
                 row_id,
@@ -1333,6 +1725,21 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
+            active_plan = service.active_setup_plan(_current_thread_id())
+            if active_plan is not None:
+                source_paths = set(paths or [])
+                if path:
+                    source_paths.add(path)
+                belongs_to_plan = (
+                    active_plan.app_id == app_id
+                    if active_plan.app_id
+                    else active_plan.source_path in source_paths
+                )
+                if belongs_to_plan:
+                    raise ValueError(
+                        "this import belongs to an active MiniApp setup plan; "
+                        "use the plan card to dry-run and import"
+                    )
             app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
             if paths and path:
                 raise ValueError("use either path or paths, not both")
@@ -1854,8 +2261,39 @@ def build_app_tools(
             description=(
                 "Inspect a spreadsheet file in the workspace and return a compact report: "
                 "sheets, header row, per-column type/emptiness/distinct counts, sample "
-                "values and PII warnings. Use it before creating an app from a ledger — "
-                "never read the file row by row."
+                "values and PII warnings. Read-only; it does not create an app. To turn "
+                "a ledger into an app, call app_propose_plan and wait for the user to "
+                "confirm the plan card."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_propose_plan,
+            name="app_propose_plan",
+            description=(
+                "Create a durable MiniApp setup plan from an inspected spreadsheet and "
+                "show the user a plan card. Supports one table or a multi-sheet tables "
+                "list, plus optional service/capability declarations that run after the "
+                "import under the same approval. This does NOT create the app. The user "
+                "confirms the card, then the backend creates the app and runs a dry-run; "
+                "the user explicitly approves the real import. Do not call app_create, "
+                "app_import_rows, app_add_service or app_set_capabilities for this plan. "
+                "Dashboard only."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_get_plan,
+            name="app_get_plan",
+            description=(
+                "Read a setup plan's status, confirmed schema and dry-run/import result. "
+                "Use it after the user confirms or executes a plan instead of re-inspecting."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=app_cancel_plan,
+            name="app_cancel_plan",
+            description=(
+                "Cancel a MiniApp setup plan and remove its empty app. Only valid before "
+                "the real import; after import use app_delete with its normal approval."
             ),
         ),
         StructuredTool.from_function(
@@ -1902,23 +2340,25 @@ def build_app_tools(
             description=(
                 "Open an existing lightweight app in the chat. Call this when the user "
                 "asks to open, show or use an app; the dashboard renders an app card "
-                "with an inline preview and an open button. On IM channels this "
-                "returns a public link + plain text instead."
+                "with an inline preview and an open button. On IM channels this returns "
+                "a personal one-time sign-in link in a private chat when the sender is "
+                "bound to the app owner, otherwise a public link + plain text."
             ),
         ),
         StructuredTool.from_function(
             coroutine=app_share_link,
             name="app_share_link",
             description=(
-                "Get a channel-ready entry for a lightweight app in ONE call: reuses "
-                "or creates its read-only public link, returns a plain-text message "
-                "and (when available) a cover. Use this for chat/IM requests such "
-                "as 'give me the entry/link/card for X'. The result may include a "
-                "sharing notice (public/private tables, masked or unmarked PII); "
-                "relay that notice to the user in their language before sharing. "
-                "Treat the returned text as the final answer: do not browse, "
-                "screenshot, curl, query the database, read source code, download "
-                "or self-host the app afterwards."
+                "Get a channel-ready entry for a lightweight app in ONE call. In a "
+                "private IM chat whose sender is /bind-verified as the app owner, this "
+                "returns a personal one-time sign-in link (valid 10 minutes, never "
+                "forward it); otherwise it reuses or creates the read-only public link "
+                "and, when available, a cover. Use this for chat/IM requests such as "
+                "'give me the entry/link/card for X'. Public results may include a "
+                "sharing notice (public/private tables, masked or unmarked PII); relay "
+                "that notice to the user in their language. Treat the returned text as "
+                "the final answer: do not browse, screenshot, curl, query the database, "
+                "read source code, download or self-host the app afterwards."
             ),
         ),
         StructuredTool.from_function(

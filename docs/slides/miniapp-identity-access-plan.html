@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Octop MiniApp · 用户管理与接入完整方案 v3</title>
+<style>
+  :root{
+    --ink:#1b2233; --muted:#5b6472; --line:#e4e8f0;
+    --brand:#e85d75; --brand-2:#ff8a65; --brand-soft:#fdeef1;
+    --blue:#2f6fed; --blue-soft:#eaf1fe;
+    --teal:#0e9384; --teal-soft:#e6f6f3;
+    --amber:#d97706; --amber-soft:#fdf3e3;
+    --violet:#7c3aed; --violet-soft:#f2ecfc;
+    --green:#059669; --green-soft:#e7f6f0;
+    --red:#dc2626; --red-soft:#fef0f0;
+    --bg:#e9edf4; --chip:#f3f5f9;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:var(--bg);overflow:hidden;
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",-apple-system,"Segoe UI",sans-serif;
+    color:var(--ink);-webkit-font-smoothing:antialiased}
+  #viewport{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  #stage{width:1280px;height:720px;position:relative;transform-origin:center center;flex:none}
+  .slide{position:absolute;inset:0;background:#fff;border-radius:14px;
+    box-shadow:0 12px 44px rgba(28,35,51,.13);padding:36px 54px 52px;
+    display:none;flex-direction:column;overflow:hidden;
+    --sec:var(--brand);--sec-soft:var(--brand-soft)}
+  .slide::before{content:"";position:absolute;top:0;left:0;right:0;height:5px;
+    background:linear-gradient(90deg,var(--sec),rgba(232,93,117,0) 92%)}
+  .slide.active{display:flex;animation:rise .42s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: reduce){.slide.active{animation:none}}
+  .s-id{--sec:var(--brand);--sec-soft:var(--brand-soft)}
+  .s-access{--sec:var(--blue);--sec-soft:var(--blue-soft)}
+  .s-im{--sec:var(--teal);--sec-soft:var(--teal-soft)}
+  .s-data{--sec:var(--amber);--sec-soft:var(--amber-soft)}
+  .s-risk{--sec:var(--red);--sec-soft:var(--red-soft)}
+  .s-road{--sec:var(--violet);--sec-soft:var(--violet-soft)}
+  .kicker{font-size:12.5px;font-weight:800;letter-spacing:.18em;color:var(--sec);
+    text-transform:uppercase;margin-bottom:7px;display:flex;align-items:center;gap:8px}
+  .kicker::before{content:"";width:9px;height:9px;border-radius:3px;background:var(--sec);flex:none}
+  h2.title{font-size:31px;font-weight:850;line-height:1.22;margin-bottom:4px;letter-spacing:-.01em}
+  .subtitle{font-size:15px;color:var(--muted);margin-bottom:14px;line-height:1.45}
+  .body{flex:1;min-height:0}
+  .footer{position:absolute;left:54px;right:54px;bottom:15px;display:flex;justify-content:space-between;
+    font-size:11px;color:#9aa3b2;border-top:1px solid var(--line);padding-top:8px}
+  .footer b{color:var(--sec);font-weight:700}
+
+  /* ---------- cover ---------- */
+  .cover{justify-content:center;color:#fff;
+    background:
+      radial-gradient(980px 560px at 90% -12%, rgba(232,93,117,.46), transparent 62%),
+      radial-gradient(780px 500px at -8% 112%, rgba(14,147,132,.28), transparent 62%),
+      linear-gradient(150deg,#121726 0%,#1b2136 55%,#262d49 100%)}
+  .cover::before{background:linear-gradient(90deg,#e85d75,#ffb199 48%,transparent 92%);height:6px}
+  .cover .brand{font-size:13px;font-weight:800;letter-spacing:.3em;color:#f6a8b6;margin-bottom:24px}
+  .cover h1{font-size:57px;font-weight:900;line-height:1.16;margin-bottom:12px;letter-spacing:.01em}
+  .cover h1 em{font-style:normal;background:linear-gradient(90deg,#ffb1bf,#ffd0a8);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .cover .tagline{font-size:19px;color:#c8cfe2;margin-bottom:30px}
+  .stats{display:flex;gap:13px;margin-bottom:28px}
+  .stat{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);
+    border-radius:12px;padding:12px 18px;text-align:center;min-width:142px}
+  .stat .v{font-size:26px;font-weight:900;background:linear-gradient(90deg,#ffb1bf,#ffd6b0);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat .l{font-size:11.5px;color:#b9c2d9;margin-top:3px;line-height:1.35}
+  .cover .meta{display:flex;gap:24px;font-size:13.5px;color:#9aa5c4}
+  .cover .meta b{color:#e7eaf5;font-weight:600}
+  .cover .footer{border-top:1px solid rgba(255,255,255,.14);color:#8b96b5}
+
+  /* ---------- generic ---------- */
+  .cols{display:flex;gap:18px;height:100%;min-height:0}
+  .col{flex:1;min-width:0}
+  .card{border:1px solid var(--line);border-radius:12px;padding:13px 16px;background:#fff;
+    box-shadow:0 1px 2px rgba(28,35,51,.04)}
+  .card h4{font-size:14.5px;font-weight:800;margin-bottom:7px;display:flex;align-items:center;gap:8px}
+  .card p{font-size:13px;color:#4b5563;line-height:1.55}
+  .ic{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+    font-size:16px;background:var(--sec-soft);flex:none}
+  ul.tick{list-style:none}
+  ul.tick li{font-size:13.5px;line-height:1.5;padding:4px 0 4px 21px;position:relative;color:#333b4a}
+  ul.tick li::before{content:"";position:absolute;left:2px;top:10px;width:7px;height:7px;border-radius:2px;
+    background:linear-gradient(135deg,var(--sec),#f0a8b5)}
+  ul.tick li b{color:var(--ink)}
+  ul.dash{list-style:none}
+  ul.dash li{font-size:13px;line-height:1.5;padding:3px 0 3px 16px;position:relative;color:#333b4a}
+  ul.dash li::before{content:"—";position:absolute;left:0;color:#b6bdc9}
+  code{font-family:"SFMono-Regular",Consolas,"JetBrains Mono",monospace;font-size:.86em;
+    background:var(--chip);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:#37406b;
+    white-space:nowrap}
+  table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
+  th{font-size:11.5px;font-weight:800;color:var(--muted);text-align:left;letter-spacing:.05em;
+    padding:6px 9px;border-bottom:2px solid var(--line);background:var(--chip);white-space:nowrap}
+  th:first-child{border-radius:8px 0 0 0} th:last-child{border-radius:0 8px 0 0}
+  td{padding:6px 9px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.45;color:#333b4a}
+  tr:last-child td{border-bottom:none}
+  .chip{display:inline-block;font-size:10.5px;font-weight:800;border-radius:999px;padding:2px 8px;white-space:nowrap}
+  .chip.now{color:var(--green);background:var(--green-soft)}
+  .chip.plan{color:var(--violet);background:var(--violet-soft)}
+  .chip.warn{color:var(--red);background:var(--red-soft)}
+  .chip.blue{color:var(--blue);background:var(--blue-soft)}
+  .badge{font-size:10.5px;font-weight:700;border-radius:5px;padding:1px 7px;background:var(--sec-soft);color:var(--sec);white-space:nowrap}
+
+  /* ---------- summary cards ---------- */
+  .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;height:100%;min-height:0}
+  .scard{border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px;background:linear-gradient(180deg,#fff,#fcfdfe);
+    position:relative;overflow:hidden}
+  .scard::after{content:"";position:absolute;right:-28px;top:-28px;width:100px;height:100px;border-radius:50%;
+    background:var(--sec-soft);opacity:.75}
+  .scard .num{font-size:12px;font-weight:900;color:var(--sec);letter-spacing:.14em;margin-bottom:9px}
+  .scard h3{font-size:18px;font-weight:850;line-height:1.3;margin-bottom:8px;position:relative;z-index:1}
+  .scard p{font-size:13px;color:#4b5563;line-height:1.6;position:relative;z-index:1}
+  .scard code{font-size:12px}
+  .band{border-radius:12px;border:1.5px solid var(--line);padding:12px 16px;background:linear-gradient(135deg,#fff7f8,#f8fbff)}
+  .band b{color:var(--brand)}
+
+  /* ---------- identity map ---------- */
+  .identity-map{display:flex;align-items:center;gap:9px;margin-top:14px}
+  .identity-map .im-box{flex:1;border:1.5px solid var(--line);border-radius:11px;padding:10px 13px;background:#fbfcfe}
+  .identity-map .im-box.hl{border-color:var(--brand);background:linear-gradient(180deg,#fff,var(--brand-soft))}
+  .identity-map .im-box b{display:block;font-size:13.5px;margin-bottom:2px}
+  .identity-map .im-box span{font-size:10.5px;color:var(--muted)}
+  .identity-map .im-arrow{flex:none;font-size:10.5px;font-weight:800;color:var(--brand);background:var(--brand-soft);
+    border-radius:999px;padding:3px 9px;white-space:nowrap}
+  /* ---------- persona ---------- */
+  .persona{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-content:start}
+  .pcard{border:1px solid var(--line);border-radius:13px;padding:15px 16px;background:#fff;display:flex;flex-direction:column}
+  .pcard .hd{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+  .pcard h3{font-size:16px;font-weight:850}
+  .pcard .state{font-size:11px;font-weight:800;border-radius:999px;padding:2px 8px;margin-left:auto;white-space:nowrap}
+  .pcard .state.bad{color:var(--red);background:var(--red-soft)}
+  .pcard .state.mid{color:var(--amber);background:var(--amber-soft)}
+  .pcard p{font-size:12.5px;color:#4b5563;line-height:1.55;margin-bottom:8px}
+  .pcard .quote{font-size:12px;color:#6b7280;line-height:1.5;border-left:3px solid var(--sec-soft);padding-left:9px;margin-top:auto}
+
+  /* ---------- architecture ---------- */
+  .arch{display:flex;flex-direction:column;gap:9px;justify-content:flex-start}
+  .arch-row{display:flex;align-items:stretch;gap:9px}
+  .arch-label{width:78px;flex:none;display:flex;flex-direction:column;justify-content:center;
+    border-right:2px solid var(--sec-soft);padding-right:10px}
+  .arch-label b{font-size:12.5px;color:var(--sec);line-height:1.25}
+  .arch-label span{font-size:9.5px;color:var(--muted);letter-spacing:.04em;margin-top:2px}
+  .arch-box{flex:1;min-width:0;border:1.5px solid var(--line);border-radius:10px;background:#fbfcfe;
+    padding:9px 11px;text-align:center}
+  .arch-box h4{font-size:13px;font-weight:800;margin-bottom:2px}
+  .arch-box p{font-size:10.5px;color:var(--muted);line-height:1.35}
+  .arch-box.hl{border-color:var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft))}
+  .arch-arrow{text-align:center;font-size:12px;color:#aab2c2;line-height:1;margin:-2px 0}
+  .arch-arrow em{font-style:normal;font-size:10.5px;color:var(--muted);margin-left:8px}
+  .side-note{border:1px dashed var(--sec);border-radius:10px;padding:8px 11px;background:var(--sec-soft);
+    font-size:11.5px;color:#4b5563;line-height:1.45}
+  .side-note b{color:var(--sec)}
+
+  /* ---------- role matrix ---------- */
+  .matrix td:not(:first-child),.matrix th:not(:first-child){text-align:center}
+  .yes{color:var(--green);font-weight:900}
+  .no{color:#c3c8d2}
+  .part{color:var(--amber);font-weight:800;font-size:11px}
+  .rank{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--muted)}
+  .rank span{display:inline-flex;align-items:center;gap:5px}
+  .rank i{width:9px;height:9px;border-radius:50%;background:var(--sec);display:inline-block}
+
+  /* ---------- step list ---------- */
+  .steps{position:relative;padding-left:30px}
+  .steps::before{content:"";position:absolute;left:9px;top:9px;bottom:9px;width:2px;
+    background:linear-gradient(180deg,var(--sec),#d9deea)}
+  .step{position:relative;padding:5px 0}
+  .step .n{position:absolute;left:-30px;top:5px;width:20px;height:20px;border-radius:50%;
+    background:var(--sec);color:#fff;font-size:10.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .step h4{font-size:13.5px;font-weight:800;display:inline}
+  .step p{font-size:11.5px;color:var(--muted);line-height:1.4;margin-top:1px}
+
+  /* ---------- flow ---------- */
+  .flow{display:flex;align-items:stretch;gap:0}
+  .fbox{border:1.5px solid var(--line);border-radius:10px;background:#fbfcfe;padding:9px 11px;flex:1;min-width:0}
+  .fbox h5{font-size:12.5px;font-weight:800;margin-bottom:2px}
+  .fbox p{font-size:10.5px;color:var(--muted);line-height:1.35}
+  .fbox.hl{border-color:var(--sec);background:linear-gradient(180deg,#fff,var(--sec-soft))}
+  .farrow{display:flex;align-items:center;padding:0 5px;color:#aab2c2;font-size:16px;flex:none}
+
+  /* ---------- timeline ---------- */
+  .timeline{display:flex;gap:12px;position:relative;margin-top:6px}
+  .timeline::before{content:"";position:absolute;left:3%;right:3%;top:7px;height:3px;border-radius:2px;
+    background:linear-gradient(90deg,var(--brand),var(--blue),var(--teal),var(--violet))}
+  .tstage{flex:1;min-width:0;display:flex;flex-direction:column}
+  .tdot{width:15px;height:15px;border-radius:50%;margin:0 auto 9px;border:3.5px solid #fff;
+    box-shadow:0 0 0 2px currentColor;background:currentColor;position:relative;z-index:1}
+  .tstage:nth-child(1) .tdot{color:var(--brand)} .tstage:nth-child(2) .tdot{color:var(--blue)}
+  .tstage:nth-child(3) .tdot{color:var(--teal)} .tstage:nth-child(4) .tdot{color:var(--violet)}
+  .tcard{border:1.5px solid var(--line);border-radius:12px;padding:11px 12px;background:#fff;flex:1;
+    box-shadow:0 1px 2px rgba(28,35,51,.04)}
+  .tcard .ph{font-size:10px;font-weight:900;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+  .tcard h4{font-size:14px;font-weight:850;margin:3px 0 5px}
+  .tcard ul{list-style:none}
+  .tcard li{font-size:11px;line-height:1.45;padding:2px 0 2px 11px;position:relative;color:#364052}
+  .tcard li::before{content:"·";position:absolute;left:1px;color:#9aa3b2;font-weight:900}
+  .tcard .out{margin-top:6px;font-size:10.5px;color:var(--sec);font-weight:700;border-top:1px dashed var(--line);padding-top:5px}
+
+  /* ---------- checklist ---------- */
+  .check{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}
+  .check .item{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.45;color:#333b4a}
+  .check .box{width:17px;height:17px;border-radius:4px;border:1.5px solid var(--sec);flex:none;margin-top:1px;
+    color:var(--sec);font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center;background:var(--sec-soft)}
+
+  /* ---------- risk ---------- */
+  .risks{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .risk{border:1px solid var(--line);border-left:4px solid var(--sec);border-radius:10px;padding:10px 13px;background:#fff}
+  .risk .hd{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+  .risk h4{font-size:12.5px;font-weight:800;flex:1;min-width:0}
+  .risk p{font-size:11px;color:#4b5563;line-height:1.45}
+  .sev{font-size:9.5px;font-weight:900;border-radius:999px;padding:2px 7px;white-space:nowrap}
+  .sev.high{color:#fff;background:var(--red)} .sev.mid{color:var(--amber);background:var(--amber-soft)}
+
+  /* ---------- decisions ---------- */
+  .decisions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .decision{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:linear-gradient(180deg,#fff,#fcfdfe)}
+  .decision .q{font-size:12.5px;font-weight:800;margin-bottom:4px;display:flex;gap:8px;align-items:flex-start}
+  .decision .q .n{width:20px;height:20px;border-radius:50%;background:var(--sec);color:#fff;font-size:10.5px;
+    font-weight:800;display:flex;align-items:center;justify-content:center;flex:none}
+  .decision p{font-size:11.5px;color:#4b5563;line-height:1.5}
+  .decision .rec{margin-top:6px;font-size:11px;font-weight:800;color:var(--sec);background:var(--sec-soft);
+    display:inline-block;border-radius:6px;padding:2px 8px}
+
+  /* ---------- evidence ---------- */
+  .evidence td{font-size:10.5px;padding:4.5px 8px;line-height:1.4}
+  .evidence th{font-size:10.5px;padding:5px 8px}
+  .evidence code{font-size:9.8px;padding:0 4px}
+
+  /* ---------- hud ---------- */
+  #bar{position:fixed;top:0;left:0;height:4px;background:linear-gradient(90deg,var(--brand),var(--blue));width:0;z-index:20;transition:width .3s}
+  #hud{position:fixed;right:18px;bottom:14px;display:flex;gap:8px;align-items:center;z-index:20;
+    background:rgba(255,255,255,.92);border:1px solid var(--line);border-radius:999px;padding:6px 10px;
+    font-size:13px;color:var(--muted);box-shadow:0 4px 14px rgba(28,35,51,.10)}
+  #hud button{border:none;background:var(--chip);width:28px;height:28px;border-radius:50%;cursor:pointer;
+    font-size:14px;color:var(--ink);line-height:1}
+  #hud button:hover{background:#e4e8f5}
+  #pageno{min-width:52px;text-align:center;font-variant-numeric:tabular-nums}
+  @media screen{.footer span:last-child{display:none}}
+
+  @page{size:1280px 720px;margin:0}
+  @media print{
+    html,body{overflow:visible;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    #viewport{position:static;display:block}
+    #stage{width:auto;height:auto;transform:none!important}
+    .slide{display:flex!important;position:relative;inset:auto;width:1280px;height:720px;margin:0 auto 18px;
+      border-radius:0;box-shadow:none;page-break-after:always;animation:none}
+    #hud,#bar,.hint{display:none}
+  }
+</style>
+
+<style>
+  .pnum{font-variant-numeric:tabular-nums}
+  .quad{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .mini{font-size:11px;line-height:1.45;color:#4b5563}
+  .tag{display:inline-block;font-size:10px;font-weight:800;border-radius:999px;padding:2px 8px;white-space:nowrap}
+  .tag.ok{color:#059669;background:#e7f6f0}
+  .tag.warn{color:#dc2626;background:#fef0f0}
+  .tag.blue{color:#2f6fed;background:#eaf1fe}
+  .tag.violet{color:#7c3aed;background:#f2ecfc}
+  .tag.amber{color:#d97706;background:#fdf3e3}
+  .num-list{display:flex;flex-direction:column;gap:6px}
+  .num-list .row{display:flex;gap:9px;align-items:flex-start;font-size:12px;line-height:1.45;color:#333b4a}
+  .num-list .row .n{width:19px;height:19px;border-radius:50%;background:var(--sec);color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+  .matrix td:not(:first-child),.matrix th:not(:first-child){text-align:center}
+  .matrix .sm{font-size:10px;color:#6b7280}
+</style>
+</head>
+<body>
+
+<div id="bar"></div>
+<div id="viewport"><div id="stage">
+
+<!-- 1 cover -->
+<section class="slide cover active">
+  <div class="brand">OCTOP · MINIAPP PLATFORM · DESIGN PROPOSAL · V3</div>
+  <h1>从「公开链接」<br>到「<em>应用成员</em>」</h1>
+  <div class="tagline">统一主体 · 双模式参与者 · 表级可见性 · IM 分层接入</div>
+  <div class="stats">
+    <div class="stat"><div class="v">4</div><div class="l">类主体<br>member / guest / submission / anonymous</div></div>
+    <div class="stat"><div class="v">6</div><div class="l">种凭证 / 码</div></div>
+    <div class="stat"><div class="v">5</div><div class="l">级应用成员角色</div></div>
+    <div class="stat"><div class="v">5</div><div class="l">个阶段<br>P0 / P1 / P2a / P2b / P3</div></div>
+  </div>
+  <div class="meta">
+    <span>分支：<b>feature/miniapp-capabilities</b></span>
+    <span>日期：<b>2026-11-21</b></span>
+    <span>依据：<b>当前工作树代码核实</b></span>
+  </div>
+  <div class="footer"><span>Octop MiniApp · 用户管理与接入方案 v3</span><span class="pnum"></span></div>
+</section>
+
+<!-- 2 conclusion -->
+<section class="slide">
+  <div class="kicker">结论 · SUMMARY</div>
+  <h2 class="title">不做第二套账号系统，也不把 guest 当终态</h2>
+  <div class="subtitle">v3 修正：身份 / 凭证 / 授权三层各只有一个事实源；guest 只能 <code>participate</code>；P1 用 per-app token，不用 cookie。</div>
+  <div class="body">
+    <div class="summary" style="height:auto">
+      <div class="scard">
+        <div class="num">01 · PRINCIPAL</div>
+        <h3>PrincipalDirectory</h3>
+        <p>member / guest / submission / anonymous 统一解析；底层先用 <code>users.kind</code>，以后可换独立 principal 表，不让业务代码依赖表结构。</p>
+      </div>
+      <div class="scard">
+        <div class="num">02 · MEMBERSHIP</div>
+        <h3>成员 + 表级可见性</h3>
+        <p>应用成员关系决定访问；<code>member_visible</code> 决定 participant 能看哪张表；<code>row_owner</code> 决定哪一行属于谁。三者缺一不可。</p>
+      </div>
+      <div class="scard">
+        <div class="num">03 · AUTHORIZE</div>
+        <h3>先授权矩阵，后身份表</h3>
+        <p>HTTP / Agent / IM 统一走 <code>authorize(principal, app, action, table, row)</code>；PII 按行判定；export/aggregate 是独立 action。</p>
+      </div>
+    </div>
+    <div class="band" style="margin-top:14px">
+      <p style="font-size:13.5px;line-height:1.65;color:#333b4a">
+        <b>一句话：</b>平台账号决定「谁能进 Octop」，应用成员 + 表级可见性决定「谁能用哪个应用、看哪张表、哪一行」，IM 绑定只决定「这个聊天账号是谁」。
+        <b>身份、成员、授权三层分开，不能互相推导。</b>
+      </p>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:11px;font-size:11px;color:#6b7280;flex-wrap:wrap">
+      <span class="chip now">PrincipalDirectory</span>
+      <span class="chip now">表级可见性</span>
+      <span class="chip plan">双模式参与者</span>
+      <span class="chip plan">P2a / P2b 分层</span>
+      <span class="chip plan">host policy</span>
+    </div>
+    <div class="identity-map">
+      <div class="im-box"><b>Principal</b><span>member / guest / submission / anonymous</span></div>
+      <div class="im-arrow">成员 + 表可见性</div>
+      <div class="im-box hl"><b>应用数据</b><span>表 · 行 · PII · 配额</span></div>
+      <div class="im-arrow">authorize()</div>
+      <div class="im-box"><b>动作</b><span>read / write / export / share / ai</span></div>
+    </div>
+  </div>
+  <div class="footer"><span><b>结论</b> · v3 修正方向</span><span class="pnum"></span></div>
+</section>
+
+<!-- 3 reflection -->
+<section class="slide s-risk">
+  <div class="kicker">设计修正 · WHAT CHANGED</div>
+  <h2 class="title">v2 → v3：八个问题，三条原则</h2>
+  <div class="subtitle">每层单独看都对，合起来互相矛盾；v3 用凭证 scope 把身份 / 凭证 / 授权拆开。</div>
+  <div class="body">
+    <div class="summary" style="height:auto">
+      <div class="scard" style="border-color:#f0cdd4">
+        <div class="num" style="color:var(--red)">01 · IDENTITY</div>
+        <h3>guest 会话三条约束互斥</h3>
+        <p>per-app 会话、非 app scope 拒绝 guest、<code>/api/guest/apps</code> 跨应用门户不能同时成立；<code>UserManager</code> 缓存还会让 guest app token 直接 401。</p>
+        <p style="margin-top:6px"><b>修正：</b>新增 <code>guest</code> scope；guest 由 PrincipalDirectory 从 repo 解析，不进平台缓存。</p>
+      </div>
+      <div class="scard" style="border-color:#f0cdd4">
+        <div class="num" style="color:var(--red)">02 · AUTHZ</div>
+        <h3>guest 可持 view，绕过表可见性</h3>
+        <p>v2 让 guest 持有 <code>view</code> / <code>participate</code>；但 <code>view</code> 能读全部表并导出，<code>member_visible</code> 只约束 participant，等于留了一个后门。</p>
+        <p style="margin-top:6px"><b>修正：</b>guest 只能 <code>participate</code>；<code>view</code> 是平台成员专属；表可见性对所有 participate 生效。</p>
+      </div>
+      <div class="scard" style="border-color:#f0cdd4">
+        <div class="num" style="color:var(--red)">03 · IM</div>
+        <h3>P2a 只封了 share_link，没封数据工具</h3>
+        <p>所有 app 工具仍以 agent owner 鉴权；未绑定的人在 DM 里让 Agent 调 <code>app_read_data</code>，拿到的仍是 owner 视角的个人数据。</p>
+        <p style="margin-top:6px"><b>修正：</b>P2a 所有 app 数据工具要求 <code>owner_verified</code>；只放行链接 / 打开类工具；<code>/link</code> 建立 guest 的 IM 绑定。</p>
+      </div>
+    </div>
+    <div class="band" style="margin-top:12px;border-color:#f3d6dc;background:#fff8f9">
+      <p style="font-size:12px;line-height:1.55">
+        <b>v3 原则：</b>凭证 scope 先于身份表；先授权内核，后成员关系；行归属先于行级 PII；先工具面收口，后 IM actor。
+      </p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11px">P0 · 授权</h4><p class="mini">authorize() + member_visible/row_owner + PII 行级</p></div>
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11px">P1 · 参与者</h4><p class="mini">成员 / 邀请 / 加入码 / guest 会话</p></div>
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11px">P2a · 链接</h4><p class="mini">account_key + sender_id + /link + 工具收口</p></div>
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11px">P2b · actor</h4><p class="mini">per-sender thread / memory 隔离</p></div>
+    </div>
+  </div>
+  <div class="footer"><span><b>修正</b> · v2 → v3</span><span class="pnum"></span></div>
+</section>
+
+<!-- 4 problem -->
+<section class="slide s-id">
+  <div class="kicker">问题 · PROBLEM</div>
+  <h2 class="title">四类人，四种缺口</h2>
+  <div class="subtitle">根因不是缺页面，而是缺「应用成员 + 表级可见性 + 主体抽象」。</div>
+  <div class="body">
+    <div class="quad">
+      <div class="pcard">
+        <div class="hd"><span class="ic">外</span><h3>外部参与者</h3><span class="state bad">无身份</span></div>
+        <p>没有 Octop 账号的同事、客户、供应商。现在只能拿 <code>/p/{token}</code> 公开只读链接。</p>
+        <div class="quote">不能写、不能看自己的提交；公开表还会暴露整张表。</div>
+      </div>
+      <div class="pcard">
+        <div class="hd"><span class="ic">IM</span><h3>IM 非 owner</h3><span class="state bad">被当成 owner</span></div>
+        <p>外部 IM 发送者按 agent owner 执行；只有 owner 自己的绑定被信任；群聊 / 话题私聊 subject 不是人。</p>
+        <div class="quote">群成员可能借 Agent 以 owner 身份操作应用；个人链接只能发给 owner。</div>
+      </div>
+      <div class="pcard">
+        <div class="hd"><span class="ic">单</span><h3>一次性提交者</h3><span class="state mid">只读</span></div>
+        <p>扫码填表、活动报名、公开收集。公开面没有行写入 / 提交能力；为每个填表人建持久 guest 又太重。</p>
+        <div class="quote">需要「提交令牌」而不是「账号」，否则产生大量休眠主体和 PII。</div>
+      </div>
+      <div class="pcard">
+        <div class="hd"><span class="ic">匿</span><h3>匿名访客</h3><span class="state mid">只读</span></div>
+        <p>公开链接访问者，token 即凭证；不能写、不能 generate、不能 launchGame。</p>
+        <div class="quote">公开面只放「即使泄露也可接受」的数据；个人数据不进公开表。</div>
+      </div>
+    </div>
+    <div class="band" style="margin-top:12px">
+      <p style="font-size:12.5px;line-height:1.6">
+        <b>结论：</b>外部参与者需要「应用成员 + 表级可见性 + 只作用于该应用的会话」；一次性提交者需要「短期提交令牌」。
+        把所有人塞进一个 <code>users.kind=guest</code>，只是把复杂度藏起来。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>问题</b> · 四类使用者</span><span class="pnum"></span></div>
+</section>
+
+<!-- 5 code facts -->
+<section class="slide s-access">
+  <div class="kicker">代码核实 · CODE CHECK</div>
+  <h2 class="title">六个必须尊重的代码事实</h2>
+  <div class="subtitle">行号来自 2026-11-21 当前工作树；这些事实决定了 v3 的顺序。</div>
+  <div class="body">
+    <table style="font-size:11.5px">
+      <colgroup><col style="width:14%"><col style="width:50%"><col style="width:36%"></colgroup>
+      <tr><th>层</th><th>代码事实</th><th>对方案的含义</th></tr>
+      <tr><td><b>平台用户</b></td><td>没有自助注册；只有 setup、管理员创建、邀请码、SSO 自动开通。<code>auth.py</code> · <code>invites.py</code></td><td>不能假设外部参与者先注册 Octop 账号；guest/submission 必须独立于登录。</td></tr>
+      <tr><td><b>应用 ACL</b></td><td><code>permission_for(row, user_id)</code>；50 协作者；<code>PUT /shares</code> 全量替换，<code>set_collaborators</code> 先 DELETE 全部。<code>service.py:1114-1125</code> · <code>repos/apps.py:1163-1181</code></td><td>旧分享弹窗保存一次会删掉 guest；成员 API 只替换平台成员，<code>/shares</code> 必须保留 guest 行。</td></tr>
+      <tr style="background:#fff8f9"><td><b>授权细节</b></td><td>PII 4 处 <code>permission == "view"</code>；<code>include_all_rows</code> 只给 owner/admin；app 级表 participant 可读全表、可导出。<code>routers/apps.py:2185/3177/3347/3413</code> · <code>:3178/3282/3314/3419</code></td><td>participate 会绕过 PII 脱敏；必须先做行级 PII + 表级可见性 + 授权矩阵。</td></tr>
+      <tr><td><b>访问申请</b></td><td>双 owner 审批；专家那半 = 全局 <code>agents.is_shared=1</code>；拒绝不回滚。<code>service.py:1616-1623</code> · <code>:1584-1602</code></td><td>不能直接复用于外部参与者；join 请求只走 app owner，不碰 is_shared。</td></tr>
+      <tr><td><b>凭证 / 前端</b></td><td>app JWT 的 <code>perm</code> 未使用，按实时 ACL；前端只有一个 <code>auth_token</code> + <code>octop_app_scope</code>，注释明确 “one MiniApp only”。<code>deps.py:121-169</code> · <code>request.ts:7-22</code></td><td>撤销即时生效；但多应用 guest 会话会互相覆盖，需要按 <code>app_id</code> 存 token。</td></tr>
+      <tr><td><b>IM 身份</b></td><td>IM 会话归属 agent owner；<code>channel_identities</code> 没有 bot/account 维度；飞书话题私聊 subject 是 thread_id，不是 open_id。<code>message_keys.py:79-105</code> · <code>045:47-58</code></td><td>稳定身份键是 P2 前置；per-sender actor 还要解决 owner-scoped thread。</td></tr>
+    </table>
+  </div>
+  <div class="footer"><span><b>核实</b> · 关键代码事实</span><span class="pnum"></span></div>
+</section>
+
+<!-- 6 options -->
+<section class="slide s-access">
+  <div class="kicker">方案取舍 · OPTIONS</div>
+  <h2 class="title">A / B / C'：为什么是「统一主体 + 双模式参与者」</h2>
+  <div class="subtitle">C' 不是把所有人变成 guest，而是把「持久参与者」和「一次性提交」分开。</div>
+  <div class="body">
+    <table style="font-size:12px">
+      <colgroup><col style="width:18%"><col style="width:23%"><col style="width:25%"><col style="width:34%"></colgroup>
+      <tr><th>维度</th><th>A · 全部开 Octop 账号</th><th>B · 独立 App 账号体系</th><th>C' · 统一主体 + 双模式 <span class="badge">推荐</span></th></tr>
+      <tr><td><b>外部参与者</b></td><td>高：邀请 / 审批 / 账号</td><td>低：应用自己发账号</td><td>低：加入码 / IM 绑定 / 提交令牌</td></tr>
+      <tr><td><b>一次性表单</b></td><td>重：每个填表人开账号</td><td>可做，但仍是账号</td><td>轻：submission token，不建持久主体</td></tr>
+      <tr><td><b>复用现有 user_id FK</b></td><td>100%</td><td>低：ACL / 行 / 历史 / 申请全部多态化</td><td>高：PrincipalDirectory 隔离底层，业务按接口用</td></tr>
+      <tr><td><b>账号表污染</b></td><td>高</td><td>无</td><td>低：<code>users.kind</code> 第一版 + 凭证 scope 隔离；长期可迁独立表</td></tr>
+      <tr><td><b>与 IM 绑定</b></td><td>先开账号再绑定</td><td>需要双映射</td><td>直接绑定到 member / guest；submission 不绑定</td></tr>
+      <tr><td><b>主要代价</b></td><td>账号膨胀、外部联系人混入</td><td>第二套身份 / ACL / 审计</td><td>要先做 PrincipalDirectory + 授权矩阵 + 表级可见性</td></tr>
+    </table>
+    <div class="band" style="margin-top:12px">
+      <p style="font-size:12px;line-height:1.55">
+        <b>边界：</b>C' 不是多租户隔离（<code>docs/miniapp-overview.md:63</code>）。guest 只是同一实例内的持久参与者；
+        一次性提交者用签名令牌，不进入 <code>users</code>。如果目标是 SaaS 多租户，应直接规划 B 或独立 principal 表。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>取舍</b> · C' 双模式</span><span class="pnum"></span></div>
+</section>
+
+<!-- 7 architecture -->
+<section class="slide s-id">
+  <div class="kicker">目标架构 · ARCHITECTURE</div>
+  <h2 class="title">入口 → 凭证 → Principal → 授权</h2>
+  <div class="subtitle">四层各自只做一件事；所有写权限最终落到一个 <code>authorize()</code>。</div>
+  <div class="body">
+    <div class="arch">
+      <div class="arch-row">
+        <div class="arch-label"><b>入口</b><span>ENTRY</span></div>
+        <div class="arch-box"><h4>Dashboard</h4><p>应用库 / 深链 / 工作台 / 对话卡片</p></div>
+        <div class="arch-box"><h4>应用链接</h4><p>加入码 / 个人入口码 / 公开链接 / 提交令牌</p></div>
+        <div class="arch-box"><h4>IM 私聊</h4><p>/join · /bind · 个人入口链接</p></div>
+        <div class="arch-box"><h4>IM 群聊</h4><p>只发公开链接；join 回私聊</p></div>
+      </div>
+      <div class="arch-arrow">▼<em>按入口选择受众绑定凭证</em></div>
+      <div class="arch-row">
+        <div class="arch-label"><b>凭证</b><span>CREDENTIAL</span></div>
+        <div class="arch-box hl"><h4>平台 JWT</h4><p>member · 24h · 整个 Dashboard</p></div>
+        <div class="arch-box hl"><h4>app-scoped JWT</h4><p>member / guest · 2h · 单应用子树</p></div>
+        <div class="arch-box"><h4>guest-scoped JWT</h4><p>仅 guest 门户 · refresh · 可撤销</p></div>
+        <div class="arch-box"><h4>publication / submission</h4><p>匿名只读 / 一次性提交</p></div>
+      </div>
+      <div class="arch-arrow">▼<em>凭证只证明「是谁」，不证明「能做什么」</em></div>
+      <div class="arch-row">
+        <div class="arch-label"><b>主体</b><span>PRINCIPAL</span></div>
+        <div class="arch-box hl"><h4>PrincipalDirectory</h4><p>member / guest / submission / anonymous</p></div>
+        <div class="arch-box"><h4>host policy</h4><p>agent owner 是否允许外部参与者</p></div>
+      </div>
+      <div class="arch-arrow">▼<em>所有入口收敛到同一个授权函数</em></div>
+      <div class="arch-row">
+        <div class="arch-label"><b>授权</b><span>AUTHZ</span></div>
+        <div class="arch-box hl"><h4>authorize()</h4><p>action × app × table × row × PII</p></div>
+        <div class="arch-box"><h4>表级可见性</h4><p>member_visible · public_visible</p></div>
+        <div class="arch-box"><h4>行所有权</h4><p>row_owner ≠ created_by</p></div>
+      </div>
+    </div>
+    <div class="side-note" style="margin-top:9px">
+      <b>唯一入口：</b>HTTP、Agent 工具、IM 工具都调用 <code>authorize(principal, app, action, table, row)</code>；
+      <code>permission_for</code> 只保留为 app 级角色判定，不再单独决定表 / 行 / PII。
+    </div>
+  </div>
+  <div class="footer"><span><b>架构</b> · 四层 + 单一授权</span><span class="pnum"></span></div>
+</section>
+
+<!-- 8 principals and credentials -->
+<section class="slide s-id">
+  <div class="kicker">主体与凭证 · PRINCIPALS</div>
+  <h2 class="title">member / guest / submission / anonymous</h2>
+  <div class="subtitle">guest 是持久参与者；submission 是一次性提交者；两者都不等于平台用户。</div>
+  <div class="body">
+    <div class="cols">
+      <div class="col">
+        <div class="quad">
+          <div class="card">
+            <h4><span class="ic">成</span>member</h4>
+            <p class="mini">平台账号；可登录、拥有 Agent、持有平台权限；应用访问仍按成员关系 + 表级可见性。</p>
+          </div>
+          <div class="card" style="border-color:#f0cdd4;background:#fff8f9">
+            <h4><span class="ic">客</span>guest</h4>
+            <p class="mini">持久应用参与者；无 Dashboard / Agent / 平台权限；只能持 <code>participate</code>；通过 app JWT + guest-scoped JWT 进入被邀请应用。</p>
+          </div>
+          <div class="card" style="border-color:#f3e1bd;background:#fffaf0">
+            <h4><span class="ic">单</span>submission</h4>
+            <p class="mini">一次性提交者；签名令牌绑定 app + table + role + TTL + 次数；不建 <code>users</code> 行，不跨应用复用。</p>
+          </div>
+          <div class="card">
+            <h4><span class="ic">匿</span>anonymous</h4>
+            <p class="mini">只有 publication token；只读 <code>public_visible</code> 表，PII 统一脱敏。</p>
+          </div>
+        </div>
+        <div class="band" style="margin-top:10px">
+          <p style="font-size:11.5px;line-height:1.55">
+            <b>PrincipalDirectory：</b>统一 <code>resolve_by_token / resolve_channel / get / list_members</code>。
+            底层先用 <code>users.kind</code>，但业务代码不直接查 <code>users</code> 表；以后可迁独立 principal 表。
+          </p>
+        </div>
+      </div>
+      <div class="col">
+        <table style="font-size:11.5px">
+          <colgroup><col style="width:27%"><col style="width:24%"><col style="width:22%"><col style="width:27%"></colgroup>
+          <tr><th>凭证</th><th>主体</th><th>时效</th><th>作用域</th></tr>
+          <tr><td><b>平台 JWT</b></td><td>member</td><td>24h，可续期</td><td>整个 Dashboard；不能升级 app 会话</td></tr>
+          <tr><td><b>app-scoped JWT</b></td><td>member / guest</td><td>2h，不续期</td><td>单应用子树 + 少量只读启动接口</td></tr>
+          <tr><td><b>guest-scoped JWT</b></td><td>guest</td><td>7d + refresh</td><td><code>/api/guest/*</code> 门户；可撤销；换取 app token</td></tr>
+          <tr><td><b>publication token</b></td><td>anonymous</td><td>撤销 / 过期前</td><td>单应用冻结快照，只读</td></tr>
+          <tr><td><b>submission token</b></td><td>submission</td><td>按配置</td><td>单应用 + 单表 + 提交动作</td></tr>
+          <tr><td><b>join / entry code</b></td><td>无 → member/guest</td><td>按配置</td><td>换取成员关系 / 应用会话</td></tr>
+        </table>
+        <div class="band" style="margin-top:10px;border-color:#f3d6dc;background:#fff8f9">
+          <p style="font-size:11.5px;line-height:1.55">
+            <b>guest 守门：</b>主边界是凭证 scope——guest 永远拿不到平台 JWT；登录 / SSO / 用户列表 / setup 计数按 member 过滤；
+            <code>require_permission</code> 恒 false；app token 按 <code>app_id</code> 存储，不覆盖平台 token。
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span><b>主体</b> · 四类身份与凭证</span><span class="pnum"></span></div>
+</section>
+
+<!-- 9 role matrix -->
+<section class="slide s-id">
+  <div class="kicker">权限模型 · AUTHORIZATION</div>
+  <h2 class="title">角色只是 app 级；表 / 行 / PII 必须单独判定</h2>
+  <div class="subtitle">participate 不是「view + 写自己」这么简单：它受 member_visible、row_owner、PII 和 action 共同约束。</div>
+  <div class="body">
+    <table class="matrix" style="font-size:11px">
+      <colgroup><col style="width:17%"><col style="width:15%"><col style="width:14%"><col style="width:14%"><col style="width:10%"><col style="width:15%"><col style="width:15%"></colgroup>
+      <tr>
+        <th>角色</th><th>读可见表</th><th>写自己</th><th>写全部</th><th>改结构</th><th>导出 / 聚合</th><th>成员 / 发布</th>
+      </tr>
+      <tr><td><b>owner / admin</b></td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+      <tr><td><b>edit_structure</b></td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
+      <tr><td><b>edit_data</b></td><td class="yes">✓</td><td class="yes">✓</td><td class="part">仅 app 表</td><td class="no">—</td><td class="yes">✓</td><td class="no">—</td></tr>
+      <tr style="background:#fffaf0"><td><b>participate</b> <span class="badge" style="background:var(--amber-soft);color:var(--amber)">新增</span></td><td class="part">仅 member_visible</td><td class="yes">✓</td><td class="no">—</td><td class="no">—</td><td class="no">拒绝（P1）</td><td class="no">—</td></tr>
+      <tr><td><b>view</b> <span class="badge" style="background:var(--blue-soft);color:var(--blue)">仅 member</span></td><td class="yes">✓</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">只读导出（脱敏）</td><td class="no">—</td></tr>
+      <tr><td><b>public visitor</b></td><td class="part">仅 public_visible</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td></tr>
+    </table>
+    <div style="display:flex;gap:9px;margin-top:9px">
+      <div class="card" style="flex:1;padding:9px 11px">
+        <h4 style="font-size:12px">行作用域</h4>
+        <p class="mini">非 owner 在 <code>row_scope=user</code> 表上只看/写自己；<code>row_scope=app</code> 表上按角色看全部。edit_data 不是「user 表全表编辑」。</p>
+      </div>
+      <div class="card" style="flex:1;padding:9px 11px">
+        <h4 style="font-size:12px">表级可见性</h4>
+        <p class="mini"><code>light_app_tables.member_visible</code> 默认 0；owner 显式开启 participant 可看的表。public_visible 只影响公开链接。</p>
+      </div>
+      <div class="card" style="flex:1;padding:9px 11px;border-color:#f0cdd4;background:#fff8f9">
+        <h4 style="font-size:12px">PII 行级</h4>
+        <p class="mini"><code>view</code> 始终脱敏；<code>participate</code> 自己的行不脱敏、他人行脱敏。响应加 <code>masked_pii_rows</code> / <code>masked_pii_columns</code>。</p>
+      </div>
+    </div>
+    <div class="band" style="margin-top:8px">
+      <p style="font-size:10.5px;line-height:1.45">
+        <b>授权矩阵：</b>每个端点都要声明 action（view_row / write_own / write_any / export / aggregate / structure / share / ai / service），
+        再由 <code>authorize()</code> 结合表可见性、row_owner、PII 判定；不能只查 app 级 permission。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>授权</b> · 角色 × 表 × 行 × PII</span><span class="pnum"></span></div>
+</section>
+
+<!-- 10 user management -->
+<section class="slide s-id">
+  <div class="kicker">MiniApp 用户管理 · MEMBERS</div>
+  <h2 class="title">管理面在 Dashboard：成员 + 表级可见性 + host policy</h2>
+  <div class="subtitle">应用 owner 管成员；agent owner 管是否允许外部共享；平台管理员只管平台账号与滥用处置。</div>
+  <div class="body">
+    <div class="cols">
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">员</span>成员与访问</h4>
+          <ul class="dash">
+            <li><b>成员列表：</b>平台成员 / guest / 待审批；角色、来源、最后活跃、创建行数</li>
+            <li><b>邀请：</b>用户名 / 加入链接 / 二维码 / 个人一次性链接；可设角色、TTL、次数、审批</li>
+            <li><b>表级可见性：</b>逐表勾选 <code>member_visible</code>；默认关闭，form 表显式开启</li>
+            <li><b>批量：</b>CSV 导入、搜索、分页、导出成员、批量移除</li>
+            <li><b>guest 门户：</b><code>/my</code> 列出已加入应用、重新进入、退出/删除</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:9px;border-color:#f3e1bd;background:#fffaf0">
+          <h4><span class="ic">单</span>一次性提交</h4>
+          <p class="mini">公开表单用 submission token：绑定 app + table + TTL + 次数，不建 guest。P3 提供；P1 先做邀请制 guest。</p>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">策</span>应用级策略</h4>
+          <ul class="dash">
+            <li><code>access_policy</code>：private / invite / public_read（<code>org</code> 留给 P3 用户组）</li>
+            <li>默认角色、成员上限、加入码 TTL / 次数、是否需要审批；外部邀请走 <code>app_member_invites</code></li>
+            <li>guest 默认关闭 <code>ai</code>；P1 固定拒绝，不承诺 per-action 配额</li>
+            <li>participant 固定不能 export / aggregate 全表（P3 再评估按成员开启）</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:9px">
+          <h4><span class="ic">治</span>Host policy</h4>
+          <ul class="dash">
+            <li>agent 级 <code>external_sharing_policy</code>：是否允许外部参与者、guest 上限、是否需 host 审批</li>
+            <li>app owner = agent owner 时可直接邀请；不同 owner 时默认需 host 审批</li>
+            <li>成员页展示 host 策略；被拒绝时给出原因，不让 owner 误以为系统坏了</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:9px;border-color:#f0cdd4;background:#fff8f9">
+          <h4><span class="ic">审</span>审计与同意</h4>
+          <p class="mini">member.join / role / remove、join_code、identity.bind、host.approve 全写审计；加入页展示数据处理说明与同意勾选。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span><b>管理</b> · 成员 / 可见性 / host</span><span class="pnum"></span></div>
+</section>
+
+<!-- 11 octop users -->
+<section class="slide s-access">
+  <div class="kicker">Octop 用户接入 · MEMBERS</div>
+  <h2 class="title">四条路径，两个解耦，一个 host 闸门</h2>
+  <div class="subtitle">应用访问不需要 Agent 访问；但跨 owner 邀请外部参与者需要 host 同意。</div>
+  <div class="body">
+    <div class="cols">
+      <div class="col" style="flex:1.12">
+        <div class="steps">
+          <div class="step"><span class="n">1</span><h4>Dashboard 应用库</h4><p>owned + collaborator + agent owner 可见；新增「我参与的」，列出 participate 成员的应用。</p></div>
+          <div class="step"><span class="n">2</span><h4>深链 <code>/apps/{app_id}</code></h4><p>平台 JWT + 应用 ACL + 表可见性；无权限时展示权限卡片并发起申请。</p></div>
+          <div class="step"><span class="n">3</span><h4>邀请 / 按用户名添加</h4><p>应用 owner 加平台用户；跨 owner / 外部参与者先过 host policy。</p></div>
+          <div class="step"><span class="n">4</span><h4>申请审批</h4><p><b>view / participate：</b>app owner（+ host 如需）。<b>edit_data 及以上或 Agent 聊天：</b>保留双 owner 流程。</p></div>
+        </div>
+      </div>
+      <div class="col" style="flex:.88">
+        <div class="card">
+          <h4><span class="ic">1</span>解耦：应用 ≠ Agent</h4>
+          <p class="mini">app-scoped JWT 只允许 <code>/api/apps/{app_id}</code> 子树和少量只读启动接口；<code>/api/agents</code> 直接 403。外部参与者不需要被共享 Agent。</p>
+        </div>
+        <div class="card" style="margin-top:8px">
+          <h4><span class="ic">2</span>解耦：共享 Agent ≠ 共享应用</h4>
+          <p class="mini"><code>agents.is_shared</code> 只影响聊天；应用访问仍走成员关系 + 表可见性。agent owner 的 host 只读权限保留，但不自动推导给所有人。</p>
+        </div>
+        <div class="card" style="margin-top:8px;border-color:#f3e1bd;background:#fffaf0">
+          <h4><span class="ic">闸</span>Host 闸门</h4>
+          <p class="mini">app owner ≠ agent owner 时，默认需要 agent owner 批准外部共享；agent owner 可设 guest 上限 / 关闭外部参与。避免别人用你的 workspace 和模型额度招待外部用户。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span><b>接入</b> · 平台用户路径</span><span class="pnum"></span></div>
+</section>
+
+<!-- 12 im identity -->
+<section class="slide s-im">
+  <div class="kicker">IM 接入 · IDENTITY</div>
+  <h2 class="title">身份键：渠道 + 账号 + 稳定 sender</h2>
+  <div class="subtitle">现有 <code>channel_identities</code> 的 subject 在群聊 / 话题里不是人；v3 改成外部账号键 + sender_id。</div>
+  <div class="body">
+    <div class="cols" style="height:auto">
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">!</span>现状问题</h4>
+          <ul class="dash">
+            <li><code>channel_identities(channel_type, external_subject_id)</code>，没有 bot / 账号维度（<code>045:47-58</code>）</li>
+            <li>飞书话题私聊 subject 是 <code>thread_id</code>，不是 <code>open_id</code>；<code>/bind</code> 会绑到话题</li>
+            <li>群聊 subject 是群 / 会话 id；个人作者在 <code>metadata.sender_id</code></li>
+            <li>适配器 session subject 不一致：企微 / 钉钉按人，飞书 / QQ / Telegram 按群或话题</li>
+          </ul>
+        </div>
+        <div class="band" style="margin-top:8px;border-color:#f3d6dc;background:#fff8f9">
+          <p style="font-size:11px;line-height:1.5">
+            <b>后果：</b>同一个人换话题 / 换群可能变成另一个身份；在飞书话题里绑定的人，换个话题就失效。
+          </p>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card" style="border-color:#bfe3dd;background:linear-gradient(180deg,#fff,#f4fbf9)">
+          <h4><span class="ic">键</span>目标身份键</h4>
+          <p style="font-size:12.5px;font-family:Consolas,monospace;background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:7px">
+            (channel_type, <b>account_key</b>, <b>sender_id</b>)
+          </p>
+          <ul class="dash">
+            <li><b>account_key</b> = 稳定外部账号：飞书 app_id、企微 corp_id+agentid、Telegram bot id、公众号 appid；不用内部 channel row id</li>
+            <li><b>sender_id</b> = 稳定人员身份；飞书优先 union_id，否则 open_id（per-bot）</li>
+            <li><b>channel_subject</b> 只用于回消息，不再承担身份</li>
+            <li>旧数据 <code>account_key=''</code> 作为全局回退</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:8px">
+          <h4><span class="ic">约</span>适配器契约</h4>
+          <ul class="dash">
+            <li>入站必须带 <code>channel_id / account_key</code>、<code>channel_subject</code>、<code>metadata.sender_id / sender_name</code></li>
+            <li>持久化 <code>sender_id / sender_name</code>；HITL 恢复时用 <code>ToolScope</code> 还原 actor</li>
+            <li>先定义清楚：per-bot 身份，还是跨 bot 同一个人；后者需要 union_id / 平台账号绑定</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:9px">
+      <div class="card" style="padding:8px 10px;border-left:3px solid var(--teal)"><h4 style="font-size:11.5px">身份范围</h4><p class="mini">先定 per-bot 还是 cross-bot；cross-bot 用 union_id 或平台账号绑定。</p></div>
+      <div class="card" style="padding:8px 10px;border-left:3px solid var(--teal)"><h4 style="font-size:11.5px">bind code</h4><p class="mini">bind code 保持全局、一次性；绑定行记录使用它的 account_key。</p></div>
+      <div class="card" style="padding:8px 10px;border-left:3px solid var(--teal)"><h4 style="font-size:11.5px">P2a 规则</h4><p class="mini">chat 只交付链接，不返回个人行；个人数据只在 WebView。</p></div>
+    </div>
+  </div>
+  <div class="footer"><span><b>IM 身份</b> · 外部账号键 + sender</span><span class="pnum"></span></div>
+</section>
+
+<!-- 13 im links -->
+<section class="slide s-im">
+  <div class="kicker">IM 接入 · ENTRY</div>
+  <h2 class="title">链接交付与个人数据分层</h2>
+  <div class="subtitle">P2a 只做「把人送进 WebView」；per-sender 个人数据在 chat 里返回，必须等 P2b 的 thread 隔离。</div>
+  <div class="body">
+    <table style="font-size:11px">
+      <colgroup><col style="width:17%"><col style="width:19%"><col style="width:23%"><col style="width:19%"><col style="width:22%"></colgroup>
+      <tr><th>链接 / 会话</th><th>适用场景</th><th>身份 / 动作</th><th>时效</th><th>能做什么</th></tr>
+      <tr><td><b>个人入口码</b></td><td>owner / participant 私聊</td><td>已有主体；不创建新身份；签发记录发送者</td><td>10 分钟单次</td><td>app token，按角色</td></tr>
+      <tr style="background:#f4fbf9"><td><b>加入码</b> <span class="badge" style="background:var(--teal-soft);color:var(--teal)">新增</span></td><td>未绑定私聊 / 定向邀请</td><td>消费 code；按需建 guest 或复用 member，写成员关系</td><td>按配置</td><td>加入应用；进入 WebView</td></tr>
+      <tr style="background:#f4fbf9"><td><b><code>/link</code> 握手码</b></td><td>WebView → IM 绑定</td><td>已登录 guest / member 把 6–8 位码发回私聊</td><td>5 分钟单次</td><td>把 IM sender 绑定到该主体</td></tr>
+      <tr><td><b>公开链接</b></td><td>群聊 / 对外公示</td><td>匿名；不产生身份</td><td>撤销 / 过期前</td><td>只读 public_visible 表</td></tr>
+      <tr><td><b>submission token</b></td><td>公开表单（P3）</td><td>一次性提交主体</td><td>按配置</td><td>单表提交；不建 guest</td></tr>
+    </table>
+    <div class="flow" style="margin-top:10px">
+      <div class="fbox"><h5>① 私聊提出需求</h5><p>“打开报名表 / 给我入口”</p></div>
+      <div class="farrow">→</div>
+      <div class="fbox"><h5>② 解析 sender</h5><p>account_key + sender_id → member/guest</p></div>
+      <div class="farrow">→</div>
+      <div class="fbox"><h5>③ 选择链接</h5><p>已绑定 → 个人码；未绑定 → 加入码</p></div>
+      <div class="farrow">→</div>
+      <div class="fbox"><h5>④ WebView 确认</h5><p>app / guest token；首次加入显示 <code>/link</code> 握手码</p></div>
+      <div class="farrow">→</div>
+      <div class="fbox hl"><h5>⑤ 应用会话</h5><p>按成员角色 + 表可见性进入</p></div>
+    </div>
+    <div class="band" style="margin-top:10px;border-color:#bfe3dd;background:linear-gradient(135deg,#f4fbf9,#fff)">
+      <p style="font-size:11px;line-height:1.5">
+        <b>硬规则：</b>P2a 的 chat 只交付链接，不返回个人行；所有 app 数据工具要求 <code>owner_verified</code>。
+        群聊只发公开链接；join 链接只在私聊或 owner 定向发送。P2b 才允许私聊个人数据，前提是 per-sender thread / 记忆隔离。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>IM 入口</b> · 链接 / 会话 / 分层</span><span class="pnum"></span></div>
+</section>
+
+<!-- 14 im groups -->
+<section class="slide s-im">
+  <div class="kicker">IM 接入 · BOUNDARY</div>
+  <h2 class="title">群聊只做公开信息；个人数据回私聊 / WebView</h2>
+  <div class="subtitle">这是 v3 收紧的地方：群聊不发加入链接，也不执行个人应用工具。</div>
+  <div class="body">
+    <div class="cols">
+      <div class="col">
+        <div class="card" style="border-color:#f0cdd4;background:#fff8f9">
+          <h4><span class="ic">群</span>群聊六条规则</h4>
+          <ul class="tick">
+            <li><b>只发公开链接</b>；不发个人入口码，也不发多用途加入链接</li>
+            <li><b>所有 app 数据工具要求 <code>owner_verified</code></b>；未绑定 / 群聊只能拿链接</li>
+            <li><b>不回答个人数据查询</b>；个人数据只在私聊或 WebView 返回</li>
+            <li><code>sender_id</code> 只用于归属与展示，<b>不作为可信身份</b></li>
+            <li>个人操作要求 <b>已绑定 + 私聊 + 应用成员</b></li>
+            <li>需要个人信息时，引导用户私聊或打开应用链接</li>
+          </ul>
+        </div>
+        <div class="band" style="margin-top:9px">
+          <p style="font-size:10.5px;line-height:1.5">
+            <b>P2b 前置：</b>per-sender actor 必须同时解决 thread 归属、memory 隔离、HITL 恢复；
+            否则 guest 的私聊会落到 agent owner 的 Dashboard / 记忆里。
+          </p>
+        </div>
+      </div>
+      <div class="col">
+        <table style="font-size:10.5px">
+          <colgroup><col style="width:19%"><col style="width:21%"><col style="width:18%"><col style="width:18%"><col style="width:24%"></colgroup>
+          <tr><th>渠道</th><th>身份</th><th>卡片</th><th>WebView</th><th>建议</th></tr>
+          <tr><td><b>飞书 / Lark</b></td><td>union_id / open_id + OAuth</td><td class="yes">✓</td><td class="yes">✓</td><td>卡片 + 认证链接，首选</td></tr>
+          <tr><td><b>企业微信 / 微信</b></td><td>openid + 公众号 OAuth</td><td class="part">有限</td><td class="yes">✓ H5</td><td>认证链接 + 只读回退</td></tr>
+          <tr><td><b>钉钉</b></td><td>userid + OAuth</td><td class="yes">✓</td><td class="yes">✓</td><td>同飞书</td></tr>
+          <tr><td><b>Telegram</b></td><td>user id + /bind</td><td class="yes">✓</td><td class="part">外部浏览器</td><td>认证链接 + 加入码</td></tr>
+          <tr><td><b>QQ</b></td><td>openid</td><td class="part">有限</td><td class="part">有限</td><td>公开链接 + 私聊 join</td></tr>
+        </table>
+        <div class="card" style="margin-top:8px;border-color:#f3e1bd;background:#fffaf0">
+          <h4><span class="ic">网</span>部署前置</h4>
+          <p class="mini">公网 HTTPS、反向代理、WebView 域名白名单、OAuth 回调域名。没有 <code>public_base_url</code> / 外网可达性，只支持平台用户与内网访问。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span><b>IM 边界</b> · 群聊 / 渠道 / 部署</span><span class="pnum"></span></div>
+</section>
+
+<!-- 15 data model -->
+<section class="slide s-data">
+  <div class="kicker">数据模型 · SCHEMA</div>
+  <h2 class="title">身份、表可见性、行所有权三组改动</h2>
+  <div class="subtitle">不新建平行用户体系；PrincipalDirectory 隔离底层，<code>users.kind</code> 只是第一版实现。</div>
+  <div class="body">
+    <table style="font-size:10px">
+      <colgroup><col style="width:22%"><col style="width:46%"><col style="width:32%"></colgroup>
+      <tr><th>表</th><th>变化</th><th>作用</th></tr>
+      <tr><td><code>users</code></td><td><code>kind</code>；guest 无密码 / 邮箱，<code>role='user'</code></td><td>guest 第一版实现；平台侧按 member 过滤</td></tr>
+      <tr><td><code>light_app_collaborators</code></td><td><code>status</code> / <code>joined_via</code> / <code>invited_by</code>；guest 仅 <code>participate</code></td><td>成员状态 / 来源；cap 50</td></tr>
+      <tr style="background:#fff8f9"><td><code>light_app_tables</code></td><td><code>member_visible</code>，默认 0</td><td>participate 可见表</td></tr>
+      <tr style="background:#fff8f9"><td><code>light_app_rows</code></td><td><code>row_owner_user_id</code> + 索引；回填 = <code>created_by</code></td><td>行归属 ≠ 执行者</td></tr>
+      <tr><td><code>app_join_codes</code> <span class="badge">新增</span></td><td><code>code_hash</code>、<code>audience</code>、<code>permission</code>、TTL、<code>max_uses</code>、channel 绑定</td><td>原子消费 / 撤销</td></tr>
+      <tr><td><code>app_member_invites</code> <span class="badge">新增</span></td><td><code>token_hash</code>、<code>audience</code>、<code>host_status</code></td><td>外部邀请 + host 审批</td></tr>
+      <tr><td><code>app_sessions</code> <span class="badge">新增</span></td><td><code>session_id</code>、<code>refresh_hash</code>、expiry</td><td>guest refresh / 撤销</td></tr>
+      <tr><td><code>channel_identities</code></td><td><code>account_key</code> + <code>sender_id</code>；唯一键三元组</td><td>多 bot / 话题身份</td></tr>
+      <tr><td><code>channel_link_codes</code> <span class="badge">新增</span></td><td><code>code_hash</code>、<code>user_id</code>、<code>app_id</code>、TTL</td><td><code>/link</code> 握手</td></tr>
+      <tr><td><code>app_access_codes</code></td><td><code>account_key</code>、<code>sender_id</code></td><td>个人码绑定发送者</td></tr>
+      <tr><td><code>agents</code></td><td><code>external_sharing_policy</code></td><td>host 闸门</td></tr>
+      <tr><td><code>app_access_requests</code></td><td><b>不改</b></td><td>member 申请保留双 owner</td></tr>
+    </table>
+    <div class="band" style="margin-top:8px">
+      <p style="font-size:10.5px;line-height:1.45">
+        <b>迁移 / 恢复：</b>同时提交 <code>00N_*.sql</code> + <code>.pg.sql</code> 并更新版本断言；备份需带 <code>row_owner</code> 映射（或默认匿名化），
+        避免跨主机恢复把 guest 的行归给恢复者。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>数据</b> · 身份 / 可见性 / 行所有权</span><span class="pnum"></span></div>
+</section>
+
+<!-- 16 api frontend -->
+<section class="slide s-data">
+  <div class="kicker">API 与前端 · INTERFACE</div>
+  <h2 class="title">成员 API、表可见性 API、per-app 会话</h2>
+  <div class="subtitle">前端只做确认与状态展示；权限判断全部在服务端，客户端不缓存授权结论。</div>
+  <div class="body">
+    <div class="cols">
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">API</span>API</h4>
+          <ul class="dash">
+            <li><code>GET/POST /api/apps/{id}/members</code> · <code>PATCH/DELETE /members/{user_id}</code></li>
+            <li><code>GET/POST/DELETE /api/apps/{id}/invites</code> · <code>POST /api/apps/invites/preview|redeem</code></li>
+            <li><code>GET/POST/DELETE /api/apps/{id}/join-codes</code> · <code>POST /api/apps/join/preview|redeem</code>（JWT 豁免、限流、原子消费）</li>
+            <li><code>POST /api/apps/{id}/session</code> · <code>POST /api/guest/apps/{id}/session</code></li>
+            <li><code>POST /api/guest/session/refresh</code> · <code>DELETE /api/guest/sessions/current</code></li>
+            <li><code>POST /api/apps/{id}/link-code</code>：WebView → IM <code>/link</code> 握手</li>
+            <li><code>PATCH /api/apps/{id}/tables/{key}</code> 增加 <code>member_visible</code></li>
+            <li><code>PUT /api/apps/{id}/shares</code> 只替换平台成员；保留 guest 行</li>
+            <li><code>GET /api/apps?scope=participating</code> · guest 门户 <code>/api/guest/apps</code></li>
+          </ul>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">UI</span>前端</h4>
+          <ul class="dash">
+            <li><b><code>/join</code> 确认页：</b>应用名、owner、角色、数据处理说明、同意勾选</li>
+            <li><b>应用详情 403 CTA：</b>“申请加入 / 使用加入码”，不再只显示空 / 未找到</li>
+            <li><b>成员与访问页签：</b>成员、表可见性、host policy、批量操作</li>
+            <li><b>guest 模式：</b>隐藏 Dashboard 导航 / Agent 入口；per-app token + guest token</li>
+            <li><b>guest 门户：</b><code>/my</code> 列出已加入应用、重新进入、退出/删除</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-top:8px;border-color:#f0cdd4;background:#fff8f9">
+          <h4><span class="ic">存</span>会话存储</h4>
+          <p class="mini">现在只有一个 <code>auth_token</code> + <code>octop_app_scope</code>（“one MiniApp only”）。v3 按 <code>app_id</code> 存 <code>app_token:&lt;id&gt;</code>，再加独立 <code>guest_token</code>；<code>request.ts</code> 按请求路径选 token。P1 不用 cookie。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span><b>接口</b> · API / 前端 / 会话</span><span class="pnum"></span></div>
+</section>
+
+<!-- 17 invariants -->
+<section class="slide s-risk">
+  <div class="kicker">安全不变量 · INVARIANTS</div>
+  <h2 class="title">八条必须始终成立</h2>
+  <div class="subtitle">每条都要有服务端断言和测试；提示词不算。</div>
+  <div class="body">
+    <div class="check" style="grid-template-columns:1fr 1fr;gap:7px 18px">
+      <div class="item"><span class="box">1</span><div><b>单一授权内核</b><br>HTTP / Agent / IM 都走 <code>authorize()</code>；<code>PERMISSION_RANK</code> 不出现在数据访问路径。</div></div>
+      <div class="item"><span class="box">2</span><div><b>Principal 隔离</b><br>guest 只能 <code>participate</code>；不能登录 / 持平台 token / 建 Agent / 进用户列表；submission 不建持久主体。</div></div>
+      <div class="item"><span class="box">3</span><div><b>会话作用域</b><br>platform / app / guest 三种 scope 互不升级；app token 只进单应用；per-app 存储不互相覆盖。</div></div>
+      <div class="item"><span class="box">4</span><div><b>表 / 行双重判定</b><br>participant 只能读 <code>member_visible</code> 表；user 表只看自己的行；row_owner ≠ created_by。</div></div>
+      <div class="item"><span class="box">5</span><div><b>PII 行级</b><br><code>view</code> 始终脱敏；<code>participate</code> 自己的行不脱敏、他人行脱敏；响应带 <code>masked_pii_rows</code>。</div></div>
+      <div class="item"><span class="box">6</span><div><b>加入码 / 邀请原子性</b><br>单次 / 次数上限 / 过期 / 撤销在事务内判断；join / invite 按 IP + code 限流。</div></div>
+      <div class="item"><span class="box">7</span><div><b>渠道绑定不可抢</b><br>同一 <code>(channel, account_key, sender_id)</code> 已绑定其他用户时拒绝覆盖；legacy <code>''</code> 只做回退；写审计。</div></div>
+      <div class="item"><span class="box">8</span><div><b>IM 边界</b><br>群聊只发公开链接；P2a 所有 app 数据工具要求 <code>owner_verified</code>；guest 绑定走 <code>/link</code>；P2b 先隔离 thread / memory。</div></div>
+    </div>
+    <div class="band" style="margin-top:11px;border-color:#f3d6dc;background:#fff8f9">
+      <p style="font-size:11px;line-height:1.5">
+        <b>成本边界：</b>guest 默认关闭 <code>ai</code>；<code>export / aggregate / service / emit_event</code> 对 <code>participate</code> 固定拒绝。per-action 配额是独立工作项，不在 P1 承诺。
+      </p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:9px">
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11.5px">授权矩阵</h4><p class="mini">角色 × action × 表 × 行 × PII；每新增端点先补矩阵。</p></div>
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11.5px">会话 / 恢复</h4><p class="mini">join 重放、refresh 轮换、撤销、跨标签、WebView 重开。</p></div>
+      <div class="card" style="padding:8px 10px"><h4 style="font-size:11.5px">IM 回归</h4><p class="mini">群聊不发个人码、伪造 sender 不提权、HITL actor 不丢。</p></div>
+    </div>
+  </div>
+  <div class="footer"><span><b>安全</b> · 不变量</span><span class="pnum"></span></div>
+</section>
+
+<!-- 18 existing risks -->
+<section class="slide s-risk">
+  <div class="kicker">既有风险 · EXISTING GAPS</div>
+  <h2 class="title">既有缺口：v3 纳入哪些、哪些单独立项</h2>
+  <div class="subtitle">P0 先修与授权内核直接相关的；其余单独立项，避免 diff 失控。</div>
+  <div class="body">
+    <div class="risks">
+      <div class="risk"><div class="hd"><h4>PII 4 处 exact "view"</h4><span class="sev high">P0</span></div><p>participate 会绕过脱敏；v3 改成行级 <code>can_view_pii</code> + 掩码标记。</p></div>
+      <div class="risk"><div class="hd"><h4>/shares 全量替换</h4><span class="sev high">P0</span></div><p>旧分享弹窗保存会删 guest；v3 只替换平台成员，保留 guest 行。</p></div>
+      <div class="risk"><div class="hd"><h4>PERMISSION_RANK 散落</h4><span class="sev high">P0</span></div><p>路由 / Agent 工具 / 集成操作各写一套；v3 收口到 <code>authorize()</code>，用 route action 注册表防漏。</p></div>
+      <div class="risk"><div class="hd"><h4>专家审批 = 全局 is_shared</h4><span class="sev mid">后续</span></div><p>为一个人分享给所有人；拒绝不回滚。单独重做审批模型。</p></div>
+      <div class="risk"><div class="hd"><h4>未绑定 / 群聊以 owner 执行 app 工具</h4><span class="sev mid">P2</span></div><p>P2a 先禁止 chat 个人数据；P2b 再做 sender actor。</p></div>
+      <div class="risk"><div class="hd"><h4>入口码纯 bearer</h4><span class="sev mid">P2a</span></div><p>兑换不校验聊天 / 发送者；个人码单次 + 10 分钟 + 签发记录 sender；guest 绑定用 <code>/link</code> 握手。</p></div>
+      <div class="risk"><div class="hd"><h4>公开面 PII 覆盖不完整</h4><span class="sev mid">后续</span></div><p>rows 脱敏，但冻结 HTML / 缓存 service / assets 不脱敏；guest 数据默认不进公开表。</p></div>
+    </div>
+    <div class="band" style="margin-top:10px">
+      <p style="font-size:10.5px;line-height:1.5">
+        <b>范围：</b>P0 = 授权内核 + 表可见性 / 行归属 schema + PII + /shares；P1 = 成员 / 邀请 / 加入码 / guest 会话；
+        P2a = IM 身份 / 链接 / 工具收口；P2b = actor。全局 is_shared、公开 PII、per-action 配额不混进本方案。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>风险</b> · 既有缺陷与范围</span><span class="pnum"></span></div>
+</section>
+
+<!-- 19 roadmap -->
+<section class="slide s-road">
+  <div class="kicker">路线图 · ROADMAP</div>
+  <h2 class="title">P0 → P1 → P2a / P2b → P3</h2>
+  <div class="subtitle">先授权，后成员；先 WebView，后 actor；先 host policy，后外部邀请。</div>
+  <div class="body">
+    <div class="timeline">
+      <div class="tstage">
+        <div class="tdot"></div>
+        <div class="tcard">
+          <div class="ph">P0 · 地基</div>
+          <h4>Principal + 授权矩阵</h4>
+          <ul>
+            <li><code>PrincipalDirectory</code> + <code>users.kind</code> + 三种 scope</li>
+            <li><code>authorize()</code> + action 注册表；清 rank</li>
+            <li><code>member_visible</code> / <code>row_owner</code> schema</li>
+            <li>PII 行级 / <code>/shares</code> 保留 guest</li>
+          </ul>
+          <div class="out">不改 UI；授权矩阵测试全绿</div>
+        </div>
+      </div>
+      <div class="tstage">
+        <div class="tdot"></div>
+        <div class="tcard">
+          <div class="ph">P1 · 外部参与者</div>
+          <h4>成员 + 表可见性 + guest</h4>
+          <ul>
+            <li>成员状态 / 邀请 / 加入码</li>
+            <li>guest / app token / per-app 存储</li>
+            <li>成员页 + host policy + 审计</li>
+            <li>guest 门户 / 批量操作 / 同意</li>
+          </ul>
+          <div class="out">外部用户只看到被允许的表和行</div>
+        </div>
+      </div>
+      <div class="tstage">
+        <div class="tdot"></div>
+        <div class="tcard">
+          <div class="ph">P2 · IM 分层</div>
+          <h4>P2a 链接 → P2b actor</h4>
+          <ul>
+            <li>P2a：account_key + sender_id + <code>/link</code></li>
+            <li>P2a：链接交付 + 数据工具 owner-only</li>
+            <li>P2b：per-sender thread / memory 隔离</li>
+            <li>P2b：才允许私聊个人数据</li>
+          </ul>
+          <div class="out">先送进 WebView，再谈 chat 身份</div>
+        </div>
+      </div>
+      <div class="tstage">
+        <div class="tdot"></div>
+        <div class="tcard">
+          <div class="ph">P3 · 组织化</div>
+          <h4>提交令牌 / 组 / 合并</h4>
+          <ul>
+            <li>一次性 submission token</li>
+            <li>用户组 / SSO 域共享</li>
+            <li>guest → member 合并</li>
+            <li>备份 / 恢复成员映射</li>
+          </ul>
+          <div class="out">组织级分发与治理</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:11px">
+      <div class="card" style="flex:1;padding:8px 10px;border-top:3px solid var(--brand)"><h4 style="font-size:11.5px">不滑档</h4><p class="mini">P0 授权内核 / rank 清零 / PII / schema；P1 邀请 + 加入码 + per-app token。</p></div>
+      <div class="card" style="flex:1;padding:8px 10px;border-top:3px solid var(--blue)"><h4 style="font-size:11.5px">可滑档</h4><p class="mini">渠道 OAuth、submission token、组共享、跨渠道合并。</p></div>
+      <div class="card" style="flex:1;padding:8px 10px;border-top:3px solid var(--teal)"><h4 style="font-size:11.5px">不混做</h4><p class="mini">全局 is_shared 审批、公开面 PII 全覆盖、IM 多用户记忆隔离（P2b 单独评估）。</p></div>
+    </div>
+  </div>
+  <div class="footer"><span><b>路线</b> · P0–P3</span><span class="pnum"></span></div>
+</section>
+
+<!-- 20 acceptance -->
+<section class="slide s-road">
+  <div class="kicker">验收 · ACCEPTANCE</div>
+  <h2 class="title">P0 / P1 的可验证结果</h2>
+  <div class="subtitle">默认 ship bar：<code>make all</code> 绿；新增行为断言，不只断言配置。</div>
+  <div class="body">
+    <div class="cols">
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">验</span>功能验收</h4>
+          <div class="check" style="grid-template-columns:1fr">
+            <div class="item"><span class="box">✓</span><div>participant 只看到 <code>member_visible</code> 的表；user 表只看自己的行；隐藏表 404</div></div>
+            <div class="item"><span class="box">✓</span><div>自己的行 PII 可见；共享表 / 他人行脱敏；响应带 <code>masked_pii_rows</code>；export/aggregate 拒绝</div></div>
+            <div class="item"><span class="box">✓</span><div>Agent 代填的行（<code>row_owner=guest</code>）guest 能看到；恢复后归属不丢</div></div>
+            <div class="item"><span class="box">✓</span><div><code>/shares</code> 保存后 guest 成员仍在；成员移除 / 禁用后下一次请求 403</div></div>
+            <div class="item"><span class="box">✓</span><div>guest token / app token 可在 WebView 重开；第二个应用不覆盖第一个</div></div>
+            <div class="item"><span class="box">✓</span><div>IM 群聊只拿公开链接；P2a 数据工具要求 <code>owner_verified</code>；<code>/link</code> 绑定 guest</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <h4><span class="ic">测</span>测试与命令</h4>
+          <ul class="dash">
+            <li><b>授权矩阵：</b>角色 × action × 表 visible × row_owner × PII</li>
+            <li><b>PII：</b>4 处 exact check 回归；own/shared 行对比</li>
+            <li><b>授权内核：</b><code>PERMISSION_RANK</code> grep 清零；<code>APP_ROUTE_ACTIONS</code> 覆盖全部路由</li>
+            <li><b>会话：</b>join 重放、refresh 轮换、撤销、多应用隔离、guest 禁用</li>
+            <li><b>成员：</b><code>/shares</code> 只替换平台成员、guest 保留、host 审批</li>
+            <li><b>IM：</b>群聊公开 only、未绑定 / 群聊数据工具拒绝、<code>/link</code>、伪造 sender 不提权</li>
+            <li><code>uv run pytest tests/unit -x -q</code> · <code>tests/integration -x -q</code> · <code>make all</code></li>
+          </ul>
+        </div>
+        <div class="band" style="margin-top:8px">
+          <p style="font-size:10.5px;line-height:1.5">
+            <b>回退验证：</b>新增断言后手动回退实现必须让断言失败；只跑绿不算验证。
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span><b>验收</b> · P0 / P1</span><span class="pnum"></span></div>
+</section>
+
+<!-- 21 decisions -->
+<section class="slide s-road">
+  <div class="kicker">决策 · DECISIONS</div>
+  <h2 class="title">八个关键决策，建议默认值</h2>
+  <div class="subtitle">先定 guest 角色 / 凭证 / 邀请模型，再排 P0；这四条决定后面所有实现的形状。</div>
+  <div class="body">
+    <div class="decisions">
+      <div class="decision"><div class="q"><span class="n">1</span><div>身份模型选 A / B / C'？</div></div><p>C' 统一 PrincipalDirectory + 双模式参与者；<code>users.kind</code> 是第一版实现，不是临时补丁。</p><span class="rec">建议 C'</span></div>
+      <div class="decision"><div class="q"><span class="n">2</span><div>guest 能持什么角色？</div></div><p><code>view</code> 能读全部表并导出，会绕过表可见性；guest 只能 <code>participate</code>，<code>view</code> 留给平台成员。</p><span class="rec">建议 guest 仅 participate</span></div>
+      <div class="decision"><div class="q"><span class="n">3</span><div>guest 凭证用 cookie 还是 token？</div></div><p>app iframe 是 opaque origin，不带 cookie；app-scope 白名单又排除了 Path 作用域。</p><span class="rec">建议 guest scope + app token，P1 无 cookie</span></div>
+      <div class="decision"><div class="q"><span class="n">4</span><div>外部邀请放哪张表？</div></div><p>外部人在邀请时没有 <code>users</code> 行，<code>app_access_requests.requester_user_id</code> 放不下。</p><span class="rec">建议 app_member_invites</span></div>
+      <div class="decision"><div class="q"><span class="n">5</span><div>PII 怎么脱敏？</div></div><p>行级：<code>view</code> 始终脱敏；<code>participate</code> 自己的行不脱敏；响应带掩码标记。</p><span class="rec">建议行级 can_view_pii</span></div>
+      <div class="decision"><div class="q"><span class="n">6</span><div>IM actor 先做还是后做？</div></div><p>P2a 只做链接 + 数据工具 owner-only；P2b 的 actor 以 thread / memory 隔离为前提。</p><span class="rec">建议 P2a 先行</span></div>
+      <div class="decision"><div class="q"><span class="n">7</span><div>跨 owner 外部邀请默认值？</div></div><p>默认关闭外部参与；guest 与不在 agent 范围内的 member 需要 host 审批。</p><span class="rec">建议默认 host 审批</span></div>
+      <div class="decision"><div class="q"><span class="n">8</span><div>per-action 配额现在做吗？</div></div><p>现有只有 token lifetime quota；export / aggregate / service 对 participate 直接拒绝，不需要新配额。</p><span class="rec">建议 P1 不做，单独立项</span></div>
+    </div>
+    <div class="band" style="margin-top:10px;border-color:#ddd3f3;background:linear-gradient(135deg,#faf8ff,#fff)">
+      <p style="font-size:11px;line-height:1.5">
+        <b>下一步：</b>P0 先落地 <code>PrincipalDirectory</code> + 三种凭证 scope + <code>authorize()</code> + rank 清零 + PII / <code>/shares</code>；
+        schema 提前到 P0；不动 UI、不建 guest。P1 再开成员 / 邀请 / 加入码 / 会话。
+      </p>
+    </div>
+  </div>
+  <div class="footer"><span><b>决策</b> · 默认建议</span><span class="pnum"></span></div>
+</section>
+
+<!-- 22 evidence -->
+<section class="slide">
+  <div class="kicker">附录 · 代码依据</div>
+  <h2 class="title">行号来自 2026-11-21 当前工作树</h2>
+  <div class="subtitle">实现前请以工作树最新代码复核；v3 新增的凭证 / 沙箱 / 缓存 / PII 证据在下方。</div>
+  <div class="body">
+    <table class="evidence">
+      <colgroup><col style="width:16%"><col style="width:50%"><col style="width:34%"></colgroup>
+      <tr><th>主题</th><th>代码位置</th><th>用途</th></tr>
+      <tr><td><b>主体 / 平台用户</b></td><td><code>infra/users/identity.py:17-31</code> · <code>infra/users/manager.py:83-130</code> · <code>api/routers/auth.py</code> · <code>infra/users/invites.py</code></td><td>member 模型、无自助注册、邀请 / SSO</td></tr>
+      <tr><td><b>应用 ACL</b></td><td><code>infra/apps/service.py:1114-1125</code> · <code>infra/apps/models.py:46</code> · <code>:564</code> · <code>api/routers/apps.py:3634-3672</code> · <code>infra/db/repos/apps.py:1163-1181</code></td><td>permission_for、50 上限、全量替换 shares</td></tr>
+      <tr style="background:#fff8f9"><td><b>PII / 行作用域</b></td><td><code>api/routers/apps.py:2185 · 3177 · 3347 · 3413</code>（exact view） · <code>:3178 · 3282 · 3314 · 3419</code>（include_all_rows）</td><td>participate 的 PII / 行可见性风险</td></tr>
+      <tr><td><b>访问申请</b></td><td><code>infra/apps/service.py:1616-1623</code> · <code>:1584-1602</code> · <code>api/routers/app_access.py:251-352</code></td><td>双 owner、全局 is_shared、拒绝不回滚</td></tr>
+      <tr><td><b>凭证 / 沙箱 / 前端</b></td><td><code>api/deps.py:121-190</code> · <code>api/routers/app_access_link.py:135-176</code> · <code>infra/apps/sandbox.py:248</code> · <code>Apps/Detail.tsx:541-545</code> · <code>dashboard/src/api/request.ts:7-22</code> · <code>users/manager.py:104-223</code></td><td>app-scope 白名单、iframe 无 same-origin、单 token、guest 缓存边界</td></tr>
+      <tr><td><b>公开面</b></td><td><code>api/routers/public_apps.py:117-240</code> · <code>infra/apps/service.py:6979-7002</code> · <code>:5788</code></td><td>只读快照、只读缓存 POST、恢复 created_by</td></tr>
+      <tr><td><b>IM 身份</b></td><td><code>infra/gateway/process/message_keys.py:79-105 · :135-151</code> · <code>infra/auth/channel_binding.py:69-90</code> · <code>migrations/045_app_setup_plans.sql:47-58</code></td><td>owner 归属、session key、身份表</td></tr>
+      <tr><td><b>IM 工具</b></td><td><code>infra/apps/tools.py:283-297 · :520-651</code> · <code>infra/agents/tool_scope.py:18-72</code></td><td>HTTP / Agent 授权差异、share_link、HITL actor</td></tr>
+      <tr><td><b>前端</b></td><td><code>dashboard/src/pages/Apps/Detail.tsx:122-129 · :257-278</code> · <code>plugins/toolRenderers/builtin/AppPermissionCard.tsx:129-162</code></td><td>canManage、无权限空态、唯一申请入口</td></tr>
+      <tr><td><b>文档边界</b></td><td><code>docs/miniapp-overview.md:63</code> · <code>docs/miniapp-platform-roadmap.md:483-490</code> · <code>docs/miniapp-desktop-system-apps-plan.md:130</code></td><td>非多租户、D4-lite 现状、用户管理不进沙箱</td></tr>
+    </table>
+  </div>
+  <div class="footer"><span><b>附录</b> · 代码依据 · 完</span><span class="pnum"></span></div>
+</section>
+
+</div></div>
+
+<div id="hud" title="← / → 翻页 · Home/End 首尾 · F 全屏 · P 打印">
+  <button id="prev" title="上一页">‹</button>
+  <span id="pageno"></span>
+  <button id="next" title="下一页">›</button>
+  <button id="fs" title="全屏">⛶</button>
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var cur = 0;
+  var bar = document.getElementById('bar');
+  var pageno = document.getElementById('pageno');
+  slides.forEach(function(s, k){
+    var p = s.querySelector('.pnum');
+    if (p) p.textContent = String(k + 1).padStart(2, '0');
+  });
+  function show(i){
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach(function(s, k){ s.classList.toggle('active', k === cur); });
+    pageno.textContent = (cur + 1) + ' / ' + slides.length;
+    bar.style.width = ((cur + 1) / slides.length * 100) + '%';
+    if (history.replaceState) history.replaceState(null, '', '#' + (cur + 1));
+  }
+  function fit(){
+    var s = Math.min(window.innerWidth / 1280, window.innerHeight / 720) * 0.97;
+    document.getElementById('stage').style.transform = 'scale(' + s + ')';
+  }
+  function fs(){
+    try{
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    }catch(e){}
+  }
+  document.getElementById('prev').addEventListener('click', function(){ show(cur - 1); });
+  document.getElementById('next').addEventListener('click', function(){ show(cur + 1); });
+  document.getElementById('fs').addEventListener('click', fs);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { show(cur + 1); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { show(cur - 1); e.preventDefault(); }
+    else if (e.key === 'Home') { show(0); e.preventDefault(); }
+    else if (e.key === 'End') { show(slides.length - 1); e.preventDefault(); }
+    else if (e.key === 'f' || e.key === 'F') { fs(); }
+    else if (e.key === 'p' || e.key === 'P') { window.print(); }
+  });
+  window.addEventListener('resize', fit);
+  var h = parseInt((location.hash || '').replace('#', ''), 10);
+  show(isNaN(h) ? 0 : h - 1);
+  fit();
+})();
+</script>
+</body>
+</html>

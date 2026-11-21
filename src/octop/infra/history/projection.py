@@ -151,11 +151,28 @@ def _wire_text(item: ThreadMessageInput) -> str:
     return ""
 
 
+# A runaway stream (or a provider echoing its own prompt) must not grow one
+# history row to hundreds of KB. Keep the most recent slice, which is what the
+# user was actually waiting for.
+MAX_STREAM_TEXT_CHARS = 32_000
+MAX_STREAM_REASONING_CHARS = 32_000
+
+
+def _clip_stream(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return "… (truncated)\n" + text[-limit:]
+
+
 @dataclass
 class TurnHistoryTracker:
     """Keep only the current user turn from replay-prone state chunks."""
 
     seed_messages: list[Any] = field(default_factory=list)
+    # Set by the turn recorder before ``inputs`` is read. Complete turns trust
+    # the checkpoint; only interrupted turns need the synthetic stream row.
+    completed: bool = False
+    started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000), init=False)
     _state_messages: list[Any] = field(default_factory=list, init=False)
     _stream_text: str = field(default="", init=False)
     _reasoning_text: str = field(default="", init=False)
@@ -199,10 +216,22 @@ class TurnHistoryTracker:
     def _stream_message(self) -> ThreadMessageInput | None:
         if not self._stream_text and not self._reasoning_text:
             return None
+        content = _clip_stream(self._stream_text, MAX_STREAM_TEXT_CHARS)
         extra: dict[str, Any] = {}
         if self._reasoning_text:
-            extra["reasoning_content"] = self._reasoning_text
-        return live_message_input(AIMessage(content=self._stream_text, additional_kwargs=extra))
+            extra["reasoning_content"] = _clip_stream(
+                self._reasoning_text, MAX_STREAM_REASONING_CHARS
+            )
+        digest = hashlib.sha256(f"{self.started_at_ms}:{self._stream_text}".encode()).hexdigest()[
+            :32
+        ]
+        return live_message_input(
+            AIMessage(
+                content=content,
+                id=f"stream:{digest}",
+                additional_kwargs=extra,
+            )
+        )
 
     def _error_input(self) -> ThreadMessageInput | None:
         if not self._error_message:
@@ -213,12 +242,24 @@ class TurnHistoryTracker:
         return live_message_input(AIMessage(content=self._error_message, additional_kwargs=extra))
 
     def _inputs_cover_stream(self, items: list[ThreadMessageInput]) -> bool:
-        if not self._stream_text:
+        """True when a checkpoint assistant row already ends with the streamed text.
+
+        The stream concatenates every model round (preambles included), so the
+        state's final assistant message is normally a suffix of it. Earlier
+        preambles live in their own state rows.
+        """
+        stream = self._stream_text.strip()
+        if not stream:
             return False
-        return any(
-            item.role in _ASSISTANT_ROLES and self._stream_text in _wire_text(item)
-            for item in items
-        )
+        for item in items:
+            if item.role not in _ASSISTANT_ROLES:
+                continue
+            text = _wire_text(item).strip()
+            if not text:
+                continue
+            if text == stream or stream in text or stream.endswith(text):
+                return True
+        return False
 
     @property
     def inputs(self) -> list[ThreadMessageInput]:
@@ -230,10 +271,18 @@ class TurnHistoryTracker:
             source,
             dedupe_missing_ids=True,
         )
-        if not self._inputs_cover_stream(items):
-            streamed = self._stream_message()
-            if streamed is not None:
-                items.append(streamed)
+        has_state_answer = any(
+            item.role in _ASSISTANT_ROLES and _wire_text(item).strip() for item in items
+        )
+        if self.completed and has_state_answer:
+            # The checkpoint is authoritative for a finished turn. The raw
+            # stream may include preambles or replay text the state already
+            # represents; appending it duplicated the answer and its thinking.
+            streamed = None
+        else:
+            streamed = None if self._inputs_cover_stream(items) else self._stream_message()
+        if streamed is not None:
+            items.append(streamed)
         error = self._error_input()
         if error is not None:
             items.append(error)

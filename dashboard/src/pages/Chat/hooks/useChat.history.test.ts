@@ -2,13 +2,35 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { octopThreadsApi } from "../../../api/modules/octopThreads";
 import * as chatStore from "./chatStore";
-import { useChat } from "./useChat";
+import { convertHistoryMessages, useChat } from "./useChat";
 
 const thread = "versioned-history-test";
 
 afterEach(() => {
   vi.restoreAllMocks();
   chatStore.removeSession(thread);
+});
+
+describe("history HITL cards", () => {
+  it("maps a persisted decision to a resolved card", () => {
+    const [message] = convertHistoryMessages([
+      {
+        role: "assistant",
+        id: "hitl:p1",
+        content: [],
+        hitl: {
+          pending_id: "p1",
+          action_requests: [{ name: "execute", args: { cmd: "ls" } }],
+          status: "approved",
+          resolution: "allow_tool",
+        },
+      },
+    ]);
+    expect(message.hitlData?.status).toBe("approved");
+    expect(message.hitlData?.resolution).toBe("allow_tool");
+    expect(message.hitlData?.action_requests[0]?.name).toBe("execute");
+    expect(message.id).toBe("hitl:p1");
+  });
 });
 
 describe("history failures", () => {

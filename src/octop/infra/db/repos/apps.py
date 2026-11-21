@@ -41,6 +41,7 @@ class LightAppRow:
     capabilities_json: str
     previous_html: str
     previous_html_at: int | None
+    setup_plan_id: str | None
     created_at: int
     updated_at: int
 
@@ -62,6 +63,7 @@ class LightAppRow:
             previous_html_at=(
                 int(r["previous_html_at"]) if r["previous_html_at"] is not None else None
             ),
+            setup_plan_id=(str(r["setup_plan_id"]) if r["setup_plan_id"] is not None else None),
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
         )
@@ -324,15 +326,20 @@ class LightAppRepo:
         app_id: str | None = None,
         storage_version: int = 1,
         capabilities_json: str = "",
+        setup_plan_id: str | None = None,
     ) -> LightAppRow:
+        if setup_plan_id:
+            existing = self.get_by_setup_plan_id(setup_plan_id)
+            if existing is not None:
+                return existing
         app_id = app_id or self.allocate_id()
         ts = now_ts()
         with self._db.transaction() as conn:
             conn.execute(
                 "INSERT INTO light_apps("
                 "app_id, agent_id, owner_user_id, name, description, row_count, "
-                "storage_version, capabilities_json, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+                "storage_version, capabilities_json, setup_plan_id, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
                 (
                     app_id,
                     agent_id,
@@ -341,6 +348,7 @@ class LightAppRepo:
                     description,
                     storage_version,
                     capabilities_json,
+                    setup_plan_id,
                     ts,
                     ts,
                 ),
@@ -355,6 +363,14 @@ class LightAppRepo:
             r = conn.execute(
                 "SELECT * FROM light_apps WHERE app_id = ?",
                 (app_id,),
+            ).fetchone()
+        return LightAppRow.from_row(r) if r else None
+
+    def get_by_setup_plan_id(self, setup_plan_id: str) -> LightAppRow | None:
+        with self._db.connect() as conn:
+            r = conn.execute(
+                "SELECT * FROM light_apps WHERE setup_plan_id = ?",
+                (setup_plan_id,),
             ).fetchone()
         return LightAppRow.from_row(r) if r else None
 

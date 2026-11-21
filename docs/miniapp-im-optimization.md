@@ -190,8 +190,9 @@ async def app_share_link(
   绝对地址；未设置时从 TLS 域名推导，仍为空则返回相对路径。
 - **预览缓存**：`app_share_link` 只读取已有预览文件，不触发生成/截图。SVG 预览标记
   `im_safe: false`，不会自动推到微信（iLink 图片消息需要栅格格式）。
-- **权限**：创建/轮换链接需要 `edit_structure`；`app_open` 在 IM 上遇到只读用户时降级为
-  名称 + 描述文本，不发相对链接。
+- **权限**：公开链接的创建/轮换需要 owner/admin + `edit_structure`；个人认证链接要求
+  身份已验证的私聊 + 至少 `view`，链接登录的是用户自己，app 权限仍由 ACL 校验。当前没有身份
+  绑定入口，因此实际只发公开链接；未验证/群聊的只读用户仍降级为名称 + 描述文本。
 
 ## 9. 创建流程的 IM 优化
 
@@ -268,3 +269,10 @@ P0 已落地：
 
 部署时需要设置 `OCTOP_PUBLIC_BASE_URL`（或 `config.json` 的 `public_base_url`），
 否则链接仍是相对路径。
+
+### 13.1 IM 认证链接与渠道身份（D4-lite，2026-11-21）
+
+- **D4-lite 渠道身份**：Dashboard「个人设置 → IM 账号绑定」生成一次性绑定码（TTL 5 分钟）；用户在绑定该 Agent 的 IM 私聊发送 `/bind <code>`，网关写入 `channel_identities`。只有绑定到 agent owner 本人的私聊发送者会被标记 `octop_identity_verified`；不切换 acting user，群聊/Dashboard/CLI 一律拒绝。
+- **D3 认证链接**：`app_share_link(mode="auto")` 在发送者已验证为 app owner 的私聊 + `public_base_url` 时返回 `${public_base_url}/login/app-access?code=...`；10 分钟单次消费。SPA 确认页调用 `POST /api/auth/app-access/preview`（只读）和 `POST /api/auth/app-access/exchange`，不会在 GET/链接预览时消费。
+- **兑换结果**：app-scoped JWT，TTL 2 小时，只允许 `/api/apps/{app_id}` 子路由和少量只读启动接口；其他接口返回 `APP_SCOPE_FORBIDDEN`，滑动续期不会升级为全量 token。
+- **群聊/兼容**：群聊、未绑定身份、绑定到其他用户、dashboard 来源仍返回公开 `/p/` 链接；`rotate=True` 始终走公开链接，不会被 auto 抢成认证链接。

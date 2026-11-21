@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from octop.infra.gateway.media.tool_media import (
 from octop.infra.gateway.process.agent_resolve import harness_workspace_for_agent
 from octop.infra.gateway.process.usage_record import UsageTracker
 from octop.infra.history.projection import TurnHistoryTracker
+from octop.infra.utils.llm_text import strip_internal_payloads
 from octop.infra.utils.locale import DEFAULT_LOCALE, Locale, normalize_locale
 from octop.infra.utils.turn_failure import log_failed_tool_results
 
@@ -28,6 +30,14 @@ if TYPE_CHECKING:
     from octop.infra.gateway.hitl.coordinator import HitlChannelCoordinator, HitlStreamContext
 
 install_harness_hitl_compat()
+
+logger = logging.getLogger(__name__)
+
+# A provider echoing its prompt (or a harness replay) shows up as a few giant
+# stream chunks and a huge per-turn reasoning total. Log it so the next
+# occurrence has a concrete fingerprint; the content itself is never logged.
+_OVERSIZED_CHUNK_WARN = 4_096
+_REASONING_TURN_WARN = 64_000
 
 
 @dataclass
@@ -65,6 +75,29 @@ class _ToolProjectionState:
     emitted_tool_error_ids: set[str] = field(default_factory=set)
     started_at: float = field(default_factory=time.monotonic)
     repeat_counts: dict[str, int] = field(default_factory=dict)
+    oversized_chunks: int = 0
+    reasoning_chars: int = 0
+    reasoning_cap_logged: bool = False
+
+
+def _warn_oversized_chunk(
+    state: _ToolProjectionState,
+    kind: str,
+    content: str,
+    *,
+    thread_id: str,
+    agent_id: str,
+) -> None:
+    if len(content) <= _OVERSIZED_CHUNK_WARN or state.oversized_chunks >= 3:
+        return
+    state.oversized_chunks += 1
+    logger.warning(
+        "oversized %s stream chunk len=%d thread=%s agent=%s",
+        kind,
+        len(content),
+        thread_id,
+        agent_id,
+    )
 
 
 def _cancel_stream(agent_manager: AgentManager, agent_id: str, thread_id: str) -> None:
@@ -175,6 +208,24 @@ async def _project_chunks(
         if budget is not None and time.monotonic() - tool_state.started_at > budget.max_seconds:
             yield _budget_stop(tr("stream_guard.time_budget", loc, seconds=int(budget.max_seconds)))
             return
+        ctype: str = chunk.get("type", "")
+        if ctype == "token":
+            raw_content = chunk.get("content")
+            if isinstance(raw_content, str):
+                cleaned = strip_internal_payloads(raw_content)
+                if cleaned != raw_content:
+                    # octop-memory's manual-document audit is a non-streaming
+                    # internal invoke; LangGraph's messages stream can surface
+                    # its JSON as if the assistant said it. Strip the envelope
+                    # and keep any real answer text that followed it.
+                    logger.info(
+                        "stripped internal memory payload thread=%s agent=%s",
+                        thread_id,
+                        agent_id,
+                    )
+                    if not cleaned.strip():
+                        continue
+                    chunk = {**chunk, "content": cleaned}
         if usage_tracker is not None:
             usage_tracker.observe(chunk)
         if history_tracker is not None:
@@ -182,7 +233,6 @@ async def _project_chunks(
             from octop.infra.history.recorder import flush_tracker  # noqa: PLC0415
 
             await flush_tracker(history_tracker)
-        ctype: str = chunk.get("type", "")
         node: str | None = chunk.get("node")
 
         if ctype == "token":
@@ -191,11 +241,37 @@ async def _project_chunks(
             tool_state.current_node = node
             content = chunk.get("content") or ""
             if content:
+                _warn_oversized_chunk(
+                    tool_state,
+                    "token",
+                    content,
+                    thread_id=thread_id,
+                    agent_id=agent_id,
+                )
                 yield MessageEvent.delta(content)
 
         elif ctype == "reasoning":
             content = chunk.get("content") or ""
             if content:
+                tool_state.reasoning_chars += len(content)
+                _warn_oversized_chunk(
+                    tool_state,
+                    "reasoning",
+                    content,
+                    thread_id=thread_id,
+                    agent_id=agent_id,
+                )
+                if (
+                    tool_state.reasoning_chars >= _REASONING_TURN_WARN
+                    and not tool_state.reasoning_cap_logged
+                ):
+                    tool_state.reasoning_cap_logged = True
+                    logger.warning(
+                        "turn reasoning exceeds %d chars thread=%s agent=%s",
+                        _REASONING_TURN_WARN,
+                        thread_id,
+                        agent_id,
+                    )
                 yield MessageEvent.thinking_delta(content)
 
         elif ctype == "tool_call_chunk":

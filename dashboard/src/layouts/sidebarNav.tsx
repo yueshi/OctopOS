@@ -17,6 +17,7 @@ import {
   Package,
   HardDrive,
   GraduationCap,
+  ListChecks,
   Shield,
   PanelsTopLeft,
   AppWindow,
@@ -83,6 +84,7 @@ export const SIDEBAR_NAV_KEYS = [
   "remote-desktop",
   "acp",
   "admin-users",
+  "admin-setup-plans",
   "models",
   "admin-storage",
   "admin-plugins",
@@ -138,6 +140,7 @@ export const SIDEBAR_GROUPED_NAV_KEYS = [
   "remote-desktop",
   "acp",
   "admin-users",
+  "admin-setup-plans",
   "models",
   "admin-storage",
   "admin-plugins",
@@ -304,6 +307,14 @@ export function buildNavSections(
       path: "/admin/users",
       icon: <UsersIcon size={iconSize} strokeWidth={iconStroke} />,
       labelKey: "nav.adminUsers",
+    });
+  }
+  if (navAllowed(user, "admin-setup-plans")) {
+    adminItems.push({
+      key: "admin-setup-plans",
+      path: "/admin/setup-plans",
+      icon: <ListChecks size={iconSize} strokeWidth={iconStroke} />,
+      labelKey: "nav.adminSetupPlans",
     });
   }
   if (navAllowed(user, "models")) {

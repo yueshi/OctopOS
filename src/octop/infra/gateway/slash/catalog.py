@@ -262,6 +262,16 @@ CATALOG: tuple[SlashCommandSpec, ...] = (
         origins=frozenset({"ui", "cli"}),
     ),
     SlashCommandSpec(
+        name="bind",
+        usage="/bind <code>",
+        icon="Link",
+        tone="emerald",
+        category="system",
+        origins=frozenset({"im"}),
+        # The code is a credential; do not persist it in the agent history.
+        persist_checkpoint=False,
+    ),
+    SlashCommandSpec(
         name="exit",
         aliases=("quit",),
         usage="/exit",

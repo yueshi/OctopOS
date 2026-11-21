@@ -84,6 +84,7 @@ class AuditRepo:
         since: int | None = None,
         actor: str | None = None,
         action: str | None = None,
+        target: str | None = None,
         limit: int = 100,
     ) -> list[AuditRow]:
         conditions: list[str] = []
@@ -97,6 +98,9 @@ class AuditRepo:
         if action is not None:
             conditions.append("action = ?")
             params.append(action)
+        if target is not None:
+            conditions.append("target = ?")
+            params.append(target)
         sql = "SELECT * FROM audit_log"
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)

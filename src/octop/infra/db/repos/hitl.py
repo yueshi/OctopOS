@@ -133,6 +133,22 @@ class HitlPendingRepo:
             rows = conn.execute(sql, params).fetchall()
         return map_rows(rows, HitlPendingRow)
 
+    def list_by_thread(
+        self,
+        thread_id: str,
+        *,
+        status: str | None = None,
+    ) -> list[HitlPendingRow]:
+        sql = "SELECT * FROM hitl_pending WHERE thread_id = ?"
+        params: list[object] = [thread_id]
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC, id DESC"
+        with self._db.connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return map_rows(rows, HitlPendingRow)
+
     def has_pending_ask(self, session_key: str, *, task_id: str) -> bool:
         with self._db.connect() as conn:
             r = conn.execute(

@@ -25,7 +25,12 @@ from octop.infra.gateway.process.message_keys import (
     STREAM_ERROR_FLAG,
     parse_checkpoint_ts_ms,
 )
-from octop.infra.utils.llm_text import strip_thinking as _strip_thinking
+from octop.infra.utils.llm_text import (
+    strip_internal_payloads,
+)
+from octop.infra.utils.llm_text import (
+    strip_thinking as _strip_thinking,
+)
 from octop.infra.utils.locale import normalize_locale
 
 logger = logging.getLogger(__name__)
@@ -52,6 +57,15 @@ _OFFLOAD_PLACEHOLDER_RE = re.compile(
 
 HISTORY_DEFAULT_LIMIT = 25
 HISTORY_MAX_LIMIT = 200
+# Old projection rows may carry a whole-history reasoning replay; keep the
+# dashboard render bounded even before those rows are cleaned up.
+MAX_HISTORY_REASONING_CHARS = 32_000
+
+
+def _clip_history_reasoning(text: str) -> str:
+    if len(text) <= MAX_HISTORY_REASONING_CHARS:
+        return text
+    return "… (truncated)\n" + text[-MAX_HISTORY_REASONING_CHARS:]
 
 
 def _clamp_history_limit(limit: int) -> int:
@@ -473,6 +487,9 @@ def _load_projected_thread_messages(
             message,
             user=user,
             fallback_created_at=row.created_at,
+            # Synthetic stream rows have no LangGraph id. Use the immutable
+            # projection seq so dashboard ids stay stable across pages.
+            fallback_id=f"row:{row.seq}",
         )
         if entry is not None:
             out.append(entry)
@@ -872,16 +889,20 @@ def _content_blocks_from_raw(
     if isinstance(additional_kwargs, dict):
         reasoning = additional_kwargs.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
-            blocks.append({"type": "thinking", "thinking": reasoning.strip()})
+            blocks.append(
+                {"type": "thinking", "thinking": _clip_history_reasoning(reasoning.strip())}
+            )
 
     if isinstance(content, str):
+        content = strip_internal_payloads(content)
         if content.strip():
             blocks.extend(_split_string_thinking(content))
     elif isinstance(content, list):
         for block in content:
             if isinstance(block, str):
-                if block.strip():
-                    blocks.append({"type": "text", "text": block})
+                text = strip_internal_payloads(block)
+                if text.strip():
+                    blocks.append({"type": "text", "text": text})
                 continue
             if not isinstance(block, dict):
                 continue
@@ -889,9 +910,14 @@ def _content_blocks_from_raw(
             if btype in ("thinking", "reasoning"):
                 thinking = block.get("thinking") or block.get("reasoning") or block.get("text")
                 if isinstance(thinking, str) and thinking.strip():
-                    blocks.append({"type": "thinking", "thinking": thinking.strip()})
+                    blocks.append(
+                        {
+                            "type": "thinking",
+                            "thinking": _clip_history_reasoning(thinking.strip()),
+                        }
+                    )
             elif btype == "text":
-                text = str(block.get("text") or "")
+                text = strip_internal_payloads(str(block.get("text") or ""))
                 if text:
                     blocks.append({"type": "text", "text": text})
             else:
@@ -908,7 +934,7 @@ def _split_string_thinking(text: str) -> list[dict[str, Any]]:
             blocks.append({"type": "text", "text": prefix})
         thinking = match.group(1).strip()
         if thinking:
-            blocks.append({"type": "thinking", "thinking": thinking})
+            blocks.append({"type": "thinking", "thinking": _clip_history_reasoning(thinking)})
         last_end = match.end()
     suffix = text[last_end:].strip()
     if suffix:
@@ -923,6 +949,7 @@ def _serialize_history_message(
     *,
     user: Any = None,
     fallback_created_at: int | None = None,
+    fallback_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Project a LangGraph checkpoint message into dashboard history shape."""
     role = _message_role(msg)
@@ -955,6 +982,8 @@ def _serialize_history_message(
         entry: dict[str, Any] = {"role": "tool", "content": blocks}
         if mid:
             entry["id"] = mid
+        elif fallback_id:
+            entry["id"] = fallback_id
         speaker = additional_kwargs.get("speaker_agent_id")
         if isinstance(speaker, str) and speaker.strip():
             entry["agent_id"] = speaker.strip()
@@ -998,12 +1027,19 @@ def _serialize_history_message(
             strip_empty_image=True,
         )
 
-    if not blocks and not (role == "user" and has_user_attachments):
+    hitl_record = additional_kwargs.get("octop_hitl")
+    if not isinstance(hitl_record, dict):
+        hitl_record = None
+    if not blocks and hitl_record is None and not (role == "user" and has_user_attachments):
         return None
 
     entry = {"role": role, "content": blocks}
+    if hitl_record is not None and role == "assistant":
+        entry["hitl"] = hitl_record
     if mid:
         entry["id"] = mid
+    elif fallback_id:
+        entry["id"] = fallback_id
     if isinstance(usage, dict) and usage:
         entry["usage"] = usage
     if role == "user":

@@ -51,6 +51,7 @@ import { ChatFilePreviewProvider } from "../Chat/ChatFilePreviewContext";
 import * as chatStore from "../Chat/hooks/chatStore";
 import { useChat, type ChatAttachment } from "../Chat/hooks/useChat";
 import { parseConversationMode } from "../Chat/utils/conversationMode";
+import { mergeAllowTools } from "../Chat/utils/hitlSessionPolicy";
 import {
   collectSessionApps,
   mergeSessionApps,
@@ -850,9 +851,17 @@ function DesktopChatWindow({
 
   const handleHitlDecision: HitlDecisionHandler = useCallback(
     (decisions, policy, pendingId) => {
-      resumeHitl(decisions, undefined, undefined, policy, pendingId);
+      if (policy) {
+        const next =
+          policy.mode === "allow_tools"
+            ? mergeAllowTools(hitlPolicy ?? { mode: "ask" }, policy.tools ?? [])
+            : policy;
+        resumeHitl(decisions, undefined, undefined, next, pendingId);
+        return;
+      }
+      resumeHitl(decisions, undefined, undefined, undefined, pendingId);
     },
-    [resumeHitl],
+    [hitlPolicy, resumeHitl],
   );
 
   const handleSelectThread = useCallback(

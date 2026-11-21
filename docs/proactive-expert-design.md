@@ -74,8 +74,8 @@
 
 | 能力 | 现状 | 引用 |
 |---|---|---|
-| 强制 HITL 工具 | `MANDATORY_HITL_TOOLS = {"app_delete"}`——永不旁路（连同 `ask_user_question`）；policy 校验缺失即报错 | `infra/agents/security/hitl_session.py:22,255`、`policy_store.py:65` |
-| 线程级 bypass | `allow_all/allow_tools` 存在，但不含 mandatory 清单 | `hitl_session.py:49-94` |
+| 强制 HITL 工具 | `FORCED_HITL_TOOLS` 把所有敏感 MiniApp 工具强制纳入 HITL；其中 `MANDATORY_HITL_TOOLS`（`app_delete`、删行/改结构、公开表、分享、集成写操作等）永不旁路（连同 `ask_user_question`）；只有 `app_import_rows` / `app_add_service` / `app_set_capabilities` 可按对话放通 | `infra/agents/security/hitl_session.py`、`policy_store.py` |
+| 线程级 bypass | `allow_all/allow_tools` 存在；不覆盖 `MANDATORY_HITL_TOOLS`，但可覆盖 MiniApp 搭建类工具 | `hitl_session.py` |
 | agent 归属校验 | `admin \|\| owner \|\| shared`（kind 无关）；团队路由另有显式 `is_team_agent` 检查 | `api/common/agent.py:26-36`、`api/routers/teams.py:66-72` |
 | HITL 响应入口 | dashboard SSE resume / IM slash 均为既有闭环 | `api/routers/chat/routes.py:105-306`、`gateway/hitl/coordinator.py:481-609` |
 
@@ -176,7 +176,7 @@
 | 风险 | 单专家场景的形态 | 缓解 / 闸门 |
 |---|---|---|
 | 失控循环 | 目标误解析→无限产任务/自催 | 预算闸门（E2）；C2 是硬前置 |
-| 误操作面大 | **专家有全量工具**（邮件/MCP/文件写）vs 主持人仅 5 工具——自治风险高于团队版 | ① cron `write_scope` 禁写维持 + 批准放行（§7.4-⑤）；② `MANDATORY_HITL_TOOLS` 机制扩展（现有 `{"app_delete"}`，`hitl_session.py:22`，自治上下文可叠加高风险写工具）；③ 线程 bypass 不覆盖 mandatory（`hitl_session.py:255` 已保证） |
+| 误操作面大 | **专家有全量工具**（邮件/MCP/文件写）vs 主持人仅 5 工具——自治风险高于团队版 | ① cron `write_scope` 禁写维持 + 批准放行（§7.4-⑤）；② `MANDATORY_HITL_TOOLS` 机制扩展（现有 `app_delete` + 破坏性 MiniApp 工具；MiniApp 搭建类工具可按对话放通）；③ 线程 bypass 不覆盖 mandatory |
 | 提示注入 | 外部内容（agently 邮件、connector 同步）流入 wake 上下文即可指挥专家 | 外部内容 data-not-instruction；外部触发器默认不进自治循环（D21 继承） |
 | 成本 | wake = 完整 ReAct 工具循环，比 care push（过程式 ≤200 字）贵 1–2 个量级；但无多成员放大 | active_hours 默认窗 + interval 下限 + usage 配额（E5） |
 | 自产自审 | 无独立审核环节，质量风险内化 | `review` 状态 + owner 验收开关（默认开）；`success_criteria` 写入 goal 作为 wake 自检依据 |

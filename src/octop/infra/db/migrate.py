@@ -2063,6 +2063,118 @@ def _ensure_light_app_services_schema(db: DatabasePool) -> None:
     )
 
 
+def _ensure_app_setup_plans_schema(db: DatabasePool) -> None:
+    """Create the v45 setup-plan table and app link idempotently."""
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS app_setup_plans (
+              id            {pk},
+              plan_id       TEXT NOT NULL UNIQUE,
+              thread_id     TEXT REFERENCES threads(thread_id) ON DELETE CASCADE,
+              agent_id      TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+              user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              source_path   TEXT NOT NULL,
+              source_hash   TEXT NOT NULL DEFAULT '',
+              report_json   TEXT NOT NULL DEFAULT '{{}}',
+              table_json    TEXT NOT NULL DEFAULT '{{}}',
+              name          TEXT NOT NULL DEFAULT '',
+              status        TEXT NOT NULL DEFAULT 'draft',
+              revision      INTEGER NOT NULL DEFAULT 1,
+              app_id        TEXT REFERENCES light_apps(app_id) ON DELETE SET NULL,
+              dry_run_json  TEXT NOT NULL DEFAULT '{{}}',
+              result_json   TEXT NOT NULL DEFAULT '{{}}',
+              error         TEXT NOT NULL DEFAULT '',
+              expires_at    INTEGER,
+              created_at    INTEGER NOT NULL,
+              updated_at    INTEGER NOT NULL,
+              confirmed_at  INTEGER,
+              executed_at   INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_setup_plans_thread "
+            "ON app_setup_plans(thread_id, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_setup_plans_user "
+            "ON app_setup_plans(user_id, created_at)"
+        )
+    if not _table_exists(db, "light_apps"):
+        return
+    _ensure_column(db, "light_apps", "setup_plan_id", "TEXT")
+    with db.connect() as conn:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_light_apps_setup_plan "
+            "ON light_apps(setup_plan_id) WHERE setup_plan_id IS NOT NULL"
+        )
+
+
+def _ensure_miniapp_im_identity_schema(db: DatabasePool) -> None:
+    """Create channel binding and MiniApp access-code tables idempotently."""
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS channel_identities (
+              id                   {pk},
+              channel_type         TEXT NOT NULL,
+              external_subject_id  TEXT NOT NULL,
+              user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              verified_at          INTEGER NOT NULL,
+              created_at           INTEGER NOT NULL,
+              UNIQUE(channel_type, external_subject_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_identities_user "
+            "ON channel_identities(user_id, channel_type)"
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS channel_bind_codes (
+              id          {pk},
+              code_hash   TEXT NOT NULL UNIQUE,
+              user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              expires_at  INTEGER NOT NULL,
+              consumed_at INTEGER,
+              created_at  INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_bind_codes_expires "
+            "ON channel_bind_codes(expires_at)"
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS app_access_codes (
+              id                 {pk},
+              code_hash          TEXT NOT NULL UNIQUE,
+              app_id             TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              permission         TEXT NOT NULL,
+              channel_type       TEXT NOT NULL DEFAULT '',
+              channel_subject_id TEXT NOT NULL DEFAULT '',
+              expires_at         INTEGER NOT NULL,
+              consumed_at        INTEGER,
+              created_at         INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_access_codes_user "
+            "ON app_access_codes(user_id, app_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_access_codes_expires "
+            "ON app_access_codes(expires_at)"
+        )
+
+
 def _light_app_events_has_global_unique(db: DatabasePool) -> bool:
     """Whether SQLite still enforces UNIQUE(event_id) alone (v37–v40)."""
     if not _table_exists(db, "light_app_events"):
@@ -3374,6 +3486,15 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 45:
+            _ensure_app_setup_plans_schema(db)
+            _ensure_miniapp_im_identity_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -3423,6 +3544,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_light_app_schedules_schema(db)
     _ensure_light_app_table_visibility(db)
     _ensure_light_app_publications_schema(db)
+    _ensure_miniapp_im_identity_schema(db)
     _ensure_notifications_schema(db)
     _ensure_miniapp_boards_schema(db)
     _ensure_team_board_schema(db)

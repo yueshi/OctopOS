@@ -205,6 +205,95 @@ export interface QuickCreateResponse {
   failed_rows: { row: number; values: Record<string, string>; error: string }[];
 }
 
+export interface SetupPlanAudit {
+  ts: number;
+  actor: string | null;
+  action: string;
+  payload: Record<string, unknown> | null;
+}
+
+export interface SetupPlanSummary {
+  plan_id: string;
+  status: string;
+  name: string;
+  user_id: number;
+  agent_id: string;
+  thread_id: string | null;
+  app_id: string | null;
+  file: string;
+  table_count: number;
+  service_count: number;
+  capabilities: string[] | null;
+  created_at: number;
+  confirmed_at: number | null;
+  executed_at: number | null;
+  expires_at: number | null;
+  error: string;
+  would_import: number;
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface SetupPlanListResponse {
+  plans: SetupPlanSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SetupPlanService {
+  name: string;
+  provider: string;
+  connector_instance_id?: string;
+  connector_kind?: string | null;
+  allowed_tools?: string[];
+  allowed_url_prefixes?: string[];
+  request_headers?: Record<string, string>;
+  cache_ttl_seconds?: number;
+  max_calls_per_minute?: number;
+  enabled?: boolean;
+}
+
+export interface SetupPlanTable {
+  key: string;
+  label: string;
+  sheet: string;
+  header_row: number;
+  columns: AppColumn[];
+  mapping: Record<string, string>;
+  upsert_key: string[];
+  include_pii: boolean;
+}
+
+export interface SetupPlan {
+  plan_id: string;
+  status: string;
+  revision: number;
+  name: string;
+  file: string;
+  sheet: string;
+  header_row: number;
+  columns: AppColumn[];
+  include_pii: boolean;
+  tables?: SetupPlanTable[];
+  services?: SetupPlanService[];
+  capabilities?: string[] | null;
+  allowed_capabilities?: string[];
+  audit?: SetupPlanAudit[];
+  created_at?: number;
+  confirmed_at?: number | null;
+  executed_at?: number | null;
+  app_id: string | null;
+  dry_run: Record<string, unknown>;
+  result: Record<string, unknown>;
+  error: string;
+  expires_at: number | null;
+  report?: AppInspectReport;
+  allowed_actions: string[];
+}
+
 export interface AppFile {
   name: string;
   path: string;
@@ -749,6 +838,88 @@ export const appsApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  getSetupPlan: (planId: string) =>
+    request<SetupPlan>(`/apps/setup-plans/${encodeURIComponent(planId)}`),
+
+  listSetupPlans: (
+    params: {
+      status?: string;
+      agent_id?: string;
+      user_id?: number;
+      app_id?: string;
+      thread_id?: string;
+      has_error?: boolean;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, String(value));
+      }
+    }
+    const suffix = query.toString();
+    return request<SetupPlanListResponse>(
+      `/apps/setup-plans${suffix ? `?${suffix}` : ""}`,
+    );
+  },
+
+  confirmSetupPlan: (
+    planId: string,
+    body: {
+      revision: number;
+      name: string;
+      columns?: AppColumn[];
+      include_pii?: boolean;
+      tables?: {
+        key?: string;
+        label?: string;
+        sheet: string;
+        header_row?: number | null;
+        columns: AppColumn[];
+        mapping?: Record<string, string>;
+        upsert_key?: string[];
+        include_pii?: boolean;
+      }[];
+      services?: {
+        name: string;
+        provider: string;
+        connector_instance_id?: string;
+        connector_kind?: string | null;
+        allowed_tools?: string[];
+        allowed_url_prefixes?: string[];
+        request_headers?: Record<string, string>;
+        cache_ttl_seconds?: number;
+        max_calls_per_minute?: number;
+        enabled?: boolean;
+      }[];
+      capabilities?: string[] | null;
+    },
+  ) =>
+    request<SetupPlan>(
+      `/apps/setup-plans/${encodeURIComponent(planId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  executeSetupPlan: (planId: string, revision: number) =>
+    request<SetupPlan>(
+      `/apps/setup-plans/${encodeURIComponent(planId)}/execute`,
+      {
+        method: "POST",
+        body: JSON.stringify({ revision }),
+      },
+    ),
+
+  cancelSetupPlan: (planId: string) =>
+    request<SetupPlan>(
+      `/apps/setup-plans/${encodeURIComponent(planId)}/cancel`,
+      { method: "POST" },
+    ),
 
   getHtml: async (appId: string): Promise<string> => {
     const blob = await requestBlob(`/apps/${encodeId(appId)}/html`);

@@ -7,10 +7,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 from scalar_fastapi import get_scalar_api_reference
 
 from octop.api.middleware.jwt_auth import install as install_jwt_auth
@@ -183,6 +190,7 @@ def build_app(server: OctopServer) -> FastAPI:
         agent_tools,
         agents,
         app_access,
+        app_access_link,
         apps,
         auth,
         auth_ldap,
@@ -193,6 +201,7 @@ def build_app(server: OctopServer) -> FastAPI:
         boards,
         bridge,
         browser,
+        channel_bindings,
         channels,
         chat,
         connectors,
@@ -257,6 +266,8 @@ def build_app(server: OctopServer) -> FastAPI:
         [
             _RouterMount(setup.router, "/api", ["setup"]),
             _RouterMount(auth.router, "/api/auth", ["auth"]),
+            _RouterMount(app_access_link.router, "/api/auth", ["auth"]),
+            _RouterMount(channel_bindings.router, "/api/auth", ["auth"]),
             _RouterMount(auth_oidc.router, "/api/auth", ["auth"]),
             _RouterMount(auth_oauth.router, "/api/auth", ["auth"]),
             _RouterMount(auth_ldap.router, "/api/auth", ["auth"]),
@@ -361,6 +372,20 @@ def build_app(server: OctopServer) -> FastAPI:
         dashboard_dir = Path(__file__).parent.parent / "dashboard"
         index_file = dashboard_dir / "index.html"
         if index_file.exists():
+
+            @app.get("/login/app-accesscode={token}", include_in_schema=False)
+            async def wechat_mangled_access_link(token: str) -> RedirectResponse:
+                """Recover a link mangled by WeChat's in-app browser.
+
+                WeChat drops the ``#`` from ``#code=...`` and appends ``code=``
+                to the path (``/login/app-accesscode=...``), so the SPA route
+                never matches and the user lands on the login screen. Redirect
+                to the query form the confirm page also accepts.
+                """
+                return RedirectResponse(
+                    f"/login/app-access?code={quote(token, safe='')}",
+                    status_code=302,
+                )
 
             @app.get("/{full_path:path}", include_in_schema=False)
             async def spa_fallback(full_path: str) -> FileResponse:

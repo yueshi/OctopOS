@@ -115,11 +115,25 @@ def subject_id_from_message(msg: InboundMessage) -> str:
 
 
 def chat_type_from_message(msg: InboundMessage) -> str:
+    """Normalize adapter vocabularies to ``dm``/``group``.
+
+    Adapters differ: Feishu uses ``p2p``/``group``, WeCom ``single``/``group``,
+    DingTalk ``conversation_type`` ("1"/"2"), and some put the value on the
+    channel subject rather than metadata.
+    """
     meta = msg.metadata or {}
-    ct = meta.get("chat_type")
-    if ct in (ThreadRegistry.CHAT_TYPE_DM, ThreadRegistry.CHAT_TYPE_GROUP):
-        return str(ct)
-    if meta.get("chat_type") == "group" or meta.get("is_group"):
+    ct = str(meta.get("chat_type") or "").strip().lower()
+    if ct == ThreadRegistry.CHAT_TYPE_GROUP or bool(meta.get("is_group")):
+        return ThreadRegistry.CHAT_TYPE_GROUP
+    if ct in {ThreadRegistry.CHAT_TYPE_DM, "direct", "single", "p2p", "private"}:
+        return ThreadRegistry.CHAT_TYPE_DM
+    subject_chat = str(getattr(msg.channel_subject, "chat_type", "") or "").strip().lower()
+    if subject_chat == ThreadRegistry.CHAT_TYPE_GROUP:
+        return ThreadRegistry.CHAT_TYPE_GROUP
+    conversation_type = str(
+        meta.get("conversation_type") or meta.get("conversationType") or ""
+    ).strip()
+    if conversation_type in {"2", "group"}:
         return ThreadRegistry.CHAT_TYPE_GROUP
     return ThreadRegistry.CHAT_TYPE_DM
 

@@ -21,7 +21,7 @@ from langgraph.config import get_config
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from octop.infra.agents.tool_scope import current_tool_scope
+from octop.infra.agents.tool_scope import current_tool_context, current_tool_scope
 from octop.infra.apps.tool_policy import (
     APP_HITL_TOOL_NAMES,
     APP_TOOL_CATEGORIES,
@@ -70,14 +70,19 @@ def _sanitize(value: object) -> object:
     return f"<{type(value).__name__}>"
 
 
-def _actor(agent_id: str) -> tuple[str, int | None]:
+def _configurable() -> dict[str, Any]:
+    try:
+        return dict(get_config().get("configurable") or {})
+    except RuntimeError:
+        return {}
+
+
+def _actor(agent_id: str, configurable: dict[str, Any] | None = None) -> tuple[str, int | None]:
     scope = current_tool_scope()
     if scope is not None:
         return scope
-    try:
-        configurable = dict(get_config().get("configurable") or {})
-    except RuntimeError:
-        configurable = {}
+    if configurable is None:
+        configurable = _configurable()
     resolved_agent = str(configurable.get("agent_id") or agent_id)
     raw_user = configurable.get("user")
     user_id: int | None = None
@@ -112,7 +117,22 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
         raw_args = tool_call.get("args")
         args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
         app_id = args.get("app_id")
-        resolved_agent, user_id = _actor(self._agent_id)
+        configurable = _configurable()
+        resolved_agent, user_id = _actor(self._agent_id, configurable)
+        scope = current_tool_context()
+        config_source = str(configurable.get("octop_source") or "").strip()
+        config_session = str(configurable.get("session_key") or "").strip()
+        source = (
+            scope.source.strip() if scope is not None and scope.source.strip() else config_source
+        )
+        session_key = (
+            scope.session_key.strip()
+            if scope is not None and scope.session_key.strip()
+            else config_session
+        )
+        identity_verified = bool(scope and scope.identity_verified) or bool(
+            configurable.get("octop_identity_verified")
+        )
         fingerprint = hashlib.sha256(
             json.dumps(_sanitize(args), ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -120,10 +140,16 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
             "tool": name,
             "risk": APP_TOOL_RISKS[name],
             "group": APP_TOOL_CATEGORIES.get(name, ""),
+            # HITL tier, not the per-call outcome: argument-conditional
+            # ``when`` predicates can still skip the card for a call that
+            # stays in this set.
             "hitl_required": name in APP_HITL_TOOL_NAMES,
             "agent_id": resolved_agent,
             "user_id": user_id,
             "app_id": str(app_id) if isinstance(app_id, str) else "",
+            "source": source,
+            "session_key_present": bool(session_key),
+            "identity_verified": identity_verified,
             "arg_keys": sorted(str(key) for key in args),
             "args_sha256": fingerprint,
             "status": status,

@@ -98,6 +98,9 @@ BUILTIN_TOOL_CATALOG: tuple[BuiltinToolEntry, ...] = (
     BuiltinToolEntry("ask_agent", "teams"),
     # Light apps
     BuiltinToolEntry("app_inspect_file", "apps"),
+    BuiltinToolEntry("app_propose_plan", "apps"),
+    BuiltinToolEntry("app_get_plan", "apps"),
+    BuiltinToolEntry("app_cancel_plan", "apps"),
     BuiltinToolEntry("app_list", "apps"),
     BuiltinToolEntry("app_open", "apps"),
     BuiltinToolEntry("app_share_link", "apps"),

@@ -1,8 +1,10 @@
-"""Acting agent/user scope for tool calls that resume outside a chat turn.
+"""Acting agent/user/channel scope for tool calls that resume outside a chat turn.
 
-A normal turn carries ``agent_id`` and ``user`` in LangGraph's ``configurable``.
-A HITL resume starts a fresh graph invocation with only ``thread_id``, so tools
-that authorize against the caller must fall back to this scope.
+A normal turn carries ``agent_id``, ``user``, ``octop_source`` and ``session_key``
+in LangGraph's ``configurable``. A HITL resume starts a fresh graph invocation
+with only ``thread_id``, so tools that authorize against the caller must fall
+back to this scope. The channel fields are restored from the pending approval
+and session rows so an IM turn keeps its identity after resume.
 """
 
 from __future__ import annotations
@@ -10,17 +12,49 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 
-_CURRENT_TOOL_SCOPE: ContextVar[tuple[str, int] | None] = ContextVar(
+
+@dataclass(frozen=True)
+class ToolScope:
+    agent_id: str
+    user_id: int
+    source: str = ""
+    session_key: str = ""
+    chat_type: str = ""
+    identity_verified: bool = False
+
+
+_CURRENT_TOOL_SCOPE: ContextVar[ToolScope | None] = ContextVar(
     "octop_tool_scope",
     default=None,
 )
 
 
 @contextmanager
-def tool_scope(agent_id: str, user_id: int | None) -> Iterator[None]:
-    """Bind the acting identity for tools invoked during a HITL resume."""
-    token = _CURRENT_TOOL_SCOPE.set((agent_id, user_id) if user_id is not None else None)
+def tool_scope(
+    agent_id: str,
+    user_id: int | None,
+    *,
+    source: str = "",
+    session_key: str = "",
+    chat_type: str = "",
+    identity_verified: bool = False,
+) -> Iterator[None]:
+    """Bind the acting identity and IM context for tools invoked during a resume."""
+    scope = (
+        ToolScope(
+            agent_id=agent_id,
+            user_id=user_id,
+            source=source,
+            session_key=session_key,
+            chat_type=chat_type,
+            identity_verified=identity_verified,
+        )
+        if user_id is not None
+        else None
+    )
+    token = _CURRENT_TOOL_SCOPE.set(scope)
     try:
         yield
     finally:
@@ -28,7 +62,19 @@ def tool_scope(agent_id: str, user_id: int | None) -> Iterator[None]:
 
 
 def current_tool_scope() -> tuple[str, int] | None:
+    """Backward-compatible ``(agent_id, user_id)`` tuple for tool authorization."""
+    scope = _CURRENT_TOOL_SCOPE.get()
+    return (scope.agent_id, scope.user_id) if scope is not None else None
+
+
+def current_tool_context() -> ToolScope | None:
+    """Full resume context, including channel/source/identity fields."""
     return _CURRENT_TOOL_SCOPE.get()
 
 
-__all__ = ["current_tool_scope", "tool_scope"]
+__all__ = [
+    "ToolScope",
+    "current_tool_context",
+    "current_tool_scope",
+    "tool_scope",
+]

@@ -28,6 +28,7 @@ def build_app_service(
         secret_repo=repos.secret_repo,
         audit_repo=repos.audit_repo,
         access_repo=repos.app_access_repo,
+        access_code_repo=repos.app_access_code_repo,
         binding_repo=repos.app_binding_repo,
         service_repo=repos.app_service_repo,
         connector_repo=repos.connector_repo,
@@ -37,6 +38,7 @@ def build_app_service(
         ingress_repo=repos.app_ingress_repo,
         external_source_repo=repos.external_source_repo,
         external_subscription_repo=repos.external_subscription_repo,
+        setup_plan_repo=repos.app_setup_plan_repo,
         external_tool_runner=external_tool_runner,
     )
 

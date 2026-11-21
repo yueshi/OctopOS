@@ -12,6 +12,7 @@ from octop.infra.agents.security import (
     enforce_mandatory_filesystem_rule,
     tool_execution_may_pause,
 )
+from octop.infra.agents.security.hitl_session import FORCED_HITL_TOOLS
 
 
 def test_load_defaults_when_missing() -> None:
@@ -43,12 +44,15 @@ def test_harness_policy_always_interrupts_mandatory_tools() -> None:
     repo.get.return_value = None
     store = SecuritySettingsStore(settings_repo=repo)
 
-    # Admin HITL is off: only the mandatory deletion gate survives.
+    # Admin HITL is off: every forced gate survives, including the setup tools
+    # whose approval may be remembered per thread.
     policy = store.harness_policy()
     assert policy.hitl.enabled is True
-    assert policy.resolve_interrupt_on() == {
-        "app_delete": {"allowed_decisions": ["approve", "reject"]}
-    }
+    forced_tools = set(policy.resolve_interrupt_on() or {})
+    assert forced_tools >= FORCED_HITL_TOOLS
+    assert {"app_delete", "app_import_rows", "app_add_service", "app_remove_service"} <= (
+        forced_tools
+    )
 
     # Admin HITL on with the default tool set keeps those tools and adds the gate.
     repo.get.return_value = '{"hitl": {"enabled": true, "tools": "default"}}'
@@ -56,13 +60,15 @@ def test_harness_policy_always_interrupts_mandatory_tools() -> None:
     tools = set(policy.resolve_interrupt_on() or {})
     assert {"bash", "write_file", "app_delete"} <= tools
 
-    # Custom tool lists are preserved without duplicating the gate.
+    # Custom tool lists are preserved, forced gates are added, no duplicates.
     repo.get.return_value = (
         '{"hitl": {"enabled": true, "tools": ["app_delete"],'
         ' "allowed_decisions": ["approve", "reject"]}}'
     )
     policy = store.harness_policy()
-    assert policy.hitl.tools == ["app_delete"]
+    tools = list(policy.hitl.tools or [])
+    assert len(tools) == len(set(tools))
+    assert set(tools) >= FORCED_HITL_TOOLS
 
 
 def test_harness_policy_always_denies_app_dir_writes() -> None:

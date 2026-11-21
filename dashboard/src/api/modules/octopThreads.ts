@@ -83,6 +83,8 @@ export interface OctopThreadHistory {
     agent_id?: string;
     team_wrapup?: boolean;
     decision?: unknown;
+    /** Persisted HITL decision card (approve/reject) for history replay. */
+    hitl?: unknown;
   }>;
   pinned?: boolean;
   model_ref?: string | null;

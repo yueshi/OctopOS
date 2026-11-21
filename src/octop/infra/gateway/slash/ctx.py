@@ -31,6 +31,9 @@ class SlashCtx:
     connector_repo: ConnectorRepo | None = None
     usage_repo: UsageRepo | None = None
     user_repo: UserRepo | None = None
+    channel_identity_repo: Any | None = None
+    channel_bind_code_repo: Any | None = None
+    audit_repo: Any | None = None
     agent_manager: AgentManager | None = None
     cron_manager: CronManager | None = None
     paths: PathLayout | None = None
@@ -48,13 +51,16 @@ def lang_of(ctx: SlashCtx) -> Locale:
 
 
 def subject_id(ctx: SlashCtx) -> str:
-    parts = ctx.session_key.split(":", 3)
-    return parts[2] if len(parts) >= 3 else str(ctx.user_id)
+    rest = ctx.session_key.split(":", 2)
+    if len(rest) < 3:
+        return str(ctx.user_id)
+    subject, _, _chat_type = rest[2].rpartition(":")
+    return subject or rest[2]
 
 
 def chat_type(ctx: SlashCtx) -> str:
-    parts = ctx.session_key.split(":", 3)
-    return parts[3] if len(parts) >= 4 else "dm"
+    _subject, _, chat = ctx.session_key.rpartition(":")
+    return chat or "dm"
 
 
 def find_thread_by_short(
@@ -100,6 +106,9 @@ def build_slash_ctx(
     session_key: str,
     metadata: dict[str, Any] | None = None,
     repos: RepoBundle | None = None,
+    channel_identity_repo: Any | None = None,
+    channel_bind_code_repo: Any | None = None,
+    audit_repo: Any | None = None,
     octop_version: str | None = None,
     server_started_at: int | None = None,
     user_locale: str | None = None,
@@ -120,6 +129,9 @@ def build_slash_ctx(
         agent_repo = agent_repo or repos.agent_repo
         connector_repo = connector_repo or repos.connector_repo
         usage_repo = usage_repo or repos.usage_repo
+        channel_identity_repo = channel_identity_repo or repos.channel_identity_repo
+        channel_bind_code_repo = channel_bind_code_repo or repos.channel_bind_code_repo
+        audit_repo = audit_repo or repos.audit_repo
 
     user_loc = user_locale
     if user_loc is None and user_repo is not None and user_id > 0:
@@ -158,6 +170,9 @@ def build_slash_ctx(
         connector_repo=connector_repo,
         usage_repo=usage_repo,
         user_repo=user_repo,
+        channel_identity_repo=channel_identity_repo,
+        channel_bind_code_repo=channel_bind_code_repo,
+        audit_repo=audit_repo,
         agent_manager=agent_manager,
         cron_manager=cron_manager,
         paths=paths,

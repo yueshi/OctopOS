@@ -5,6 +5,41 @@ import { markNavigatingAway } from "../utils/reloadOnStaleChunk";
 const AUTH_TOKEN_KEY = "auth_token";
 /** sessionStorage handoff for SSO redirects / popups (default = remember). */
 const AUTH_REMEMBER_PREF_KEY = "auth_remember_pref";
+/** MiniApp-scoped session marker; cleared whenever a normal token is set. */
+const APP_SCOPE_KEY = "octop_app_scope";
+
+export interface AppScopeInfo {
+  app_id: string;
+  /** Unix timestamp when the scoped token expires. */
+  expires_at: number;
+}
+
+/** Remember that this tab holds an app-scoped token (one MiniApp only). */
+export function setAppScope(info: AppScopeInfo | null): void {
+  if (info) {
+    sessionStorage.setItem(APP_SCOPE_KEY, JSON.stringify(info));
+  } else {
+    sessionStorage.removeItem(APP_SCOPE_KEY);
+  }
+}
+
+/** Read the current app-scoped session marker, if any. */
+export function getAppScope(): AppScopeInfo | null {
+  const raw = sessionStorage.getItem(APP_SCOPE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AppScopeInfo>;
+    if (
+      typeof parsed.app_id !== "string" ||
+      typeof parsed.expires_at !== "number"
+    ) {
+      return null;
+    }
+    return { app_id: parsed.app_id, expires_at: parsed.expires_at };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Fired when the session is no longer valid. Cancelable: a listener inside the
@@ -79,6 +114,9 @@ export function setAuthToken(token: string, remember: boolean = true) {
     sessionStorage.setItem(AUTH_TOKEN_KEY, token);
     localStorage.removeItem(AUTH_TOKEN_KEY);
   }
+  // A normal sign-in replaces any previous MiniApp-scoped session marker;
+  // ``AppAccessComplete`` sets it again right after exchanging the code.
+  setAppScope(null);
   clearSetupRequired();
 }
 
@@ -96,6 +134,7 @@ export function clearAuthToken() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
   sessionStorage.removeItem(AUTH_TOKEN_KEY);
   sessionStorage.removeItem(AUTH_REMEMBER_PREF_KEY);
+  sessionStorage.removeItem(APP_SCOPE_KEY);
   localStorage.removeItem("octop:active-agent");
   setActiveAgentId(null);
 }

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 from dataclasses import replace
 
 import httpx
+import openpyxl
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -4108,3 +4110,230 @@ async def test_app_owned_ingress_crud_and_test_event(
     assert r.json()["deleted"] is True
     r = await client.get(f"/api/apps/{app_id}/ingress", headers=alice_auth)
     assert r.json() == []
+
+
+async def test_setup_plan_confirm_and_execute_api(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    assert srv.services is not None
+    alice = srv.services.user_repo.get_by_username("alice")
+    assert alice is not None
+    workspace = srv.app_runtime.agent_registry.workspace_for_agent(agent_id)  # type: ignore[union-attr]
+    assert workspace is not None
+    await workspace.awrite_text(
+        "inbound/imports/books.csv", "title,author\n三体,刘慈欣\n活着,余华\n"
+    )
+    plan = await _service(srv).propose_setup_plan(
+        agent_id=agent_id,
+        user_id=alice.id,
+        thread_id=None,
+        path="inbound/imports/books.csv",
+        name="读书记录",
+        columns=[
+            {"name": "title", "label": "书名", "type": "string"},
+            {"name": "author", "label": "作者", "type": "string"},
+        ],
+    )
+
+    r = await client.get(f"/api/apps/setup-plans/{plan.plan_id}", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    draft = r.json()
+    assert draft["status"] == "draft"
+    assert draft["report"]["sheets"]
+    assert draft["allowed_actions"] == ["confirm", "cancel"]
+
+    r = await client.get(f"/api/apps/setup-plans/{plan.plan_id}", headers=bob_auth)
+    assert r.status_code == 403
+
+    r = await client.post(
+        f"/api/apps/setup-plans/{plan.plan_id}/confirm",
+        headers=alice_auth,
+        json={
+            "revision": plan.revision,
+            "name": "读书记录",
+            "columns": [
+                {"name": "title", "label": "书名", "type": "string", "required": False},
+                {"name": "author", "label": "作者", "type": "string", "required": False},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    ready = r.json()
+    assert ready["status"] == "dry_run_ready"
+    assert ready["app_id"]
+    assert ready["dry_run"]["would_import"] == 2
+    assert ready["allowed_actions"] == ["execute", "cancel"]
+
+    r = await client.post(
+        f"/api/apps/setup-plans/{plan.plan_id}/execute",
+        headers=alice_auth,
+        json={"revision": ready["revision"]},
+    )
+    assert r.status_code == 200, r.text
+    imported = r.json()
+    assert imported["status"] == "imported"
+    assert imported["result"]["imported"] == 2
+
+    r = await client.get(f"/api/apps/{ready['app_id']}", headers=alice_auth)
+    assert r.status_code == 200
+    assert r.json()["row_count"] == 2
+    r = await client.get(f"/api/apps/{ready['app_id']}/html", headers=alice_auth)
+    assert r.status_code == 200
+    assert "读书记录" in r.text
+
+
+async def test_setup_plan_multi_sheet_api(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    assert srv.services is not None
+    alice = srv.services.user_repo.get_by_username("alice")
+    assert alice is not None
+    workspace = srv.app_runtime.agent_registry.workspace_for_agent(agent_id)  # type: ignore[union-attr]
+    assert workspace is not None
+    workbook = openpyxl.Workbook()
+    customers = workbook.active
+    customers.title = "客户"
+    customers.append(["name", "phone"])
+    customers.append(["张三", "13800000000"])
+    orders = workbook.create_sheet("订单")
+    orders.append(["item", "amount"])
+    orders.append(["纸杯", "12.5"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    await workspace.aupload_bytes("inbound/imports/crm.xlsx", buffer.getvalue())
+    tables = [
+        {
+            "key": "main",
+            "label": "客户",
+            "sheet": "客户",
+            "columns": [
+                {"name": "name", "label": "姓名", "type": "string"},
+                {"name": "phone", "label": "电话", "type": "string"},
+            ],
+            "include_pii": True,
+        },
+        {
+            "key": "orders",
+            "label": "订单",
+            "sheet": "订单",
+            "columns": [
+                {"name": "item", "label": "商品", "type": "string"},
+                {"name": "amount", "label": "金额", "type": "number"},
+            ],
+        },
+    ]
+    plan = await _service(srv).propose_setup_plan(
+        agent_id=agent_id,
+        user_id=alice.id,
+        thread_id=None,
+        path="inbound/imports/crm.xlsx",
+        name="客户订单",
+        tables=tables,
+    )
+    r = await client.get(f"/api/apps/setup-plans/{plan.plan_id}", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    draft = r.json()
+    assert [item["key"] for item in draft["tables"]] == ["main", "orders"]
+    assert draft["columns"][0]["name"] == "name"
+    assert draft["tables"][1]["sheet"] == "订单"
+    assert "data.read" in draft["allowed_capabilities"]
+
+    r = await client.post(
+        f"/api/apps/setup-plans/{plan.plan_id}/confirm",
+        headers=alice_auth,
+        json={
+            "revision": plan.revision,
+            "name": "客户订单",
+            "tables": tables,
+            "services": [],
+            "capabilities": ["data.read"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    ready = r.json()
+    assert ready["status"] == "dry_run_ready"
+    assert ready["dry_run"]["would_import"] == 2
+    assert set(ready["dry_run"]["tables"]) == {"main", "orders"}
+
+    r = await client.post(
+        f"/api/apps/setup-plans/{plan.plan_id}/execute",
+        headers=alice_auth,
+        json={"revision": ready["revision"]},
+    )
+    assert r.status_code == 200, r.text
+    imported = r.json()
+    assert imported["status"] == "imported"
+    assert imported["result"]["imported"] == 2
+    r = await client.get(f"/api/apps/{ready['app_id']}", headers=alice_auth)
+    assert r.status_code == 200
+    detail = r.json()
+    assert {table["table_key"] for table in detail["tables"]} == {"main", "orders"}
+    assert "data.read" in detail["capabilities"]
+
+
+async def test_setup_plan_admin_list_and_audit(
+    env_with_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], str],
+) -> None:
+    client, srv, admin_auth, agent_id = env_with_agent
+    assert srv.services is not None
+    admin = srv.services.user_repo.get_by_username("admin")
+    assert admin is not None
+    workspace = srv.app_runtime.agent_registry.workspace_for_agent(agent_id)  # type: ignore[union-attr]
+    assert workspace is not None
+    await workspace.awrite_text("inbound/imports/books.csv", "title,author\n三体,刘慈欣\n")
+    plan = await _service(srv).propose_setup_plan(
+        agent_id=agent_id,
+        user_id=admin.id,
+        thread_id=None,
+        path="inbound/imports/books.csv",
+        name="读书记录",
+        columns=[
+            {"name": "title", "label": "书名", "type": "string"},
+            {"name": "author", "label": "作者", "type": "string"},
+        ],
+    )
+
+    r = await client.get(
+        "/api/apps/setup-plans",
+        params={"status": "draft", "agent_id": agent_id},
+        headers=admin_auth,
+    )
+    assert r.status_code == 200, r.text
+    listed = r.json()
+    assert listed["total"] == 1
+    assert listed["plans"][0]["plan_id"] == plan.plan_id
+    assert listed["plans"][0]["table_count"] == 1
+
+    r = await client.get(f"/api/apps/setup-plans/{plan.plan_id}", headers=admin_auth)
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    assert detail["audit"]
+    assert "miniapp.setup_plan.propose" in {event["action"] for event in detail["audit"]}
+
+    r = await client.post(
+        f"/api/apps/setup-plans/{plan.plan_id}/confirm",
+        headers=admin_auth,
+        json={
+            "revision": plan.revision,
+            "name": "读书记录",
+            "columns": [
+                {"name": "title", "label": "书名", "type": "string"},
+                {"name": "author", "label": "作者", "type": "string"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/api/apps/setup-plans/{plan.plan_id}", headers=admin_auth)
+    assert r.status_code == 200
+    actions = {event["action"] for event in r.json()["audit"]}
+    assert "miniapp.setup_plan.confirm" in actions
+
+
+async def test_setup_plan_list_requires_admin(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, _srv, alice_auth, _bob_auth, _agent_id = env_alice_bob_agent
+    r = await client.get("/api/apps/setup-plans", headers=alice_auth)
+    assert r.status_code == 403

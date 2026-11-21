@@ -133,6 +133,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  sessionStorage.removeItem("octop_app_scope");
   mobile.value = false;
   currentUser.value = { username: "alice", role: "user" };
   api.get.mockReset();
@@ -396,5 +397,25 @@ describe("app detail header actions", () => {
       expect(screen.queryByText("AI 助手")).not.toBeInTheDocument(),
     );
     expect(screen.queryByText("分享与发布")).not.toBeInTheDocument();
+  });
+});
+
+describe("scoped personal link runtime", () => {
+  it("renders the MiniApp full-screen without dashboard chrome", async () => {
+    sessionStorage.setItem(
+      "octop_app_scope",
+      JSON.stringify({ app_id: "app_1", expires_at: 9_999_999_999 }),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText("该小程序还没有界面，请让专家生成界面。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "返回小程序" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "分享与发布" }),
+    ).not.toBeInTheDocument();
   });
 });

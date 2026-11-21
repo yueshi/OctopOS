@@ -17,7 +17,7 @@ from octop.infra.gateway.process.usage_record import UsageTracker, record_turn_u
 from octop.infra.gateway.threads import ThreadRegistry
 from octop.infra.history.projection import TurnHistoryTracker, message_inputs
 from octop.infra.knowledge.default_open import stamp_turn_knowledge_config
-from octop.infra.utils.llm_text import strip_thinking
+from octop.infra.utils.llm_text import strip_internal_payloads, strip_thinking
 from octop.infra.utils.locale import resolve_user_locale
 from octop.infra.utils.turn_failure import log_failed_tool_results
 from octop.infra.utils.ulid import new_ulid
@@ -179,7 +179,11 @@ class CronDeliveryService:
                             live=saw_tool_call,
                         )
                     if kind in ("token", "delta"):
-                        parts.append(str(chunk.get("content") or chunk.get("text") or ""))
+                        text = strip_internal_payloads(
+                            str(chunk.get("content") or chunk.get("text") or "")
+                        )
+                        if text:
+                            parts.append(text)
                     elif kind == "hitl_required":
                         interaction_required = True
                         req = chunk.get("request")
@@ -194,6 +198,9 @@ class CronDeliveryService:
                     wake_noop = True
             elif not outbound and not interaction_required:
                 raise RuntimeError("cron agent run produced no visible response")
+            # A finished cron turn is checkpoint-authoritative; paused ones
+            # still need the synthetic stream row for their partial answer.
+            tracker.completed = not interaction_required
         finally:
             if not wake_noop:
                 inputs = tracker.inputs

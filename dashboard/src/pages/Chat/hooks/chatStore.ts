@@ -294,6 +294,8 @@ export type StreamEventKind =
 export interface StreamEvent {
   kind: StreamEventKind;
   sessionId: string;
+  /** ``streamEnd`` only: the local transcript may be missing streamed text. */
+  incomplete?: boolean;
 }
 export type SlashActionEvent = {
   action: string;
@@ -469,6 +471,7 @@ function getOrCreate(sessionId: string): SessionStreamState {
     state = {
       messages: [],
       isStreaming: false,
+      streamIncomplete: false,
       thinkingStartedAt: null,
       runUsage: null,
       contextUsage: null,
@@ -516,6 +519,31 @@ function beginStream(state: SessionStreamState, sessionId: string): void {
   touchStreamActivity(sessionId);
 }
 
+/**
+ * Emit ``streamEnd`` and carry whether this turn's local text may be partial.
+ *
+ * ``deferIncomplete`` is for a team host finish: the composer unlocks, but
+ * members may still stream, so keep the flag for the room's final finish.
+ */
+function emitStreamEnd(
+  state: SessionStreamState,
+  sessionId: string,
+  opts?: { deferIncomplete?: boolean },
+): void {
+  const incomplete = !opts?.deferIncomplete && state.streamIncomplete;
+  if (!opts?.deferIncomplete) state.streamIncomplete = false;
+  if (incomplete) {
+    // The active page refetches immediately; a background session refetches
+    // when the user navigates back to it.
+    state.historyStale = true;
+  }
+  emitStreamEvent({
+    kind: "streamEnd",
+    sessionId,
+    ...(incomplete ? { incomplete: true } : {}),
+  });
+}
+
 function clearStreamingFlags(
   state: SessionStreamState,
   opts?: { keepSteer?: boolean },
@@ -553,8 +581,61 @@ type LiveSocket = {
   bridgeTurn?: boolean;
   /** Server id for a queued bridge turn, used when the user stops it. */
   bridgeTurnId?: string;
+  /**
+   * Socket opened by ``sendTurn`` whose new turn has not announced itself
+   * yet. Stamped frames arriving in this window belong to the previous turn.
+   */
+  awaitingTurnStart?: boolean;
   pingTimer?: ReturnType<typeof setInterval>;
 };
+
+const STEER_PROTOCOL_TYPES = new Set([
+  "steer.ack",
+  "steer.queued",
+  "steer.rejected",
+  "steer.removed",
+  "steer.drained",
+  "steer.discarded",
+  "steer.queue_snapshot",
+]);
+
+function frameTurnId(data: Record<string, unknown>): string {
+  const raw = data.turn_id;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+/**
+ * Drop frames that belong to a turn the user already replaced.
+ *
+ * Chunks from the WS channel carry the logical ``turn_id``. After tapping send
+ * the previous turn may still be draining its last tokens / ``turn.ended``;
+ * accepting those would either rewrite the previous bubble or close the new
+ * socket. Frames without a ``turn_id`` stay accepted for older servers and the
+ * WS route's own local error frames.
+ */
+function isStaleTurnFrame(
+  data: Record<string, unknown>,
+  state: SessionStreamState,
+  live: LiveSocket,
+): boolean {
+  const type = String(data.type || "");
+  if (type === "turn_status" || type === "pong" || type === "turn.queued") {
+    return false;
+  }
+  if (type === "turn.started" || type === "turn.resumed") return false;
+  if (STEER_PROTOCOL_TYPES.has(type)) return false;
+  if (
+    type === "user" &&
+    (data.meta as { steer?: boolean } | undefined)?.steer === true
+  ) {
+    return false;
+  }
+  const turnId = frameTurnId(data);
+  if (!turnId) return false;
+  const active = (state.activeTurnId || "").trim();
+  if (active) return turnId !== active;
+  return Boolean(live.awaitingTurnStart);
+}
 
 function startSocketPing(live: LiveSocket): void {
   if (live.pingTimer != null) return;
@@ -673,6 +754,9 @@ function armStreamWatchdog(sessionId: string): void {
         return;
       }
       // Seal sticky stream without cancelling a server turn (no socket).
+      // The turn is still running server-side; ask the UI to refetch history
+      // once the terminal state is persisted.
+      state.streamIncomplete = true;
       clearStreamingFlags(state);
       state.streamMsg = "";
       state.streamId = "";
@@ -680,7 +764,7 @@ function armStreamWatchdog(sessionId: string): void {
       sealInFlightAssistantMessages(state);
       clearStreamActivity(sessionId);
       notify(state);
-      emitStreamEvent({ kind: "streamEnd", sessionId });
+      emitStreamEnd(state, sessionId);
     }, STREAM_STALE_WITHOUT_SOCKET_MS),
   );
 }
@@ -1850,6 +1934,14 @@ function appendStreamingToken(
   ];
 }
 
+/** Keep a pathological reasoning stream (or an input replay) out of the DOM. */
+const MAX_LIVE_REASONING_CHARS = 32_000;
+
+function capLiveReasoning(content: string): string {
+  if (content.length <= MAX_LIVE_REASONING_CHARS) return content;
+  return "… (truncated)\n" + content.slice(-MAX_LIVE_REASONING_CHARS);
+}
+
 /** Append a reasoning fragment as a thinking content block on the last
  *  streaming bubble (creating one if needed). Renderers that recognise
  *  contentBlocks will show it in a collapsible thinking panel. */
@@ -1871,9 +1963,12 @@ function appendStreamingReasoning(
     const blocks = last.contentBlocks ? [...last.contentBlocks] : [];
     if (blocks.length > 0 && blocks[blocks.length - 1].type === "thinking") {
       const tail = blocks[blocks.length - 1];
-      blocks[blocks.length - 1] = { ...tail, content: tail.content + content };
+      blocks[blocks.length - 1] = {
+        ...tail,
+        content: capLiveReasoning(tail.content + content),
+      };
     } else {
-      blocks.push({ type: "thinking", content });
+      blocks.push({ type: "thinking", content: capLiveReasoning(content) });
     }
     const nextStatus = last.status === "done" ? "streaming" : last.status;
     state.messages = [
@@ -1897,7 +1992,7 @@ function appendStreamingReasoning(
       id,
       role: "assistant",
       content: "",
-      contentBlocks: [{ type: "thinking", content }],
+      contentBlocks: [{ type: "thinking", content: capLiveReasoning(content) }],
       status: "streaming",
       timestamp: Date.now(),
       speakerAgentId: speaker,
@@ -2608,7 +2703,9 @@ export async function attachThread(
       sealInFlightAssistantMessages(state);
     }
     notify(state);
-    emitStreamEvent({ kind: "streamEnd", sessionId });
+    emitStreamEnd(state, sessionId, {
+      deferIncomplete: mode === "host",
+    });
     onStreamEnd?.();
   };
 
@@ -2623,6 +2720,8 @@ export async function attachThread(
     const onAbort = () => {
       live.intentionalClose = true;
       live.userCancelled = true;
+      // Explicit stop — keep the partial transcript as the user left it.
+      state.streamIncomplete = false;
       sendCancelFrame(ws, threadId, live.bridgeTurnId);
       try {
         ws.close();
@@ -2649,6 +2748,15 @@ export async function attachThread(
         const data = JSON.parse(String(event.data)) as Record<string, unknown>;
         if (!data || typeof data !== "object") return;
         if (!frameBelongsToThread(data, live.threadId)) return;
+        if (isStaleTurnFrame(data, state, live)) return;
+        const frameType = String(data.type || "");
+        if (
+          frameType === "turn.started" ||
+          frameType === "turn.resumed" ||
+          STEER_PROTOCOL_TYPES.has(frameType)
+        ) {
+          live.awaitingTurnStart = false;
+        }
 
         if (data.type === "turn_status") {
           if (turnStatusAction(Boolean(data.active)) === "expect_stream") {
@@ -2661,6 +2769,10 @@ export async function attachThread(
             } else {
               touchStreamActivity(sessionId);
             }
+            // This socket attached after the turn started (reload / drop):
+            // earlier tokens were never delivered here. Refetch history once
+            // the server persists the turn.
+            state.streamIncomplete = true;
             if (
               shouldEmitStreamResumeNotice({
                 resumeAttempt:
@@ -2806,6 +2918,8 @@ export async function attachThread(
         clearStreamWatchdog(sessionId);
       } else if (!wasIntentional && stillStreaming) {
         // Exhausted retries or failed open — do not leave sticky isStreaming.
+        // The server turn may still finish; let the UI refetch history after.
+        state.streamIncomplete = true;
         finish();
       } else if (state.abortController === controller) {
         state.abortController = previousController;
@@ -2858,6 +2972,9 @@ async function sendTurnWebSocket(
       userCancelled: false,
       listenOnly: false,
       bridgeTurn: replyVia === "im",
+      // The new turn announces itself with turn.started; anything stamped
+      // before that belongs to the previous turn.
+      awaitingTurnStart: true,
     };
     liveSockets.set(sessionId, live);
 
@@ -2872,6 +2989,8 @@ async function sendTurnWebSocket(
     const onAbort = () => {
       live.intentionalClose = true;
       live.userCancelled = true;
+      // User stop is an explicit partial answer — do not auto-refresh history.
+      state.streamIncomplete = false;
       sendCancelFrame(ws, resolvedThreadId, live.bridgeTurnId);
       try {
         ws.close();
@@ -2925,6 +3044,16 @@ async function sendTurnWebSocket(
         const data = JSON.parse(String(event.data)) as HarnessChunk;
         if (!data || typeof data !== "object") return;
         if (!frameBelongsToThread(data, live.threadId)) return;
+        const rawFrame = data as unknown as Record<string, unknown>;
+        if (isStaleTurnFrame(rawFrame, state, live)) return;
+        const frameType = String(rawFrame.type || "");
+        if (
+          frameType === "turn.started" ||
+          frameType === "turn.resumed" ||
+          STEER_PROTOCOL_TYPES.has(frameType)
+        ) {
+          live.awaitingTurnStart = false;
+        }
         if ((data as { type?: string }).type === "turn_status") return;
         if ((data as { type?: string }).type === "turn.queued") {
           live.bridgeTurnId = String(
@@ -3063,6 +3192,11 @@ async function sendTurnWebSocket(
       }
 
       if (!settled) {
+        if (!userCancelled && state.isStreaming) {
+          // Closed without a terminal frame (resume exhausted / failed open
+          // after tokens). The persisted turn can still complete server-side.
+          state.streamIncomplete = true;
+        }
         finish();
         settle(true);
       }
@@ -3137,6 +3271,10 @@ export async function sendTurn(
   state.streamMsg = "";
   state.streamId = "";
   state.streamBlockType = "";
+  state.streamIncomplete = false;
+  // New user send always opens a fresh turn socket. Any previous turn id is
+  // stale here; keeping it would let the old turn.ended close the new socket.
+  state.activeTurnId = null;
   beginStream(state, sessionId);
   state.runUsage = null;
   usageSamplesByState.delete(state);
@@ -3166,7 +3304,9 @@ export async function sendTurn(
       sealInFlightAssistantMessages(state);
     }
     notify(state);
-    emitStreamEvent({ kind: "streamEnd", sessionId });
+    emitStreamEnd(state, sessionId, {
+      deferIncomplete: mode === "host",
+    });
     onStreamEnd?.();
   };
 
@@ -3335,7 +3475,7 @@ export async function resumeHitl(
     state.streamBlockType = "";
     sealInFlightAssistantMessages(state);
     notify(state);
-    emitStreamEvent({ kind: "streamEnd", sessionId });
+    emitStreamEnd(state, sessionId);
     // History reload now would replace the live member bubbles with a room
     // transcript that does not yet contain this answer.
     if (!skipRefresh) onStreamEnd?.();

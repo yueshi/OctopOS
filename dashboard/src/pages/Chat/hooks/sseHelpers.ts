@@ -162,6 +162,12 @@ export interface ChatMessage {
 export interface SessionStreamState {
   messages: ChatMessage[];
   isStreaming: boolean;
+  /**
+   * True when this turn was attached mid-flight (page reload, WS drop), so
+   * the locally rendered text may be missing an already-streamed prefix.
+   * ``streamEnd`` carries the flag; the dashboard then refetches history.
+   */
+  streamIncomplete: boolean;
   /** Wall-clock ms when the current user turn started waiting on the model. */
   thinkingStartedAt: number | null;
   runUsage: TokenUsage | null;

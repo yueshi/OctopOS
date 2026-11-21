@@ -336,6 +336,17 @@ document.querySelector("#cover").src = asset.data_url;  // data: URL，CSP 允�
 
 ## 台账导入：先检查，再建应用
 
+**Dashboard 优先走方案卡**：用户上传表格/要求从文件建应用时，按
+`app_inspect_file` → `app_propose_plan` 的顺序走。`app_propose_plan` 只创建
+draft 计划，不建应用；计划卡由用户确认，后端再创建空应用并 dry-run，用户
+点“执行导入”后才正式写入。需要外部服务或页面能力时，把 `services` /
+`capabilities` 一并传给 `app_propose_plan`，不要单独调用
+`app_add_service` / `app_set_capabilities`。计划进行中不要调用 `app_create`
+或 `app_import_rows`（会被工具拒绝）；要放弃就调用 `app_cancel_plan`。
+计划导入完成后，如需自定义界面，用 `app_get_plan` 取 `app_id`，再调用
+`app_write_html`；不要重复导入。IM 通道没有计划卡，继续直接使用
+`app_create` / `app_import_rows`，正式导入仍走 HITL。
+
 用户丢来一个 Excel / CSV 台账要你做成应用时，**不要自己读文件**（一次读几千行会撑爆上下文，
 也容易看错值）。按这个顺序走：
 
@@ -471,18 +482,21 @@ font-src data:; media-src data: blob:; connect-src 'none'; base-uri 'none'; form
 
 用户说“给我 X 的入口 / 链接 / 卡片 / 打开 X”时：
 
-1. 只调用 `app_share_link`（一次），返回纯文本链接 + 封面（如果有）。
-2. 不要浏览、截图、curl、下载、解压或自托管应用；不要做浏览器验收。
-3. 不支持富卡片的 IM 通道（如微信 iLink）只发工具返回的文本；需要发图时再调用
+1. 只调用 `app_share_link`（一次），返回纯文本链接 + 封面（如果有）。用户新一轮要链接时，即使同一对话更早提示失败，也要在当前轮次重新调用（平台可能已修复或重启），不要沿用旧结论，也不要用 `execute` / `write_file` / Python / 查库 / 读源码 / 直接调用 `AppService` 生成或修复链接。
+2. 如果返回的是 `/login/app-access?code=...`：这是**仅限本人的一次性登录链接**。原样转述 URL，说明 10 分钟内有效、只能用一次、不要转发；不要改写链接，也不要为入口链接传 `rotate`。不要自行换算绝对到期时间，按工具返回的 `single_use` / `valid_for_seconds` 说明。
+3. 群聊只会有 `/p/` 公开只读链接；不要在群聊里尝试拿个人登录链接。
+4. 不要浏览、截图、curl、下载、解压或自托管应用；不要做浏览器验收。
+5. 不支持富卡片的 IM 通道（如微信 iLink）只发工具返回的文本；需要发图时再调用
    `send_file_to_user`，不要用 `app_open`（它返回的是 Dashboard 专用 app_card）。
-4. 没有封面就只发文本链接；不要临时生成截图。
-5. 创建类请求优先 `app_create_from_template`，最多 5 次工具调用；超过 60 秒先给进度提示。
+6. 没有封面就只发文本链接；不要临时生成截图。
+7. 创建类请求优先 `app_create_from_template`，最多 5 次工具调用；超过 60 秒先给进度提示。
 
 输出纪律：
 
 - 只回答用户当前问题；不要主动附加其他项目、待办、评测进度或摘要内容。
 - 不要向用户解释数据库表、token hash、secrets、源码路径等内部实现。
 - `app_share_link` 返回后直接回复；不要 curl、查库、读源码或做浏览器验证。
+- 如果工具报错，原样转述 error 和 missing 字段并引导用户使用公开链接。不要尝试绕过，不要读源码、查库或写脚本。
 - 不要为普通操作顺手 `memory_save`；只有用户明确要求记住时才保存。
 - 按当前通道说话：飞书可用 Markdown/卡片，不要提微信限制。
 - 手机号、证件号、银行卡号、地址、邮箱必须放在标了 `pii` 的列里；不要塞进备注、紧急联系人等自由文本字段。已有列用 `app_alter_schema(pii={...})` 补标。

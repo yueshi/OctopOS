@@ -8,12 +8,21 @@ from octop_harness.slash import SlashCommand, SlashSink
 
 from octop.i18n.domains.slash import localized_rows, tr
 from octop.infra.agents.security import tool_execution_may_pause
+from octop.infra.auth.channel_binding import bind_identity
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.slash.catalog import channel_origin
-from octop.infra.gateway.slash.ctx import SlashCtx, ensure_thread_id, lang_of, resolve_user_agent
+from octop.infra.gateway.slash.ctx import (
+    SlashCtx,
+    chat_type,
+    ensure_thread_id,
+    lang_of,
+    resolve_user_agent,
+    subject_id,
+)
 from octop.infra.gateway.slash.formatting import markdown_bullets, markdown_kv_block
 from octop.infra.gateway.slash.help import format_help
 from octop.infra.gateway.slash.types import GatewayHandler
+from octop.infra.gateway.threads import ThreadRegistry
 
 if TYPE_CHECKING:
     from octop.infra.gateway.slash.dispatcher import SlashDispatcher
@@ -158,6 +167,46 @@ async def cmd_exit(d: SlashDispatcher, cmd: SlashCommand, ctx: SlashCtx, sink: S
     raise OctopError(ErrorCode.SLASH_BAD_ARGS, "/exit handled at CLI level")
 
 
+async def cmd_bind(d: SlashDispatcher, cmd: SlashCommand, ctx: SlashCtx, sink: SlashSink) -> None:
+    lang = lang_of(ctx)
+    if ctx.channel_identity_repo is None or ctx.channel_bind_code_repo is None:
+        await sink.text(tr("bind.unavailable", lang))
+        return
+    if ctx.channel_type in (
+        ThreadRegistry.CHANNEL_DASHBOARD,
+        ThreadRegistry.CHANNEL_CLI,
+        ThreadRegistry.CHANNEL_MCP,
+    ):
+        await sink.text(tr("bind.dm_only", lang))
+        return
+    if chat_type(ctx) != ThreadRegistry.CHAT_TYPE_DM:
+        await sink.text(tr("bind.dm_only", lang))
+        return
+    code = cmd.args.strip()
+    if not code:
+        await sink.text(tr("bind.usage", lang))
+        return
+    try:
+        row = bind_identity(
+            identity_repo=ctx.channel_identity_repo,
+            code_repo=ctx.channel_bind_code_repo,
+            code=code,
+            channel_type=ctx.channel_type,
+            subject_id=subject_id(ctx),
+        )
+    except OctopError as exc:
+        await sink.text(exc.localized_message(lang))
+        return
+    if ctx.audit_repo is not None:
+        ctx.audit_repo.write(
+            actor=f"user:{row.user_id}",
+            action="auth.channel_identity.bind",
+            target=f"{row.channel_type}:{row.external_subject_id}",
+            payload="",
+        )
+    await sink.text(tr("bind.success", lang, channel_type=row.channel_type))
+
+
 PLATFORM_HANDLERS: dict[str, GatewayHandler] = {
     "help": cmd_help,
     "token": cmd_token,
@@ -165,4 +214,5 @@ PLATFORM_HANDLERS: dict[str, GatewayHandler] = {
     "agent": cmd_agent,
     "connectors": cmd_connectors,
     "exit": cmd_exit,
+    "bind": cmd_bind,
 }

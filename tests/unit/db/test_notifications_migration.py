@@ -34,7 +34,7 @@ def test_v39_creates_notifications_table(tmp_path: Path) -> None:
 
     migrate.run_migrations(db)
 
-    assert _version(db) == 44
+    assert _version(db) == 45
     assert {
         "notification_id",
         "user_id",

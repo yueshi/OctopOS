@@ -12,7 +12,10 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from octop.infra.apps.tool_policy import APP_HITL_TOOL_NAMES
+from octop.infra.apps.tool_policy import (
+    APP_HITL_TOOL_NAMES,
+    APP_MANDATORY_HITL_TOOLS,
+)
 
 if TYPE_CHECKING:
     from octop.infra.db.repos.threads import ThreadRepo
@@ -20,8 +23,13 @@ if TYPE_CHECKING:
 HitlSessionMode = Literal["ask", "allow_all", "allow_tools"]
 
 _ASK_USER_TOOL_NAME = "ask_user_question"
+# App tools that stay gated even when the admin switch is off. Setup tools
+# (import / add-or-remove service) may then be remembered per thread after an
+# explicit "Allow these tools for this chat"; argument-conditional ``when``
+# predicates can still skip owner-reversible calls (e.g. share-link reuse).
+FORCED_HITL_TOOLS = frozenset({"app_delete"}) | APP_HITL_TOOL_NAMES
 # Tools whose approval must never be skipped by a per-thread bypass.
-MANDATORY_HITL_TOOLS = frozenset({"app_delete"}) | APP_HITL_TOOL_NAMES
+MANDATORY_HITL_TOOLS = frozenset({"app_delete"}) | APP_MANDATORY_HITL_TOOLS
 
 _MAX_TOOLS = 64
 _MAX_TOOL_NAME = 128
@@ -279,6 +287,7 @@ def apply_session_bypass(
 
 
 __all__ = [
+    "FORCED_HITL_TOOLS",
     "MANDATORY_HITL_TOOLS",
     "HitlSessionMode",
     "HitlSessionPolicy",

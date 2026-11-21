@@ -72,6 +72,13 @@ def test_strip_internal_payloads_keeps_other_json() -> None:
     assert strip_internal_payloads('说明 {"matches":[]} 结束') == '说明 {"matches":[]} 结束'
 
 
+def test_strip_internal_payloads_keeps_unrelated_matches_json() -> None:
+    from octop.infra.utils.llm_text import strip_internal_payloads
+
+    raw = '{"matches":[{"name":"x"}]}答案'
+    assert strip_internal_payloads(raw) == raw
+
+
 def test_format_channel_text_strips_retention_json_for_weixin() -> None:
     from octop.infra.utils.llm_text import format_channel_text
 

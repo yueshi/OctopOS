@@ -69,10 +69,36 @@ describe("HitlApprovalCard", () => {
       />,
     );
 
+    expect(screen.getByText("Confirm 2 actions")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(
       await screen.findByText("Allow these tools for this chat"),
     ).toBeInTheDocument();
+  });
+
+  it("offers a one-click allow for MiniApp setup tools", async () => {
+    const onDecision = vi.fn();
+    render(
+      <HitlApprovalCard
+        actions={[
+          {
+            name: "app_import_rows",
+            args: { app_id: "app_1", path: "inbound/rows.csv" },
+          },
+        ]}
+        status="pending"
+        onDecision={onDecision}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    fireEvent.click(
+      await screen.findByText("Allow MiniApp setup tools for this chat"),
+    );
+    expect(onDecision).toHaveBeenCalledWith([{ type: "approve" }], {
+      mode: "allow_tools",
+      tools: ["app_import_rows", "app_add_service", "app_remove_service"],
+    });
   });
 
   it("shows the session policy after approval", () => {

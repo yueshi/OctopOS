@@ -31,6 +31,17 @@ function uniqueToolNames(actions: HitlActionRequest[]): string[] {
   ];
 }
 
+/**
+ * MiniApp setup tools whose per-thread allow is honored by the backend.
+ * Keep in sync with `APP_SETUP_HITL_TOOLS` in infra/apps/tool_policy.py.
+ */
+const MINIAPP_SETUP_TOOLS = [
+  "app_import_rows",
+  "app_add_service",
+  "app_remove_service",
+] as const;
+const MINIAPP_SETUP_TOOL_SET = new Set<string>(MINIAPP_SETUP_TOOLS);
+
 export default function HitlApprovalCard({
   actions,
   status,
@@ -55,6 +66,27 @@ export default function HitlApprovalCard({
     toolNames.length > 1
       ? t("chat.hitl.allowTools", "Allow these tools for this chat")
       : t("chat.hitl.allowTool", "Allow this tool for this chat");
+  const hasSetupTools = actions.some((action) =>
+    MINIAPP_SETUP_TOOL_SET.has(action.name),
+  );
+  const allowMenuItems = [
+    ...(hasSetupTools
+      ? [
+          {
+            key: "allow_app_setup",
+            label: t(
+              "chat.hitl.allowAppSetup",
+              "Allow MiniApp setup tools for this chat",
+            ),
+          },
+        ]
+      : []),
+    { key: "allow_tools", label: allowToolsLabel },
+    {
+      key: "allow_all",
+      label: t("chat.hitl.allowAll", "Allow all for this chat"),
+    },
+  ];
 
   const resolvedLabel =
     status === "rejected"
@@ -67,15 +99,21 @@ export default function HitlApprovalCard({
         : t("chat.hitl.allowedTool", "Allowed this tool for this chat")
       : t("chat.hitl.approved", "Approved");
 
+  const title =
+    actions.length > 1
+      ? t("chat.hitl.titleMultiple", {
+          count: actions.length,
+          defaultValue: "Confirm {{count}} actions",
+        })
+      : t("chat.hitl.title", "Confirm this action");
+
   return (
     <div className={styles.card} role="status">
       <div className={styles.titleRow}>
         <span className={styles.iconWrap} aria-hidden="true">
           <ShieldAlert size={18} strokeWidth={2} />
         </span>
-        <div className={styles.title}>
-          {t("chat.hitl.title", "Confirm this action")}
-        </div>
+        <div className={styles.title}>{title}</div>
       </div>
       {speakerName ? (
         <p className={styles.member}>
@@ -126,13 +164,7 @@ export default function HitlApprovalCard({
           <Dropdown
             trigger={["click"]}
             menu={{
-              items: [
-                { key: "allow_tools", label: allowToolsLabel },
-                {
-                  key: "allow_all",
-                  label: t("chat.hitl.allowAll", "Allow all for this chat"),
-                },
-              ],
+              items: allowMenuItems,
               onClick: ({ key }) => {
                 if (key === "allow_all") {
                   emit(
@@ -147,7 +179,10 @@ export default function HitlApprovalCard({
                   actions.map(() => ({ type: "approve" })),
                   {
                     mode: "allow_tools",
-                    tools: toolNames,
+                    tools:
+                      key === "allow_app_setup"
+                        ? [...MINIAPP_SETUP_TOOLS]
+                        : toolNames,
                   },
                 );
               },

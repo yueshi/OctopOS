@@ -45,6 +45,7 @@ async def test_dashboard_hitl_resume_registers_followup_hitl_required() -> None:
 
     processor = MagicMock()
     processor.iter_hitl_resume_chunks = _resume
+    processor.record_hitl_decision = AsyncMock()
     hitl = HitlChannelCoordinator()
     first = hitl.store.register(
         thread_id="thr-follow",
@@ -77,6 +78,10 @@ async def test_dashboard_hitl_resume_registers_followup_hitl_required() -> None:
     hitl_chunks = [c for c in chunks if c.get("type") == "hitl_required"]
     assert hitl_chunks
     assert chunks[-1] == {"type": "done", "hitl_paused": True}
+    processor.record_hitl_decision.assert_awaited_once()  # type: ignore[attr-defined]
+    recorded = processor.record_hitl_decision.await_args  # type: ignore[attr-defined]
+    assert recorded.kwargs["status"] == "approved"
+    assert recorded.kwargs["record"] is first
 
     followup = hitl.store.resolve_pending_for_thread(
         "thr-follow",
@@ -114,7 +119,10 @@ async def test_dashboard_hitl_resume_wakes_team_member_without_host_resume() -> 
         delivered["decisions"] = decisions
         return True
 
-    processor = SimpleNamespace(teams=SimpleNamespace(deliver_member_hitl=deliver))
+    processor = SimpleNamespace(
+        teams=SimpleNamespace(deliver_member_hitl=deliver),
+        record_hitl_decision=AsyncMock(),
+    )
     frames: list[str] = []
     async for frame in iter_dashboard_hitl_resume_sse(
         server=object(),
@@ -137,6 +145,10 @@ async def test_dashboard_hitl_resume_wakes_team_member_without_host_resume() -> 
     assert delivered == {"id": pending.pending_id, "decisions": [{"type": "approve"}]}
     assert hitl.store.get(pending.pending_id) is not None
     assert hitl.store.get(pending.pending_id).status == "approved"  # type: ignore[union-attr]
+    processor.record_hitl_decision.assert_awaited_once()
+    recorded = processor.record_hitl_decision.await_args
+    assert recorded.kwargs["status"] == "approved"
+    assert recorded.kwargs["record"] is pending
 
 
 @pytest.mark.asyncio
@@ -156,7 +168,8 @@ async def test_dashboard_hitl_resume_expires_when_member_job_is_gone() -> None:
     pending.resume_agent_id = "member"
     pending.resume_thread_id = "thr-room~member"
     processor = SimpleNamespace(
-        teams=SimpleNamespace(deliver_member_hitl=lambda *_args, **_kwargs: False)
+        teams=SimpleNamespace(deliver_member_hitl=lambda *_args, **_kwargs: False),
+        record_hitl_decision=AsyncMock(),
     )
     frames: list[str] = []
     async for frame in iter_dashboard_hitl_resume_sse(
@@ -180,6 +193,7 @@ async def test_dashboard_hitl_resume_expires_when_member_job_is_gone() -> None:
     assert "expired" in chunks[0]["message"].lower()
     assert hitl.store.get(pending.pending_id) is not None
     assert hitl.store.get(pending.pending_id).status == "expired"  # type: ignore[union-attr]
+    processor.record_hitl_decision.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -194,6 +208,7 @@ async def test_dashboard_hitl_resume_registers_without_prior_pending() -> None:
 
     processor = MagicMock()
     processor.iter_hitl_resume_chunks = _resume
+    processor.record_hitl_decision = AsyncMock()
     hitl = HitlChannelCoordinator()
 
     async for _ in iter_dashboard_hitl_resume_sse(
@@ -232,6 +247,7 @@ async def test_dashboard_hitl_resume_finishes_after_client_disconnect() -> None:
 
     processor = MagicMock()
     processor.iter_hitl_resume_chunks = _resume
+    processor.record_hitl_decision = AsyncMock()
     hitl = HitlChannelCoordinator()
 
     frames = [
@@ -264,6 +280,7 @@ async def test_dashboard_hitl_resume_marks_pending_resolved_when_stream_errors()
 
     processor = MagicMock()
     processor.iter_hitl_resume_chunks = _resume
+    processor.record_hitl_decision = AsyncMock()
     hitl = HitlChannelCoordinator()
     first = hitl.store.register(
         thread_id="thr-err",
@@ -298,3 +315,161 @@ async def test_dashboard_hitl_resume_marks_pending_resolved_when_stream_errors()
     assert resolved is not None
     assert resolved.status == "expired"
     assert hitl.store.resolve_pending_for_thread("thr-err", agent_id="agent-1", user_id=1) is None
+
+
+def _im_processor(resume: Any) -> MagicMock:
+    processor = MagicMock()
+    processor.iter_hitl_resume_chunks = resume
+    processor.record_hitl_decision = AsyncMock()
+    processor.deliver_resumed_reply_to_origin = AsyncMock()
+    return processor
+
+
+def _im_pending(hitl: HitlChannelCoordinator, *, channel_type: str = "weixin"):
+    return hitl.store.register(
+        thread_id="thr-im",
+        agent_id="agent-1",
+        user_id=1,
+        session_key="agent-1:weixin:wxid:dm",
+        channel_type=channel_type,
+        action_requests=[{"name": "app_share_link", "args": {"app_id": "app_1"}}],
+        review_configs=None,
+    )
+
+
+async def _run_im_resume(
+    processor: MagicMock,
+    hitl: HitlChannelCoordinator,
+    pending: Any,
+    *,
+    channel_type: str = "weixin",
+    locale: str = "zh",
+    disconnected: bool = False,
+) -> list[dict[str, Any]]:
+    frames: list[str] = []
+    async for frame in iter_dashboard_hitl_resume_sse(
+        server=object(),
+        processor=processor,
+        hitl_coordinator=hitl,
+        agent_id="agent-1",
+        thread_id="thr-im",
+        user_id=1,
+        decisions=[{"type": "approve"}],
+        pending=pending,
+        session_key="agent-1:weixin:wxid:dm",
+        channel_type=channel_type,
+        locale=locale,
+        is_disconnected=AsyncMock(return_value=disconnected),
+    ):
+        frames.append(frame)
+    return _parse_sse_chunks("".join(frames))
+
+
+@pytest.mark.asyncio
+async def test_dashboard_hitl_resume_sends_final_answer_back_to_im() -> None:
+    async def _resume(*_args: object, **_kwargs: object):
+        yield {"type": "token", "content": "我先查一下。"}
+        yield {
+            "type": "tool_call_chunk",
+            "id": "call-1",
+            "name": "app_share_link",
+            "args": "{}",
+            "index": 0,
+        }
+        yield {"type": "tool_result", "node": "tools", "messages": []}
+        yield {"type": "token", "content": "已打开：https://example.test/p/abc"}
+
+    hitl = HitlChannelCoordinator()
+    pending = _im_pending(hitl)
+    processor = _im_processor(_resume)
+
+    await _run_im_resume(processor, hitl, pending)
+
+    processor.deliver_resumed_reply_to_origin.assert_awaited_once()  # type: ignore[attr-defined]
+    kwargs = processor.deliver_resumed_reply_to_origin.await_args.kwargs  # type: ignore[attr-defined]
+    assert kwargs["agent_id"] == "agent-1"
+    assert kwargs["session_key"] == "agent-1:weixin:wxid:dm"
+    assert kwargs["channel_type"] == "weixin"
+    assert kwargs["text"] == "已打开：https://example.test/p/abc"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_hitl_resume_sends_answer_after_sse_disconnect() -> None:
+    async def _resume(*_args: object, **_kwargs: object):
+        yield {"type": "token", "content": "链接：https://example.test/p/abc"}
+
+    hitl = HitlChannelCoordinator()
+    pending = _im_pending(hitl)
+    processor = _im_processor(_resume)
+
+    frames = await _run_im_resume(processor, hitl, pending, disconnected=True)
+
+    assert frames == []
+    processor.deliver_resumed_reply_to_origin.assert_awaited_once()  # type: ignore[attr-defined]
+    assert (
+        processor.deliver_resumed_reply_to_origin.await_args.kwargs["text"]  # type: ignore[attr-defined]
+        == "链接：https://example.test/p/abc"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_hitl_resume_does_not_push_for_dashboard_origin() -> None:
+    async def _resume(*_args: object, **_kwargs: object):
+        yield {"type": "token", "content": "done"}
+
+    hitl = HitlChannelCoordinator()
+    pending = _im_pending(hitl, channel_type="dashboard")
+    processor = _im_processor(_resume)
+
+    await _run_im_resume(processor, hitl, pending, channel_type="dashboard")
+
+    processor.deliver_resumed_reply_to_origin.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_hitl_resume_sends_followup_card_to_im() -> None:
+    async def _resume(*_args: object, **_kwargs: object):
+        yield {"type": "token", "content": "还需要另一个审批。"}
+        yield {
+            "type": "hitl_required",
+            "request": {
+                "action_requests": [
+                    {"name": "app_delete", "args": {"app_id": "app_1"}},
+                ],
+                "review_configs": [
+                    {"action_name": "app_delete", "allowed_decisions": ["approve", "reject"]},
+                ],
+            },
+        }
+
+    hitl = HitlChannelCoordinator()
+    pending = _im_pending(hitl)
+    processor = _im_processor(_resume)
+
+    await _run_im_resume(processor, hitl, pending)
+
+    processor.deliver_resumed_reply_to_origin.assert_awaited_once()  # type: ignore[attr-defined]
+    text = processor.deliver_resumed_reply_to_origin.await_args.kwargs["text"]  # type: ignore[attr-defined]
+    assert "仍有工具等待您的审批" in text
+    assert "/approve" in text
+    followup = hitl.store.resolve_pending_for_thread("thr-im", agent_id="agent-1", user_id=1)
+    assert followup is not None
+    assert followup.pending_id in text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_hitl_resume_sends_failure_to_im() -> None:
+    async def _resume(*_args: object, **_kwargs: object):
+        raise RuntimeError("boom")
+        yield {}  # pragma: no cover
+
+    hitl = HitlChannelCoordinator()
+    pending = _im_pending(hitl)
+    processor = _im_processor(_resume)
+
+    await _run_im_resume(processor, hitl, pending)
+
+    processor.deliver_resumed_reply_to_origin.assert_awaited_once()  # type: ignore[attr-defined]
+    text = processor.deliver_resumed_reply_to_origin.await_args.kwargs["text"]  # type: ignore[attr-defined]
+    assert "恢复执行失败" in text
+    assert "boom" in text

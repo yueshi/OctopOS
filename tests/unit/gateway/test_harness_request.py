@@ -139,3 +139,26 @@ async def test_group_context_uses_anonymous_labels_instead_of_raw_ids() -> None:
     assert "[群成员2] 你怎么看？" in content
     assert "1468FCD" not in content
     assert "BD552189" not in content
+
+
+def test_identity_verified_is_stamped_in_configurable() -> None:
+    from octop.infra.gateway.process.harness_request import build_harness_request
+
+    req = build_harness_request(
+        thread_id="t1",
+        user_id=7,
+        source="weixin/ch1",
+        session_key="a1:weixin:wx1:dm",
+        text="hi",
+        identity_verified=True,
+    )
+    assert req["configurable"]["octop_identity_verified"] is True
+
+    plain = build_harness_request(
+        thread_id="t1",
+        user_id=7,
+        source="weixin/ch1",
+        session_key="a1:weixin:wx1:dm",
+        text="hi",
+    )
+    assert "octop_identity_verified" not in plain["configurable"]

@@ -3889,3 +3889,22 @@ async def test_app_event_idempotency_is_scoped_to_each_app(world: World) -> None
     assert retried.event_id == first_event.event_id
     first_events, _ = world.service.list_events(first)
     assert [item.payload for item in first_events] == [{"order": 1}]
+
+
+@pytest.mark.asyncio
+async def test_agent_owner_gets_read_only_view_of_member_apps(world: World) -> None:
+    app = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.bob_id,
+        name="Member app",
+        columns=[{"name": "title", "type": "string"}],
+    )
+
+    assert world.service.permission_for(app, world.alice_id, is_admin=False) == "view"
+    assert world.service.permission_for(app, world.bob_id, is_admin=False) == "edit_structure"
+
+    alice_apps = {
+        row.app_id: permission
+        for row, permission in world.service.list_for_user(world.alice_id, is_admin=False)
+    }
+    assert alice_apps[app.app_id] == "view"

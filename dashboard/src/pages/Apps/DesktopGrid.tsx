@@ -92,6 +92,7 @@ import {
   Server,
   ShieldCheck,
   Smartphone,
+  SquareTerminal,
   Star,
   Sun,
   Ticket,
@@ -109,6 +110,7 @@ import {
 } from "./desktopFiles";
 import MiniAppFrame from "../../components/MiniAppFrame";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { userCan } from "../../utils/permissions";
 import { useDashboardNotifySocket } from "../../hooks/useDashboardNotifySocket";
 import {
   addDesktopNotification,
@@ -158,6 +160,7 @@ import {
   MENU_BAR_HEIGHT,
   saveDesktopWindows,
   systemWindowId,
+  terminalWindowId,
   WINDOW_REGISTRY,
   windowSpaceId,
   type DesktopWindowState,
@@ -189,6 +192,7 @@ import styles from "./index.module.less";
 const DesktopFilesWindow = lazy(() => import("./DesktopFilesWindow"));
 const DesktopHtmlWindow = lazy(() => import("./DesktopHtmlWindow"));
 const DesktopBrowserWindow = lazy(() => import("./DesktopBrowserWindow"));
+const TerminalPage = lazy(() => import("../Control/Terminal"));
 const DesktopManagerDrawer = lazy(
   () => import("./desktopManager/DesktopManagerDrawer"),
 );
@@ -822,6 +826,16 @@ export default function DesktopGrid({
       Boolean(agents.find((agent) => agent.agent_id === id)?.is_owner),
     [agents],
   );
+  // The PTY WebSocket requires both the terminal permission and agent
+  // ownership (admins bypass ownership), so shared experts get no launcher.
+  const canOpenTerminal = useCallback(
+    (id: string): boolean => {
+      if (!userCan(currentUser, "terminal")) return false;
+      if (currentUser?.role === "admin") return true;
+      return Boolean(agents.find((agent) => agent.agent_id === id)?.is_owner);
+    },
+    [agents, currentUser],
+  );
   // Apps shared from an expert the viewer cannot open must not borrow that
   // expert's name: they gather in one "Shared with me" desktop instead. Own
   // apps keep their agent desktop even while the agent list is still loading.
@@ -1075,6 +1089,15 @@ export default function DesktopGrid({
                 : t("apps.desktop.browser.label", "Browser"),
             ] as const;
           }
+          if (win.kind === "terminal") {
+            const name = win.agentId
+              ? spaceNameById.get(win.agentId)?.name ?? win.agentId
+              : "";
+            return [
+              win.id,
+              `${t("apps.desktop.terminal.label", "Terminal")} · ${name}`,
+            ] as const;
+          }
           if (win.kind === "system" && win.systemKey) {
             const definition = SYSTEM_APP_BY_KEY.get(
               win.systemKey as SystemAppKey,
@@ -1119,7 +1142,12 @@ export default function DesktopGrid({
       const next = new Set(current);
       for (const id of current) {
         const win = windows.find((item) => item.id === id);
-        if (!win || win.kind === "chat" || visibleWindowIds.has(id)) {
+        if (
+          !win ||
+          win.kind === "chat" ||
+          win.kind === "terminal" ||
+          visibleWindowIds.has(id)
+        ) {
           next.delete(id);
           changed = true;
         }
@@ -1127,7 +1155,8 @@ export default function DesktopGrid({
       return changed ? next : current;
     });
     for (const win of windows) {
-      if (win.kind === "chat") continue;
+      // Expert chats and terminals keep live local state — never unload them.
+      if (win.kind === "chat" || win.kind === "terminal") continue;
       if (!visibleWindowIds.has(win.id) && suspendedWindows.has(win.id)) {
         continue;
       }
@@ -1567,6 +1596,39 @@ export default function DesktopGrid({
       });
     },
     [accessibleAgentIds, appSpace, knownAgentIds],
+  );
+
+  const openTerminalWindow = useCallback(
+    (agentId: string) => {
+      if (knownAgentIds.has(agentId) && !accessibleAgentIds.has(agentId)) {
+        return;
+      }
+      if (!canOpenTerminal(agentId)) return;
+      const id = terminalWindowId(agentId);
+      setWindows((list) => {
+        const existing = list.find((win) => win.id === id);
+        if (existing) {
+          const z = ++zRef.current;
+          return list.map((win) =>
+            win.id === id ? { ...win, minimized: false, z } : win,
+          );
+        }
+        const root = rootRef.current;
+        const win = createDesktopWindow({
+          kind: "terminal",
+          agentId,
+          spaceId: agentId,
+          z: ++zRef.current,
+          list,
+          appSpace,
+          bottomInset: 0,
+          viewportWidth: root?.clientWidth ?? 1280,
+          viewportHeight: root?.clientHeight ?? 800,
+        });
+        return win ? [...list, win] : list;
+      });
+    },
+    [accessibleAgentIds, appSpace, canOpenTerminal, knownAgentIds],
   );
 
   const updateBrowserUrl = useCallback((id: string, url: string) => {
@@ -2166,6 +2228,19 @@ export default function DesktopGrid({
         icon: <Globe size={16} />,
         run: () => openBrowserWindow(space.agentId!),
       });
+      if (canOpenTerminal(space.agentId)) {
+        items.push({
+          id: "action:terminal",
+          group: "actions",
+          label: tr("apps.desktop.terminal.openAction", "Open terminal"),
+          hint: tr(
+            "apps.desktop.terminal.openHint",
+            "Run shell commands in this expert's workspace",
+          ),
+          icon: <SquareTerminal size={16} />,
+          run: () => openTerminalWindow(space.agentId!),
+        });
+      }
     }
 
     items.push({
@@ -2214,6 +2289,7 @@ export default function DesktopGrid({
     return items;
   }, [
     appSpace,
+    canOpenTerminal,
     currentSystemApps,
     fullscreen,
     openBrowserWindow,
@@ -2221,6 +2297,7 @@ export default function DesktopGrid({
     openFilesWindow,
     openNotificationWindow,
     openSystemApp,
+    openTerminalWindow,
     openWindow,
     ordered,
     selectSpace,
@@ -2411,6 +2488,9 @@ export default function DesktopGrid({
     if (win.kind === "html") {
       return <FileText size={size} color="#64748b" strokeWidth={1.6} />;
     }
+    if (win.kind === "terminal") {
+      return <SquareTerminal size={size} color="#64748b" strokeWidth={1.6} />;
+    }
     if (win.kind === "system") {
       const definition = win.systemKey
         ? SYSTEM_APP_BY_KEY.get(win.systemKey as SystemAppKey)
@@ -2569,6 +2649,7 @@ export default function DesktopGrid({
     const browserWin = currentWindows.find(
       (win) => win.kind === "browser" && win.agentId === space.agentId,
     );
+    const terminalAvailable = canOpenTerminal(space.agentId);
     dockItems.splice(1, 0, {
       id: `dock:browser:${space.agentId}`,
       kind: "browser",
@@ -2584,11 +2665,38 @@ export default function DesktopGrid({
       active: Boolean(
         browserWin && !browserWin.minimized && browserWin.z === topZ,
       ),
-      dividerAfter: true,
+      dividerAfter: !terminalAvailable,
       onActivate: () => openBrowserWindow(space.agentId!),
       onMinimize: browserWin ? () => minimizeWindow(browserWin.id) : undefined,
       onClose: browserWin ? () => closeWindow(browserWin.id) : undefined,
     });
+    if (terminalAvailable) {
+      const terminalWin = currentWindows.find(
+        (win) => win.kind === "terminal" && win.agentId === space.agentId,
+      );
+      dockItems.splice(2, 0, {
+        id: `dock:terminal:${space.agentId}`,
+        kind: "terminal",
+        windowId: terminalWin?.id,
+        label: t("apps.desktop.terminal.label", "Terminal"),
+        icon: (
+          <span className={styles.desktopDockLauncherArt} aria-hidden>
+            <SquareTerminal size={20} />
+          </span>
+        ),
+        running: Boolean(terminalWin),
+        minimized: terminalWin?.minimized,
+        active: Boolean(
+          terminalWin && !terminalWin.minimized && terminalWin.z === topZ,
+        ),
+        dividerAfter: true,
+        onActivate: () => openTerminalWindow(space.agentId!),
+        onMinimize: terminalWin
+          ? () => minimizeWindow(terminalWin.id)
+          : undefined,
+        onClose: terminalWin ? () => closeWindow(terminalWin.id) : undefined,
+      });
+    }
   }
   for (const win of currentWindows.filter((item) => item.kind === "html")) {
     dockItems.push({
@@ -2960,7 +3068,9 @@ export default function DesktopGrid({
               : null;
           const winSpace = win.spaceId
             ? spaces.find((item) => item.id === win.spaceId) ?? space
-            : win.kind === "chat" || win.kind === "files"
+            : win.kind === "chat" ||
+              win.kind === "files" ||
+              win.kind === "terminal"
             ? spaces.find((item) => item.id === win.agentId) ?? space
             : space;
           const chatAgent =
@@ -2972,6 +3082,7 @@ export default function DesktopGrid({
           if (win.kind === "files" && !win.agentId) return null;
           if (win.kind === "html" && (!win.agentId || !win.path)) return null;
           if (win.kind === "browser" && !win.agentId) return null;
+          if (win.kind === "terminal" && !win.agentId) return null;
           if (win.kind === "system" && (!win.agentId || !win.systemKey))
             return null;
           if (win.kind === "external" && !win.url) return null;
@@ -2987,7 +3098,7 @@ export default function DesktopGrid({
             !liveIframeIds.has(win.id);
           const showSuspended =
             !contentMounted ||
-            (suspended && win.kind !== "chat") ||
+            (suspended && win.kind !== "chat" && win.kind !== "terminal") ||
             budgetSleeping;
           const titleBarVisible = visibleTitleBars.has(win.id);
           const preview = dragPreview?.id === win.id ? dragPreview : null;
@@ -3203,6 +3314,14 @@ export default function DesktopGrid({
                         initialTab={win.filesTab}
                         canBrowseAll={canBrowseAgentFiles(win.agentId)}
                         onOpenHtml={openHtmlFromFiles}
+                      />
+                    </Suspense>
+                  ) : win.kind === "terminal" && win.agentId ? (
+                    <Suspense fallback={null}>
+                      <TerminalPage
+                        embedded
+                        agentId={win.agentId}
+                        isVisible={focused && !win.minimized}
                       />
                     </Suspense>
                   ) : win.agentId ? (

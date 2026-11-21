@@ -94,6 +94,41 @@ async def test_project_stream_skips_replayed_historical_media(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_project_stream_drops_memory_retention_json(tmp_path) -> None:
+    """octop-memory's internal audit JSON must never reach the answer."""
+    from types import SimpleNamespace
+
+    from tests.support.fakes import FakeHarnessAgent
+
+    from octop.infra.gateway.process.stream_project import project_stream
+
+    agent = FakeHarnessAgent(workspace_dir=tmp_path)
+    retention = (
+        '{"matches": [{"atom_id": "a1", "relation": "unrelated", '
+        '"document": "USER.md", "quote": "", "confidence": "high", '
+        '"same_subject": false, "same_scope": false}]}'
+    )
+
+    async def _stream(*_args: object, **_kwargs: object):
+        yield {"type": "token", "content": "正常回答："}
+        yield {"type": "token", "content": retention}
+        yield {"type": "token", "content": "完成。"}
+        yield {"type": "token", "content": retention + "同一块里的回答。"}
+
+    manager = SimpleNamespace(get_agent=lambda _agent_id: agent, stream=_stream)
+    events = [event async for event in project_stream(manager, "main", {"thread_id": "thr1"})]
+    texts = "".join(
+        part.text for event in events for part in event.content if hasattr(part, "text")
+    )
+
+    assert "atom_id" not in texts
+    assert "same_scope" not in texts
+    assert "正常回答" in texts
+    assert "完成。" in texts
+    assert "同一块里的回答。" in texts
+
+
+@pytest.mark.asyncio
 async def test_project_stream_stops_after_time_budget(tmp_path) -> None:
     from types import SimpleNamespace
 

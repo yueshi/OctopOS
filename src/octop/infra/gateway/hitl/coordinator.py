@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -490,6 +490,13 @@ class HitlChannelCoordinator:
         history_factory: Any | None = None,
         history_finalize: Any | None = None,
         member_hitl: Callable[[str, list[dict[str, Any]]], bool] | None = None,
+        record_decision: (
+            Callable[
+                [str, HitlPendingRecord, list[dict[str, Any]], Literal["approved", "rejected"]],
+                Awaitable[None],
+            ]
+            | None
+        ) = None,
     ) -> AsyncIterator[MessageEvent]:
         lang = normalize_locale(locale)
         if cmd.name == "pending":
@@ -514,6 +521,7 @@ class HitlChannelCoordinator:
             approve=approve,
             message=reject_message,
         )
+        resolved_status: Literal["approved", "rejected"] = "approved" if approve else "rejected"
         if record is not None:
             handed = self.hand_member_pause(
                 record,
@@ -523,6 +531,8 @@ class HitlChannelCoordinator:
             )
             if handed is not None:
                 if handed:
+                    if record_decision is not None:
+                        await record_decision(thread_id, record, decisions, resolved_status)
                     ack = (
                         tr("hitl.approved_ack", lang) if approve else tr("hitl.rejected_ack", lang)
                     )
@@ -553,9 +563,6 @@ class HitlChannelCoordinator:
         history_completed = False
         had_output = False
         ack_sent = False
-        resolved_status: Literal["approved", "rejected"] | None = (
-            "approved" if approve else "rejected"
-        )
         try:
             async for ev in project_resume_stream(
                 agent_manager,
@@ -598,8 +605,10 @@ class HitlChannelCoordinator:
             ack = tr("hitl.approved_ack", lang) if approve else tr("hitl.rejected_ack", lang)
             yield MessageEvent.text(ack)
 
-        if record is not None and resolved_status is not None:
+        if record is not None:
             self._store.mark_resolved(record.pending_id, resolved_status)
+            if record_decision is not None:
+                await record_decision(thread_id, record, decisions, resolved_status)
 
         if projection_state.hitl_paused:
             yield MessageEvent.text(tr("hitl.followup_pending", lang))

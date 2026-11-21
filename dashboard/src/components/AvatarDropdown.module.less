@@ -326,3 +326,34 @@
 .settingsDivider {
   margin: 16px 0 !important;
 }
+
+.bindCodeBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.bindCodeRow {
+  display: flex;
+  gap: 8px;
+
+  :global(.ant-input) {
+    font-family: var(--fn-font-mono, monospace);
+  }
+}
+
+.bindCodeHint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fn-text-tertiary);
+  margin: 0;
+}
+
+.bindingList {
+  margin-top: 12px;
+}
+
+.bindSubject {
+  word-break: break-all;
+}

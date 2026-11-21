@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -31,10 +31,11 @@ from octop.infra.gateway.hitl.coordinator import (
     HitlStreamContext,
     decision_rejection_reason,
 )
-from octop.infra.gateway.hitl.format import normalize_hitl_request
+from octop.infra.gateway.hitl.format import format_hitl_card, normalize_hitl_request
 from octop.infra.gateway.hitl.store import HitlPendingRecord
+from octop.infra.gateway.threads import ThreadRegistry
 from octop.infra.utils.llm_text import ainvoke_text
-from octop.infra.utils.locale import resolve_request_locale
+from octop.infra.utils.locale import normalize_locale, resolve_request_locale
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -118,6 +119,7 @@ async def iter_dashboard_hitl_resume_sse(
     channel_type: str,
     locale: str,
     is_disconnected: Callable[[], Awaitable[bool]],
+    policy: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream dashboard HITL resume chunks and persist any nested ``hitl_required``.
 
@@ -125,9 +127,9 @@ async def iter_dashboard_hitl_resume_sse(
     reload / refresh can reinject the approval card (same as the initial turn).
     """
     rejected = any(isinstance(d, dict) and d.get("type") == "reject" for d in decisions)
+    decision_status: Literal["approved", "rejected"] = "rejected" if rejected else "approved"
     if pending is not None and pending.resume_agent_id:
         from octop.i18n.domains.slash import tr as slash_tr  # noqa: PLC0415
-        from octop.infra.utils.locale import normalize_locale  # noqa: PLC0415
 
         teams = getattr(processor, "teams", None)
         deliver = getattr(teams, "deliver_member_hitl", None) if teams is not None else None
@@ -138,6 +140,13 @@ async def iter_dashboard_hitl_resume_sse(
             rejected=rejected,
         )
         if handed:
+            await processor.record_hitl_decision(
+                thread_id=thread_id,
+                record=pending,
+                decisions=decisions,
+                status=decision_status,
+                policy=policy,
+            )
             # The member job keeps streaming on the room socket. A normal
             # ``done`` makes the dashboard reload history immediately, which
             # drops the live member answer before fan-in has saved it.
@@ -160,12 +169,22 @@ async def iter_dashboard_hitl_resume_sse(
     )
     disconnected = False
     followup_pause = False
+    followup_record: HitlPendingRecord | None = None
+    im_origin = not ThreadRegistry.is_virtual_channel(channel_type)
+    answer_parts: list[str] = []
     # Clear the in-memory pause before the (possibly long) resume stream so
     # history reload cannot reinject the same card while the turn continues.
     if pending is not None:
         hitl_coordinator.store.mark_resolved(
             pending.pending_id,
-            "rejected" if rejected else "approved",
+            decision_status,
+        )
+        await processor.record_hitl_decision(
+            thread_id=thread_id,
+            record=pending,
+            decisions=decisions,
+            status=decision_status,
+            policy=policy,
         )
     try:
         async for chunk in processor.iter_hitl_resume_chunks(
@@ -176,14 +195,26 @@ async def iter_dashboard_hitl_resume_sse(
         ):
             if not disconnected:
                 disconnected = await is_disconnected()
-            if isinstance(chunk, dict) and chunk.get("type") == "hitl_required":
-                followup_pause = True
-                request_payload = chunk.get("request")
-                if isinstance(request_payload, dict):
-                    request_payload = normalize_hitl_request(request_payload)
-                    record = hitl_coordinator.register_from_request(request_payload, ctx=hitl_ctx)
-                    request_payload["pending_id"] = record.pending_id
-                    chunk["request"] = request_payload
+            if isinstance(chunk, dict):
+                ctype = chunk.get("type")
+                if ctype == "tool_call_chunk":
+                    # Text before a tool call is lead-in narration; only what
+                    # follows the last tool call is the user-visible answer.
+                    answer_parts.clear()
+                elif ctype == "token":
+                    content = chunk.get("content")
+                    if isinstance(content, str) and content:
+                        answer_parts.append(content)
+                elif ctype == "hitl_required":
+                    followup_pause = True
+                    request_payload = chunk.get("request")
+                    if isinstance(request_payload, dict):
+                        request_payload = normalize_hitl_request(request_payload)
+                        followup_record = hitl_coordinator.register_from_request(
+                            request_payload, ctx=hitl_ctx
+                        )
+                        request_payload["pending_id"] = followup_record.pending_id
+                        chunk["request"] = request_payload
             if not disconnected:
                 yield format_sse("chunk", chunk)
         # A new approval card is still pending. Draining now would start a
@@ -193,9 +224,31 @@ async def iter_dashboard_hitl_resume_sse(
         if followup_pause:
             if not disconnected:
                 yield format_sse("chunk", {"type": "done", "hitl_paused": True})
+            if im_origin and followup_record is not None:
+                loc = normalize_locale(locale)
+                from octop.i18n.domains.slash import tr as slash_tr  # noqa: PLC0415
+
+                await processor.deliver_resumed_reply_to_origin(
+                    agent_id=agent_id,
+                    session_key=session_key,
+                    channel_type=channel_type,
+                    text=(
+                        f"{slash_tr('hitl.followup_pending', loc)}\n\n"
+                        f"{format_hitl_card(followup_record.action_requests, pending_id=followup_record.pending_id, locale=loc)}"
+                    ),
+                )
             return
         if not disconnected:
             yield format_sse("chunk", {"type": "done"})
+        if im_origin:
+            # The originating IM turn ended at the pause; send it the answer
+            # the Dashboard client just received over SSE.
+            await processor.deliver_resumed_reply_to_origin(
+                agent_id=agent_id,
+                session_key=session_key,
+                channel_type=channel_type,
+                text="".join(answer_parts),
+            )
         # Steers parked across the HITL pause drain at this
         # boundary and continue through a normal WS turn — also when the SSE
         # client disconnected, because the resume itself completed here.
@@ -217,6 +270,19 @@ async def iter_dashboard_hitl_resume_sse(
         # leave the record looking like a successful approve/reject.
         if pending is not None:
             hitl_coordinator.store.mark_resolved(pending.pending_id, "expired")
+        if im_origin:
+            from octop.i18n.domains.slash import tr as slash_tr  # noqa: PLC0415
+
+            await processor.deliver_resumed_reply_to_origin(
+                agent_id=agent_id,
+                session_key=session_key,
+                channel_type=channel_type,
+                text=slash_tr(
+                    "hitl.resume_failed",
+                    normalize_locale(locale),
+                    error=str(exc),
+                ),
+            )
         yield format_sse(
             "chunk",
             {"type": "error", "message": format_stream_error(exc, locale)},
@@ -300,6 +366,7 @@ async def resume_hitl(
             channel_type=channel_type,
             locale=resolve_request_locale(request),
             is_disconnected=request.is_disconnected,
+            policy=(body.hitl_policy.model_dump() if body.hitl_policy is not None else None),
         ):
             yield frame
 

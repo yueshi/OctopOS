@@ -7,6 +7,8 @@ export {
   clearAuthToken,
   setRememberLoginPreference,
   getRememberLoginPreference,
+  setAppScope,
+  getAppScope,
   isSessionOnlyAuth,
   markSetupRequired,
   clearSetupRequired,

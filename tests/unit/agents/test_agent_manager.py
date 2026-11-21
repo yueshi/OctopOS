@@ -903,6 +903,9 @@ def test_build_harness_config_includes_cronjob_tools_when_cron_manager_set(
         "cronjob_run_now",
         "search_knowledge",
         "app_inspect_file",
+        "app_propose_plan",
+        "app_get_plan",
+        "app_cancel_plan",
         "app_list",
         "app_list_bindings",
         "app_add_service",
@@ -951,6 +954,9 @@ def test_build_harness_config_includes_search_knowledge_without_cron(
     assert {t.name for t in cfg.tools} == {
         "search_knowledge",
         "app_inspect_file",
+        "app_propose_plan",
+        "app_get_plan",
+        "app_cancel_plan",
         "app_list",
         "app_list_bindings",
         "app_add_service",
@@ -1766,6 +1772,47 @@ def test_build_harness_config_without_default_model(manager: AgentManager) -> No
     assert cfg.name == "agent_01AGENT"
     assert cfg.system_prompt is None
     assert cfg.backend == _expected_default_backend(manager, "01AGENT")
+
+
+def test_build_harness_config_conditionally_requests_app_approval(
+    manager: AgentManager,
+) -> None:
+    cfg = manager._build_harness_config(_row())
+    assert cfg.interrupt_on is not None
+    # Share links are owner/admin checked and audited by the tool; the
+    # channel-bound personal link must not require a second approval.
+    assert "app_share_link" not in cfg.interrupt_on
+
+    def when(tool_name: str, args: dict[str, object]) -> bool:
+        predicate = cfg.interrupt_on[tool_name].get("when")
+        assert callable(predicate)
+        return bool(predicate(SimpleNamespace(tool_call={"name": tool_name, "args": args})))
+
+    assert when("app_set_table_visibility", {"app_id": "app_1", "public": False}) is False
+    assert when("app_set_table_visibility", {"app_id": "app_1", "public": True}) is True
+    assert (
+        when(
+            "app_integration_update_webhook",
+            {"app_id": "app_1", "webhook_id": "wh_1", "enabled": False},
+        )
+        is False
+    )
+    assert (
+        when(
+            "app_integration_update_webhook",
+            {"app_id": "app_1", "webhook_id": "wh_1", "enabled": True},
+        )
+        is True
+    )
+
+    # Owner-reversible or non-mutating tools leave the forced HITL tier.
+    for name in (
+        "app_set_capabilities",
+        "app_integration_delete_ingress",
+        "app_integration_delete_webhook",
+        "app_integration_test_webhook",
+    ):
+        assert name not in cfg.interrupt_on
 
 
 @pytest.mark.asyncio
@@ -3091,3 +3138,59 @@ def test_build_harness_config_applies_app_tool_risk_limit(
     assert app_tools
     assert all(APP_TOOL_RISKS[tool.name] == RISK_READ for tool in app_tools)
     assert "app_append_row" not in {tool.name for tool in app_tools}
+
+
+def test_hitl_resume_context_restores_weixin_session(manager: AgentManager) -> None:
+    user_id = manager._repos.user_repo.create(username="bound", password_hash="h", role="user")
+    agent_id = "AGT_BOUND"
+    manager._repos.agent_repo.create(agent_id=agent_id, user_id=user_id, name="bound-bot")
+    channel_id = "CH_BOUND"
+    manager._repos.channel_repo.create(
+        channel_id=channel_id,
+        agent_id=agent_id,
+        user_id=user_id,
+        kind="weixin",
+        name="weixin",
+        config_json=json.dumps({}),
+    )
+    session_key = f"{agent_id}:weixin:wx-bound:dm"
+    manager._repos.session_repo.upsert(
+        session_key=session_key,
+        agent_id=agent_id,
+        user_id=user_id,
+        channel_type="weixin",
+        chat_type="dm",
+        thread_id="thr_bound",
+        channel_subject_id="wx-bound",
+        channel_chat_type="dm",
+        channel_id=channel_id,
+    )
+    manager._repos.hitl_repo.create(
+        session_key=session_key,
+        thread_id="thr_bound",
+        kind="approval",
+        payload={"channel_type": "weixin", "user_id": user_id},
+    )
+
+    context = manager._hitl_resume_context("thr_bound")
+
+    assert context == {
+        "source": f"weixin/{channel_id}",
+        "session_key": session_key,
+        "chat_type": "dm",
+        "identity_verified": False,
+    }
+
+    # A /bind-verified owner keeps the flag across HITL resume.
+    bound = manager._repos.channel_identity_repo.bind(
+        channel_type="weixin",
+        external_subject_id="wx-bound",
+        user_id=user_id,
+    )
+    assert bound is not None
+    context = manager._hitl_resume_context("thr_bound")
+    assert context["identity_verified"] is True
+
+    # An approval by a different user must not inherit the owner's identity.
+    context = manager._hitl_resume_context("thr_bound", acting_user_id=user_id + 1)
+    assert context["identity_verified"] is False

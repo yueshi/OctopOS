@@ -18,6 +18,25 @@ function inFlightTail(current: ChatMessage[]): ChatMessage[] {
   return current.slice(idx);
 }
 
+function newestTimestamp(messages: ChatMessage[]): number {
+  let newest = 0;
+  for (const message of messages) {
+    newest = Math.max(newest, message.timestamp || 0);
+  }
+  return newest;
+}
+
+/**
+ * A genuine local turn starts with a user row newer than the fetched page.
+ * An assistant-only fragment (page reloaded mid-turn) or a cached old turn
+ * (the page window moved past it) must not be appended after server rows.
+ */
+function localTurnIsNewer(tail: ChatMessage[], loaded: ChatMessage[]): boolean {
+  const userIdx = lastUserIndex(tail);
+  if (userIdx < 0) return false;
+  return (tail[userIdx].timestamp || 0) > newestTimestamp(loaded);
+}
+
 /**
  * True when `base` already ends with this local turn (server persisted it
  * under different ids). A later send of the same text is kept.
@@ -63,6 +82,9 @@ export function mergeHistoryWithLocalTail(
 
   if (firstOverlap < 0) {
     const tail = inFlightTail(current);
+    // Orphaned live fragment or a cached turn older than the server page:
+    // the page is authoritative.
+    if (!localTurnIsNewer(tail, loaded)) return loaded;
     if (sameTurnAlreadyLoaded(loaded, tail)) return loaded;
     return [...loaded, ...tail];
   }
@@ -84,6 +106,9 @@ export function mergeHistoryWithLocalTail(
   const loadedOverlap = loaded.findIndex((message) => message.id === overlapId);
   const serverAfter = loadedOverlap >= 0 ? loaded.slice(loadedOverlap + 1) : [];
   if (serverAfter.length === 0) return [...base, ...localTail];
+  // Same rule: an orphan fragment or an old cached turn must not be appended
+  // after the server's complete copy of the turn.
+  if (!localTurnIsNewer(localTail, loaded)) return base;
   if (sameTurnAlreadyLoaded(serverAfter, localTail)) return base;
   return [...base, ...localTail];
 }

@@ -212,7 +212,7 @@ class WebSocketChannel(BaseChannel):
                     # flaky client disconnect can stop generation mid-node and leave
                     # an incomplete checkpoint.
                     try:
-                        await self._hub.push_to_thread(thread_id, chunk)
+                        await self._hub.push_to_thread(thread_id, _stamp_turn_chunk(chunk, turn_id))
                     except Exception:
                         logger.exception(
                             "websocket push failed thread=%s (turn continues)",
@@ -300,9 +300,13 @@ class WebSocketChannel(BaseChannel):
             try:
                 await self._hub.push_to_thread(
                     thread_id,
-                    {"type": "error", "message": format_stream_error(exc, locale)},
+                    {
+                        "type": "error",
+                        "message": format_stream_error(exc, locale),
+                        "turn_id": turn_id,
+                    },
                 )
-                await self._hub.push_to_thread(thread_id, {"type": "done"})
+                await self._hub.push_to_thread(thread_id, {"type": "done", "turn_id": turn_id})
             except Exception:
                 logger.exception("websocket failed to deliver error frame thread=%s", thread_id)
         finally:
@@ -391,6 +395,18 @@ class WebSocketChannel(BaseChannel):
             await self._hub.push(conn_id, frame)
 
 
+def _stamp_turn_chunk(chunk: Any, turn_id: str) -> Any:
+    """Tag one forwarded harness chunk with its logical turn id.
+
+    Dashboard clients use the id to drop tail frames of a turn the user has
+    already replaced; without it a late ``done``/``turn.ended`` from the
+    previous turn can close the new turn's socket.
+    """
+    if not isinstance(chunk, dict) or chunk.get("turn_id"):
+        return chunk
+    return {**chunk, "turn_id": turn_id}
+
+
 def _push_discarded_frame(thread_id: str, bundle: DiscardBundle) -> dict[str, Any]:
     return {
         "type": "steer.discarded",
@@ -417,6 +433,7 @@ def _steer_user_frame(thread_id: str, bundle: DrainBundle) -> dict[str, Any]:
         "content": bundle.text,
         "message_id": bundle.message_id,
         "meta": {"steer": True},
+        "turn_id": bundle.turn_id,
         "thread_id": thread_id,
     }
     attachments = inbound_attachments_from_parts(content)

@@ -189,13 +189,16 @@ async def test_ingress_mutation_tools_and_hitl(world: World) -> None:
     assert {
         "app_integration_create_ingress",
         "app_integration_update_ingress",
-        "app_integration_delete_ingress",
         "app_integration_test_ingress",
         "app_integration_create_webhook",
         "app_integration_update_webhook",
+    } <= MANDATORY_HITL_TOOLS
+    # Deletes and outbound tests are owner-reversible: audited, not gated.
+    assert {
+        "app_integration_delete_ingress",
         "app_integration_delete_webhook",
         "app_integration_test_webhook",
-    } <= MANDATORY_HITL_TOOLS
+    }.isdisjoint(MANDATORY_HITL_TOOLS)
 
     create_tool = _tool(world.tools, "app_integration_create_ingress")
     list_tool = _tool(world.tools, "app_integration_list")

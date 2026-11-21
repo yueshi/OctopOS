@@ -27,8 +27,12 @@ import {
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { authApi } from "../api/modules/auth";
+import type { ChannelBindCode, ChannelBinding } from "../api/modules/auth";
 import { preferencesApi } from "../api/modules/preferences";
 import { clearAuthToken } from "../api/request";
+import { copyText } from "../utils/copyText";
+import { useServerTimezone } from "../hooks/useServerTimezone";
+import { formatServerDateTime } from "../utils/formatMessageTime";
 import { applyGuestLocale, applyUserLocale } from "../utils/locale";
 import { apiErrorMessage } from "../utils/apiError";
 import { isSsoPopupMessage, openSsoPopup } from "../utils/ssoPopup";
@@ -110,6 +114,11 @@ export default function AvatarDropdown({
     { kind: string; display_name: string; enabled: boolean }[]
   >([]);
   const [ssoBindingKind, setSsoBindingKind] = useState<string | null>(null);
+  const [channelBindings, setChannelBindings] = useState<ChannelBinding[]>([]);
+  const [bindCode, setBindCode] = useState<ChannelBindCode | null>(null);
+  const [bindBusy, setBindBusy] = useState(false);
+  const [unbindBusy, setUnbindBusy] = useState<string | null>(null);
+  const serverTimezone = useServerTimezone();
   const [changingPw, setChangingPw] = useState(false);
   const [profileForm] = Form.useForm<{ display_name: string }>();
   const [pwForm] = Form.useForm<{
@@ -286,8 +295,53 @@ export default function AvatarDropdown({
     deferOpen(() => onCustomizeNav?.());
   };
 
-  const closeSettings = () => setSettingsOpen(false);
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    setBindCode(null);
+  };
   const closePassword = () => setPasswordOpen(false);
+
+  const handleCreateBindCode = async () => {
+    setBindBusy(true);
+    try {
+      setBindCode(await authApi.createChannelBindCode());
+    } catch (e) {
+      message.error(apiErrorMessage(e, t("account.channelBindFailed"), t));
+    } finally {
+      setBindBusy(false);
+    }
+  };
+
+  const handleCopyBindCode = async () => {
+    if (!bindCode) return;
+    if (await copyText(`/bind ${bindCode.code}`)) {
+      message.success(t("account.channelBindCopied"));
+    }
+  };
+
+  const handleUnbindChannel = async (item: ChannelBinding) => {
+    const key = `${item.channel_type}:${item.subject_id}`;
+    setUnbindBusy(key);
+    try {
+      await authApi.deleteChannelBinding(item.channel_type, item.subject_id);
+      setChannelBindings((prev) =>
+        prev.filter(
+          (row) =>
+            !(
+              row.channel_type === item.channel_type &&
+              row.subject_id === item.subject_id
+            ),
+        ),
+      );
+      message.success(t("account.channelBindUnbindSuccess"));
+    } catch (e) {
+      message.error(
+        apiErrorMessage(e, t("account.channelBindUnbindFailed"), t),
+      );
+    } finally {
+      setUnbindBusy(null);
+    }
+  };
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -300,6 +354,10 @@ export default function AvatarDropdown({
       .then((status) =>
         setSsoProviders(status.providers.filter((item) => item.enabled)),
       )
+      .catch(() => undefined);
+    void authApi
+      .listChannelBindings()
+      .then((res) => setChannelBindings(res.identities))
       .catch(() => undefined);
   }, [onUserChange, settingsOpen]);
 
@@ -617,6 +675,85 @@ export default function AvatarDropdown({
           </p>
         </div>
         <PaletteSwitcher />
+      </section>
+
+      <Divider className={styles.settingsDivider} />
+
+      <section className={styles.settingsSection}>
+        <div className={styles.settingsSectionHead}>
+          <h3 className={styles.settingsSectionTitle}>
+            {t("account.channelBindTitle")}
+          </h3>
+          <p className={styles.settingsSectionDesc}>
+            {t("account.channelBindHint")}
+          </p>
+        </div>
+        {bindCode ? (
+          <div className={styles.bindCodeBox}>
+            <div className={styles.bindCodeRow}>
+              <Input readOnly value={`/bind ${bindCode.code}`} />
+              <Button onClick={() => void handleCopyBindCode()}>
+                {t("account.channelBindCopy")}
+              </Button>
+            </div>
+            <span className={styles.bindCodeHint}>
+              {t("account.channelBindExpires", {
+                minutes: Math.max(
+                  1,
+                  Math.round(
+                    (bindCode.expires_at * 1000 - Date.now()) / 60_000,
+                  ),
+                ),
+              })}
+            </span>
+          </div>
+        ) : null}
+        <Button
+          block
+          type={bindCode ? "default" : "primary"}
+          loading={bindBusy}
+          onClick={() => void handleCreateBindCode()}
+        >
+          {bindCode
+            ? t("account.channelBindRegenerate")
+            : t("account.channelBindGenerate")}
+        </Button>
+        {channelBindings.length > 0 ? (
+          <ul className={`${styles.ssoList} ${styles.bindingList}`}>
+            {channelBindings.map((item) => {
+              const key = `${item.channel_type}:${item.subject_id}`;
+              return (
+                <li key={key} className={styles.ssoRow}>
+                  <div className={styles.ssoMeta}>
+                    <span className={`${styles.ssoName} ${styles.bindSubject}`}>
+                      {item.channel_type} · {item.subject_id}
+                    </span>
+                    <span className={styles.ssoStatus}>
+                      {t("account.channelBindStatus", {
+                        time: formatServerDateTime(
+                          item.verified_at,
+                          serverTimezone,
+                        ),
+                      })}
+                    </span>
+                  </div>
+                  <Button
+                    size="small"
+                    danger
+                    loading={unbindBusy === key}
+                    onClick={() => void handleUnbindChannel(item)}
+                  >
+                    {t("account.channelBindUnbind")}
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className={styles.bindCodeHint} style={{ marginTop: 8 }}>
+            {t("account.channelBindEmpty")}
+          </p>
+        )}
       </section>
 
       {ssoRows.length > 0 && (

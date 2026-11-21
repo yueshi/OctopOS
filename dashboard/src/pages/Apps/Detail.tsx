@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   Alert,
   App,
@@ -55,6 +62,7 @@ import {
   connectorsApi,
   type ConnectorInstance,
 } from "../../api/modules/connectors";
+import { getAppScope } from "../../api";
 import PageShell, { pageShellStyles } from "../../layouts/PageShell";
 import { fullscreenContainer } from "../../utils/overlayContainer";
 import { apiErrorMessage, isNotFoundApiError } from "../../utils/apiError";
@@ -103,7 +111,12 @@ const SOURCE_SCHEDULE_OPTIONS: { value: number; labelKey: string }[] = [
   { value: 86400, labelKey: "apps.sourceSchedule1d" },
 ];
 
-export default function AppDetailPage() {
+export default function AppDetailPage({
+  forceRuntime = false,
+}: {
+  /** Render only the MiniApp runtime, even without a scoped-session marker. */
+  forceRuntime?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { appId = "" } = useParams<{ appId: string }>();
@@ -1303,7 +1316,35 @@ export default function AppDetailPage() {
     });
   };
 
+  // A one-time personal link signs in with an app-scoped token. Render only
+  // the MiniApp itself so the user lands directly in a usable full-screen
+  // surface instead of the dashboard shell (whose other routes are blocked).
+  const scopedRuntime = forceRuntime || getAppScope()?.app_id === appId;
+  const scopedRuntimeStyle: CSSProperties = {
+    position: "fixed",
+    inset: 0,
+    // Above the sidebar/header but below Antd messages and modals, so bridge
+    // errors and the game modal still appear over the runtime.
+    zIndex: 500,
+    display: "flex",
+    flexDirection: "column",
+    background: "var(--fn-bg-primary, #fff)",
+  };
+
   if (loading) {
+    if (scopedRuntime) {
+      return (
+        <div
+          style={{
+            ...scopedRuntimeStyle,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Spin />
+        </div>
+      );
+    }
     return (
       <PageShell title={t("apps.title")}>
         <div style={{ padding: 48, textAlign: "center" }}>
@@ -1314,12 +1355,63 @@ export default function AppDetailPage() {
   }
 
   if (notFound || !detail) {
+    if (scopedRuntime) {
+      return (
+        <div
+          style={{
+            ...scopedRuntimeStyle,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Empty description={t("apps.notFound")} />
+        </div>
+      );
+    }
     return (
       <PageShell title={t("apps.title")}>
         <Empty description={t("apps.notFound")} style={{ padding: "64px 0" }}>
           <Button onClick={() => navigate("/apps")}>{t("apps.back")}</Button>
         </Empty>
       </PageShell>
+    );
+  }
+
+  if (scopedRuntime) {
+    return (
+      <div style={scopedRuntimeStyle}>
+        <AppInterfaceTab
+          loading={htmlLoading}
+          escaped={appEscaped}
+          blocked={htmlBlocked}
+          hasHtml={detail.has_html}
+          html={html}
+          reloadKey={htmlReloadKey}
+          frameRef={iframeRef}
+          srcDoc={srcDoc}
+          onOpenChat={() => undefined}
+        />
+        <Modal
+          title={gameSession?.name}
+          open={!!gameSession}
+          onCancel={() => setGameSession(null)}
+          footer={null}
+          width="92vw"
+          destroyOnHidden
+          styles={{ body: { height: "80vh", padding: 0 } }}
+        >
+          {gameSession && (
+            <GameFrame
+              appId={appId}
+              session={gameSession}
+              onFinished={() => {
+                setGameSession(null);
+                void loadDetail();
+              }}
+            />
+          )}
+        </Modal>
+      </div>
     );
   }
 

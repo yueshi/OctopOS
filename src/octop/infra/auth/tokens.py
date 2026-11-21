@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import jwt
+
+_IDENTITY_CLAIMS = frozenset({"sub", "uname", "role", "iat", "exp"})
 
 
 class InvalidToken(Exception): ...
@@ -21,15 +24,27 @@ def sign_token(
     uname: str,
     role: str,
     ttl_seconds: int = 86400,
+    extra: Mapping[str, Any] | None = None,
 ) -> str:
+    """Sign an access token.
+
+    ``extra`` adds narrower-scope claims (``scope``/``app_id``). Identity
+    claims cannot be overridden, so a scoped token can never change who it
+    belongs to or outlive its requested TTL.
+    """
     now = int(time.time())
-    payload = {
-        "sub": str(sub),
-        "uname": uname,
-        "role": role,
-        "iat": now,
-        "exp": now + ttl_seconds,
+    payload: dict[str, Any] = {
+        key: value for key, value in (extra or {}).items() if key not in _IDENTITY_CLAIMS
     }
+    payload.update(
+        {
+            "sub": str(sub),
+            "uname": uname,
+            "role": role,
+            "iat": now,
+            "exp": now + ttl_seconds,
+        }
+    )
     return jwt.encode(payload, secret, algorithm="HS256")
 
 

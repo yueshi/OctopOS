@@ -429,6 +429,24 @@ function ChatPageInner() {
     resumeHitl,
   } = useChat(activeThreadId, resolvedAgentId, isTeamChat);
 
+  // A turn attached mid-flight (page reload / WS resume) never received the
+  // tokens streamed before the attach. Once it ends and history is persisted,
+  // refetch silently so the visible answer is complete without a page reload.
+  useEffect(() => {
+    return chatStore.onStreamEvent((event) => {
+      if (event.kind !== "streamEnd" || !event.incomplete) return;
+      const key = activeThreadId || "__empty__";
+      if (event.sessionId !== key || key === "__empty__") return;
+      window.setTimeout(() => {
+        const snap = chatStore.getSnapshot(key);
+        // Team members may still be streaming into the same turn; wait for
+        // the room's final finish instead of replacing their live bubbles.
+        if (snap.isStreaming || snap.liveSpeakers.length > 0) return;
+        void refreshHistory(key);
+      }, 300);
+    });
+  }, [activeThreadId, refreshHistory]);
+
   const hasPendingHitlPause = useMemo(
     () => hasPendingHitl(messages),
     [messages],

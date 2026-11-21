@@ -97,6 +97,15 @@ def strip_internal_payloads(text: str) -> str:
         return text
     if not isinstance(payload, dict) or not (_INTERNAL_PAYLOAD_KEYS & payload.keys()):
         return text
+    matches = payload.get("matches")
+    if not isinstance(matches, list):
+        return text
+    # Require the memory-retention row shape so a legitimate user-requested
+    # ``{"matches": ...}`` answer is not mistaken for the internal envelope.
+    if matches and not all(
+        isinstance(row, dict) and "atom_id" in row and "relation" in row for row in matches
+    ):
+        return text
     return stripped[end:].lstrip()
 
 

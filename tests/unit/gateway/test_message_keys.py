@@ -117,3 +117,43 @@ def test_session_metadata_keeps_weixin_token_under_a_durable_key() -> None:
     meta = session_metadata_from_message(msg)
     assert "context_token" not in meta
     assert meta["weixin_context_token"] == "ctx-abc"
+
+
+def test_chat_type_normalizes_adapter_vocabularies() -> None:
+    from octop.infra.gateway.process.message_keys import chat_type_from_message
+
+    dingtalk_group = InboundMessage(
+        channel_type="dingtalk",
+        channel_id="ch1",
+        channel_subject=ChannelSubject(subject_id="staff-1"),
+        content=[TextContent(text="hi")],
+        metadata={"conversation_type": "2", "sender_id": "staff-1"},
+    )
+    assert chat_type_from_message(dingtalk_group) == "group"
+
+    feishu_dm = InboundMessage(
+        channel_type="feishu",
+        channel_id="ch1",
+        channel_subject=ChannelSubject(subject_id="ou-1", chat_type="p2p"),
+        content=[TextContent(text="hi")],
+        metadata={"chat_type": "p2p", "sender_id": "ou-1"},
+    )
+    assert chat_type_from_message(feishu_dm) == "dm"
+
+    wecom_dm = InboundMessage(
+        channel_type="wecom",
+        channel_id="ch1",
+        channel_subject=ChannelSubject(subject_id="user-1"),
+        content=[TextContent(text="hi")],
+        metadata={"chat_type": "single"},
+    )
+    assert chat_type_from_message(wecom_dm) == "dm"
+
+    yuanbao_group = InboundMessage(
+        channel_type="yuanbao",
+        channel_id="ch1",
+        channel_subject=ChannelSubject(subject_id="room-1", chat_type="group"),
+        content=[TextContent(text="hi")],
+        metadata={"from_account": "member-1"},
+    )
+    assert chat_type_from_message(yuanbao_group) == "group"

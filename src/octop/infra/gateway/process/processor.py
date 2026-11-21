@@ -31,6 +31,7 @@ from octop.infra.agents.teams.team_manager import (
 from octop.infra.agents.teams.team_manager import (
     stamp_team_host_chunk as _maybe_stamp_team_host,
 )
+from octop.infra.auth.channel_binding import is_owner_verified
 from octop.infra.errors import OctopError
 from octop.infra.gateway.cli.events import message_event_to_cli_chunks
 from octop.infra.gateway.hitl.coordinator import (
@@ -41,7 +42,7 @@ from octop.infra.gateway.hitl.coordinator import (
     iter_with_session_auto_approve,
 )
 from octop.infra.gateway.hitl.format import normalize_hitl_request
-from octop.infra.gateway.hitl.store import HitlPendingStore
+from octop.infra.gateway.hitl.store import HitlPendingRecord, HitlPendingStore
 from octop.infra.gateway.hitl.stream_compat import install_harness_hitl_compat
 from octop.infra.gateway.media.attachment_hints import (
     content_blocks_need_vision,
@@ -63,9 +64,11 @@ from octop.infra.gateway.process.harness_request import (
 from octop.infra.gateway.process.message_keys import (
     COMPOSER_CTX_KEY,
     INBOUND_ATTACHMENTS_KEY,
+    chat_type_from_message,
     resolve_user_id_for_message,
     session_key_from_message,
     session_metadata_from_message,
+    subject_id_from_message,
 )
 from octop.infra.gateway.process.stream_project import (
     StreamBudget,
@@ -80,6 +83,7 @@ from octop.infra.gateway.slash.parser import parse_slash
 from octop.infra.gateway.slash.runner import try_handle_slash
 from octop.infra.history.projection import (
     TurnHistoryTracker,
+    message_input,
     message_inputs,
 )
 from octop.infra.history.trajectory.settings import agent_trajectory_enabled
@@ -190,6 +194,24 @@ class _ResolvedModelRoute:
     automatic: bool
 
 
+def _strip_internal_memory_chunk(chunk: dict[str, Any]) -> dict[str, Any] | None:
+    """Strip octop-memory's internal audit JSON from a streamed token chunk.
+
+    Returns ``None`` when the chunk carried only the internal payload.
+    """
+    if chunk.get("type") != "token":
+        return chunk
+    content = chunk.get("content")
+    if not isinstance(content, str):
+        return chunk
+    cleaned = strip_internal_payloads(content)
+    if cleaned == content:
+        return chunk
+    if not cleaned.strip():
+        return None
+    return {**chunk, "content": cleaned}
+
+
 class GlobalProcessor:
     """Routes InboundMessages by ``tenant_id`` to the correct HarnessAgent."""
 
@@ -202,6 +224,8 @@ class GlobalProcessor:
         agent_repo: AgentRepo,
         user_repo: UserRepo,
         connector_repo: ConnectorRepo,
+        channel_identity_repo: Any | None = None,
+        channel_bind_code_repo: Any | None = None,
         knowledge_repo: Any | None = None,
         settings_repo: Any | None = None,
         provider_repo: Any | None = None,
@@ -222,6 +246,8 @@ class GlobalProcessor:
         self._agent_repo = agent_repo
         self._user_repo = user_repo
         self._connector_repo = connector_repo
+        self._channel_identity_repo = channel_identity_repo
+        self._channel_bind_code_repo = channel_bind_code_repo
         self._knowledge_services = (
             SimpleNamespace(
                 knowledge_repo=knowledge_repo,
@@ -548,6 +574,21 @@ class GlobalProcessor:
     async def on_reply(self, event: ReplyEvent) -> None:
         await self.teams.on_reply(event)
 
+    def _owner_identity_verified(self, msg: InboundMessage, agent_row: Any) -> bool:
+        """True when a DM sender is bound to the agent owner's own account.
+
+        IM senders are otherwise treated as the agent owner for session
+        ownership, which is not an identity proof. Only a ``/bind``-verified
+        subject may request a personal MiniApp sign-in link.
+        """
+        return is_owner_verified(
+            identity_repo=getattr(self, "_channel_identity_repo", None),
+            channel_type=msg.channel_type or "",
+            subject_id=subject_id_from_message(msg),
+            chat_type=chat_type_from_message(msg),
+            owner_user_id=agent_row.user_id if agent_row is not None else None,
+        )
+
     def _slash_ctx(
         self,
         *,
@@ -563,6 +604,9 @@ class GlobalProcessor:
             agent_repo=self._agent_repo,
             connector_repo=self._connector_repo,
             user_repo=self._user_repo,
+            channel_identity_repo=getattr(self, "_channel_identity_repo", None),
+            channel_bind_code_repo=getattr(self, "_channel_bind_code_repo", None),
+            audit_repo=self._audit_repo,
             agent_manager=self._agent_manager,
             usage_repo=self._usage_repo,
             agent_id=agent_id,
@@ -742,12 +786,13 @@ class GlobalProcessor:
             return
 
         agent_row = self._agent_repo.get(agent_id)
+        channel_type = msg.channel_type or "unknown"
         user_id = resolve_user_id_for_message(
             msg,
             agent_owner_id=agent_row.user_id if agent_row is not None else None,
         )
+        identity_verified = self._owner_identity_verified(msg, agent_row)
         session_key = session_key_from_message(msg, agent_id=agent_id)
-        channel_type = msg.channel_type or "unknown"
         meta = msg.metadata if isinstance(msg.metadata, dict) else {}
         im_meta = session_metadata_from_message(msg)
         bridge_turn_id = str(meta.get("bridge_turn_id") or "").strip()
@@ -792,6 +837,7 @@ class GlobalProcessor:
                 history_factory=self._begin_history,
                 history_finalize=self._complete_resumed_history,
                 member_hitl=self.teams.deliver_member_hitl,
+                record_decision=self._record_hitl_decision_cb,
             ):
                 yield ev
             if slash_outcome.completed_turn:
@@ -972,6 +1018,7 @@ class GlobalProcessor:
             auto_route=model_route.automatic,
             message_kwargs=message_kwargs or None,
             reasoning_overrides=reasoning_overrides,
+            identity_verified=identity_verified,
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(
@@ -1144,6 +1191,7 @@ class GlobalProcessor:
             msg,
             agent_owner_id=agent_row.user_id if agent_row is not None else None,
         )
+        identity_verified = self._owner_identity_verified(msg, agent_row)
         session_key = session_key_from_message(msg, agent_id=agent_id)
         channel_type = msg.channel_type or "unknown"
         meta = msg.metadata if isinstance(msg.metadata, dict) else {}
@@ -1182,6 +1230,7 @@ class GlobalProcessor:
                 history_factory=self._begin_history,
                 history_finalize=self._complete_resumed_history,
                 member_hitl=self.teams.deliver_member_hitl,
+                record_decision=self._record_hitl_decision_cb,
             ):
                 for frame in message_event_to_cli_chunks(ev):
                     yield _maybe_stamp_team_host(frame, agent_id, team_host)
@@ -1330,6 +1379,7 @@ class GlobalProcessor:
             session_key=session_key,
             thread_id=thread_id,
             meta=meta,
+            identity_verified=identity_verified,
         )
         history_tracker = await self._begin_history(agent_id, thread_id, request)
         await self._observe_turn_start_context(
@@ -1376,6 +1426,15 @@ class GlobalProcessor:
                     agent_id, thread_id, next_decisions, user_id=user_id
                 ),
             ):
+                stripped_chunk = _strip_internal_memory_chunk(chunk)
+                if stripped_chunk is None:
+                    logger.info(
+                        "dropped internal memory retention payload thread=%s agent=%s",
+                        thread_id,
+                        agent_id,
+                    )
+                    continue
+                chunk = stripped_chunk
                 usage_tracker.observe(chunk)
                 history_tracker.observe(chunk)
                 from octop.infra.history.recorder import flush_tracker  # noqa: PLC0415
@@ -1514,6 +1573,15 @@ class GlobalProcessor:
                     agent_id, thread_id, next_decisions, user_id=user_id
                 ),
             ):
+                stripped_chunk = _strip_internal_memory_chunk(chunk)
+                if stripped_chunk is None:
+                    logger.info(
+                        "dropped internal memory retention payload thread=%s agent=%s",
+                        thread_id,
+                        agent_id,
+                    )
+                    continue
+                chunk = stripped_chunk
                 usage_tracker.observe(chunk)
                 history_tracker.observe(chunk)
                 from octop.infra.history.recorder import flush_tracker  # noqa: PLC0415
@@ -1579,6 +1647,7 @@ class GlobalProcessor:
         session_key: str,
         thread_id: str,
         meta: dict[str, Any],
+        identity_verified: bool = False,
     ) -> dict[str, Any]:
         media_backend = media_backend_for_agent(self._agent_manager, agent_id)
         source = f"{msg.channel_type}/{msg.channel_id}"
@@ -1666,6 +1735,7 @@ class GlobalProcessor:
             auto_route=model_route.automatic,
             message_kwargs=message_kwargs or None,
             reasoning_overrides=reasoning_overrides,
+            identity_verified=identity_verified,
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(
@@ -1973,6 +2043,118 @@ class GlobalProcessor:
             runtime_repo=(self._runtime_repo if owner else None),
         )
 
+    async def record_hitl_decision(
+        self,
+        *,
+        thread_id: str,
+        record: HitlPendingRecord,
+        decisions: list[dict[str, Any]],
+        status: Literal["approved", "rejected"],
+        policy: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a resolved approval/rejection into the thread transcript.
+
+        The pending card only lives in ``hitl_pending`` while open; without a
+        durable row a reload loses the decision and the transcript cannot show
+        what the user approved or rejected.
+        """
+        repo = self._thread_message_repo
+        if repo is None:
+            return
+        resolution: str | None = None
+        if status == "approved":
+            mode = str((policy or {}).get("mode") or "")
+            if mode == "allow_all":
+                resolution = "allow_all"
+            elif mode in ("allow_tool", "allow_tools"):
+                resolution = "allow_tool"
+            else:
+                resolution = "approve"
+        decision_message = next(
+            (
+                str(item.get("message") or "").strip()
+                for item in decisions
+                if isinstance(item, dict) and str(item.get("message") or "").strip()
+            ),
+            "",
+        )
+        payload: dict[str, Any] = {
+            "pending_id": record.pending_id,
+            "action_requests": record.action_requests,
+            "review_configs": record.review_configs,
+            "status": status,
+            **({"resolution": resolution} if resolution else {}),
+            **({"message": decision_message} if decision_message else {}),
+        }
+        item = message_input(
+            AIMessage(
+                content="",
+                id=f"hitl:{record.pending_id}",
+                additional_kwargs={"octop_hitl": payload},
+            )
+        )
+        if item is None:
+            return
+        try:
+            await asyncio.to_thread(repo.append_if_ready, thread_id, [item])
+        except Exception:  # noqa: BLE001 - a transcript write must not fail the resume
+            logger.warning(
+                "failed to record HITL decision thread=%s pending=%s",
+                thread_id,
+                record.pending_id,
+                exc_info=True,
+            )
+
+    async def _record_hitl_decision_cb(
+        self,
+        thread_id: str,
+        record: HitlPendingRecord,
+        decisions: list[dict[str, Any]],
+        status: Literal["approved", "rejected"],
+    ) -> None:
+        await self.record_hitl_decision(
+            thread_id=thread_id,
+            record=record,
+            decisions=decisions,
+            status=status,
+        )
+
+    async def deliver_resumed_reply_to_origin(
+        self,
+        *,
+        agent_id: str,
+        session_key: str,
+        channel_type: str,
+        text: str,
+    ) -> None:
+        """Push a dashboard-resolved resume reply back to its IM channel.
+
+        A pause can be approved from the Dashboard while the turn that created
+        it ran on an IM channel. That channel's turn already ended at the
+        pause, so the resumed answer (e.g. a MiniApp share link) must be
+        delivered explicitly or the IM user never sees it.
+        """
+        from octop.infra.gateway.threads import ThreadRegistry  # noqa: PLC0415
+
+        if not text.strip() or ThreadRegistry.is_virtual_channel(channel_type):
+            return
+        gateway = self._gateway
+        if gateway is None:
+            return
+        cleaned = format_channel_text(text, channel_type)
+        if not cleaned:
+            return
+        try:
+            await gateway.push_text_from_session(agent_id, session_key, cleaned)
+        except Exception:  # noqa: BLE001 - delivery must not fail the resume
+            logger.warning(
+                "failed to deliver HITL resume reply channel=%s agent=%s session=%s",
+                channel_type,
+                agent_id,
+                session_key,
+                exc_info=True,
+            )
+
     async def _persist_incomplete_turn(
         self,
         thread_id: str,
@@ -1993,6 +2175,7 @@ class GlobalProcessor:
     ) -> None:
         from octop.infra.history.recorder import RecordingTracker  # noqa: PLC0415
 
+        tracker.completed = completed
         if isinstance(tracker, RecordingTracker):
             if tracker.turn["format"] == "legacy":
                 await asyncio.to_thread(

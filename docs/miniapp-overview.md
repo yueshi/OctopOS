@@ -30,7 +30,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 | 游戏 | ✅ 白名单外部游戏、一次性会话 token、结果回写、侧栏运行 |
 | 工作台 | ✅ 个人多 Board、12 列网格、缩放/锁定/撤销/全屏/自动排列 |
 | IM | ✅ `app_share_link` 一次调用交付、纯文本格式化、单轮预算 |
-| 集成/分发（R2/R3） | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度已实现；公开看板、迁移包 v2、认证链接、渠道身份未实现 |
+| 集成/分发（R2/R3） | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度、IM 公开链接与 owner 身份绑定（D4-lite）已实现；公开看板、迁移包 v2 未实现 |
 
 关键数字：
 
@@ -84,6 +84,16 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 | 本地模板 | 系统模板（包内 5 个）+ Agent 工作区 `app_templates/<id>/` | ✅ |
 | 从模板创建 | `POST /api/apps/from-template`、`app_create_from_template`（`source` 为 `system` 或 `agent`） | ✅ |
 | 云端市场 | 前端「云端市场」页签只有占位文案 | ⛔ |
+
+**Setup Plan（从文件建应用）**：
+
+- `app_inspect_file` 只读检查；`app_propose_plan` 生成 `app_setup_plans` 中的 `draft` 计划，**不创建应用**。
+- 对话里的计划卡承载确认、预检和导入：确认后后端创建空应用并 dry-run；用户再点“执行导入”才写数据。所有步骤幂等（`plan_id + revision + source_hash + dry_run_hash`）。
+- 计划支持多 sheet/多表：`tables` 列表一次确认、一次导入，每张表独立 dry-run 结果；服务/能力可随计划一起声明，计划卡内可编辑，确认时按 `save_service` / `set_capabilities` 的同等约束预检（连接器归属、工具白名单、URL 前缀、请求头、TTL/限流、Owner-only 能力），导入后按同一确认执行。
+- 计划进行中 `app_create` / `app_import_rows` 会被工具拒绝（`app_cancel_plan` 可退出）；`dry_run=true` 不再触发 HITL，正式导入仍走 HITL（非计划路径）。
+- 破坏性/安全操作（删除、改结构、删行、公开/分享、集成写操作）不能并入计划，仍逐项强制审批。
+- 旧 `app_inspect_card` 只读；计划卡从 `GET /api/apps/setup-plans/{plan_id}` 回显状态，历史刷新不会重复出现“确认并继续”。
+- 审计：`audit_log` 记录 `miniapp.setup_plan.propose / confirm / execute / cancel / expire / supersede`；详情接口返回按时间排序的 audit 事件。管理员可用 `GET /api/apps/setup-plans` 按状态/agent/用户/app/线程/是否有错误分页查询，详情用现有 `GET /api/apps/setup-plans/{plan_id}`。
 
 快速模式细节：
 
@@ -294,7 +304,10 @@ owner/admin 可以让 Agent 使用两组工具：
 **风险分级 / 最小权限 / 审计（2026-11-18）**
 
 - `infra/apps/tool_policy.py` 给每个 `app_*` 工具标注 `read` / `write` / `sensitive` 和 `content` / `data` / `integration` / `security` / `lifecycle` 分组。
-- `sensitive` 工具自动进入 `MANDATORY_HITL_TOOLS`，不能被人 HITL 的 allow-all/allow-tool 跳过；当前包括删应用、删列、replace 导入、删行、公开表、能力位、服务声明、分享链接、入站入口写操作。
+- HITL 集合与风险分级分开维护（`APP_HITL_TOOL_NAMES`）：风险分级仍决定 Agent 可按 `app_tool_max_risk` 挂哪些工具；HITL 只覆盖不可逆、会丢数据或对外发送的操作，即使全局 HITL 关闭也不能静默执行。
+- 搭建类工具（`app_import_rows` / `app_add_service` / `app_remove_service`）在用户于审批卡显式选择「放通这些工具（本对话）」后，可对本次对话的同类调用跳过重复审批；`app_alter_schema`、删行、删除应用、创建/修改入站与出站集成仍属于 `MANDATORY_HITL_TOOLS`。
+- 条件审批：`app_share_link` 仅在 `rotate=true`（会使旧链接失效）时确认；`app_set_table_visibility` 仅在 `public=true` 时确认；`app_integration_update_ingress/webhook` 仅在 `enabled` 不为 false 时确认；`app_integration_test_ingress` 仅在 `app.import` / `app.refresh` 模式确认；集成删除与 `app_integration_test_webhook` 不再确认。
+- 审批前预检：`app_add_service` 使用 `provider=connector` 却没有 `connector_instance_id`，或 `app_import_rows` 使用 `dry_run=true`，会跳过审批卡直接返回结果，避免用户为必然失败或只读的调用点批准。
 - Agent 配置可用 `app_tool_max_risk`（`read` / `write` / `sensitive`，默认 `sensitive`）和 `app_tool_groups`（列表，省略=全部）做最小权限过滤；非法 risk 回退为 `read`，显式空列表表示不挂 app 工具。
 - 每个 `app_*` 工具调用都会写 `miniapp.agent_tool` 审计：actor、agent_id、user_id、app_id、risk、group、hitl_required、参数键、参数 SHA-256、状态、耗时、异常类型；不记录原始参数、PII 或 secret 值。
 
@@ -336,11 +349,12 @@ owner/admin 可以让 Agent 使用两组工具：
 ### 2.10 IM 通道
 
 - `app_share_link`：按 app_id 或名称查找 → 服务端复用/创建公开链接 → 返回纯文本 + 可选封面；默认不轮换 token。
-- `app_open`：dashboard 来源返回 `app_card`；IM 来源降级为公开链接 + 纯文本，避免把 `octop_ui` 卡片发给不支持的通道。
+- `app_open`：dashboard 来源返回 `app_card`；IM 来源返回公开链接/纯文本，避免把 `octop_ui` 卡片发给不支持的通道。
 - 微信/QQ：`format_channel_text()` 去掉 Markdown；`withhold_weixin_stream_preamble()` 丢弃最终答案前的中间旁白。
 - 单轮预算：`StreamBudget(max_tool_calls=20, max_seconds=180, max_repeats=3)`，超限取消本轮并提示。
 - 公开链接需要 `OCTOP_PUBLIC_BASE_URL`（或 `config.json.public_base_url`）才是绝对地址；否则返回相对路径。
-- IM 认证链接、渠道身份绑定属于 R3，未实现。
+- **D4-lite 渠道身份绑定**：Dashboard 个人设置生成一次性绑定码，用户在 IM 私聊发送 `/bind <code>`；只有绑定到 agent owner 本人的发送者会被标记 `octop_identity_verified`，不切换 acting user，群聊不生效。同一 IM 身份不可覆盖绑定到其他用户。
+- **D3 认证链接**：`app_access_codes` 存 SHA-256 code；`app_share_link(mode="auto")` 在已绑定 owner 的私聊、`public_base_url` 已配置时返回 `/login/app-access?code=...`，10 分钟单次有效；SPA 确认页点击后才调用 `POST /api/auth/app-access/exchange` 换取 **app-scoped JWT**（2 小时，只允许该 app 路由和只读启动接口），并直接进入独立路由树中的全屏运行时（不挂载 Dashboard 外壳）。认证链接只登录用户自己，app 权限仍由现有 ACL 校验。
 
 ### 2.11 安全与运维
 
@@ -711,11 +725,11 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 游戏 | 外部游戏接入 | ✅ | 白名单 + 2h token + 结果回写 |
 | 看板 | 个人多 Board | ✅ | 12 列、CAS、锁定、撤销、全屏、自动排列 |
 | 看板 | 公开看板分享 | ⛔ | 无 `share_token_hash` / `/public/boards/*` |
-| IM | `app_share_link` | ✅ | 一次调用、复用链接、封面 |
-| IM | `app_open` 通道降级 | ✅ | dashboard → app_card；IM → 文本+链接 |
+| IM | `app_share_link` | ✅ | 一次调用、复用公开链接、封面；已绑定 owner 的私聊返回 app-scoped 免密链接 |
+| IM | `app_open` 通道降级 | ✅ | dashboard → app_card；IM → 公开链接 / 文本降级 |
 | IM | 微信纯文本格式化 | ✅ | `format_channel_text` |
 | IM | 单轮预算/重复失败熔断 | ✅ | `StreamBudget` |
-| IM | 认证链接 / 渠道身份 | ⛔ | R3 未实现 |
+| IM | 渠道身份绑定 | ✅ | D4-lite：Dashboard 绑定码 + `/bind`；仅 owner 本人绑定生效，群聊不发个人链接 |
 | 事件 | 事件平面驱动 `app.refresh` / `app.import` / `app.inbox` | ✅ | 收件箱游标 + ack；`app.import` 幂等 append；触发器已接 |
 | 事件 | 应用收件箱 / `emitEvent` | ✅ | 收件箱游标 + ack；出站 Webhook（v42）：owner 声明 URL/事件类型，HMAC 签名、outbox 重试 |
 | 分发 | 跨主机 Bundle v2 | ⛔ | 只有同实例 zip 备份/恢复 |
@@ -734,7 +748,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | `app_list_services` | `view` | 列出外部服务声明 |
 | `app_remove_service` | owner/admin | 删除外部服务声明及缓存 |
 | `app_open` | `view` | 打开应用；dashboard 返回 `app_card`，IM 返回公开链接 |
-| `app_share_link` | owner/admin | 获取/轮换公开链接 + 封面 |
+| `app_share_link` | owner/admin | 获取/轮换公开链接 + 封面；已绑定 owner 的私聊返回个人免密链接 |
 | `app_create` | Agent 可访问 | 建应用 + 主表 + 可选能力清单 |
 | `app_create_from_template` | Agent 可访问 | 从系统/专家模板建空应用 |
 | `app_add_table` | `edit_structure` | 新增附加表 |
@@ -859,7 +873,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 |---|---|---|
 | **R1** | 能力清单、发布快照、composeMessage、限流、HTML 回滚、多 Board | ✅ 全部落地（个人看板部分） |
 | **R2** | 实时外部服务、事件收件箱/发送、统一调度、公开看板 | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度已落地；公开看板未做 |
-| **R3** | 迁移包 v2、IM owner 认证链接、渠道身份绑定 | ⛔ 未开始 |
+| **R3** | 迁移包 v2、IM 公开链接、owner 身份绑定 | ◐ IM 公开链接与 D4-lite 身份绑定已落地；迁移包 v2 未做 |
 
 R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `events.emit` 已接入执行链路，`schedules.manage` 仍是可声明、不可执行的能力名，避免未来端点默认放行。
 
@@ -938,7 +952,7 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 | R2 应用级调度 `light_app_schedules` | 统一管理数据源同步与公开快照刷新 | `sync_source` / `snapshot_publication` 已落地；`run_agent` 等动作待做 |
 | R2 公开看板 | Board 不能分享 | 仅个人看板 |
 | R3 Bundle v2 | 不能跨主机迁移应用 | 只有同实例 zip 备份/恢复 |
-| R3 认证链接 / 渠道身份 | IM 里只能看公开只读版，不能带登录态打开 | 未实现 |
+| R3 认证链接 / 渠道身份 | D4-lite 已落地：owner 绑定后发 app-scoped 免密链接；未绑定/群聊只读 | ✅ |
 | 云端模板市场 | 只能系统/专家模板 | 前端占位 |
 | 按应用选择模型 | 助手/生成固定用 owning agent 默认模型 | `model_access.py` |
 
@@ -961,7 +975,7 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 - 已修正：`docs/architecture-overview.md` 的工具数量、行数与 `apps/` 文件数。
 - 已删除：`light-apps-multi-table-design.md`、`light-apps-assistant-and-import-design.md`（内容已并入本文 §2.2 / §2.6 / §2.7），以及过时的演示稿 `miniapp-platform-roadmap.html` / `.pptx`。
 - 所有保留的 MiniApp 设计稿已加统一的“当前实现状态见 `miniapp-overview.md`”指针；设计稿只保留动机、取舍和历史记录。
-- `docs/miniapp-platform-roadmap.md` 的 R1 状态准确；R2/R3 仍未开始。
+- `docs/miniapp-platform-roadmap.md` 的 R1 状态准确；R2 的外部服务/事件/调度、R3 的 IM 公开链接与 owner 身份绑定（D4-lite）已落地；公开看板与迁移包 v2 仍未做。
 - 本文作为当前状态的单一入口。
 
 ---

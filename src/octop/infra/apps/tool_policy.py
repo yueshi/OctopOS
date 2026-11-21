@@ -2,8 +2,10 @@
 
 Owner/admin permission is necessary but not sufficient: an agent may be given
 only read access, or only the data/content subsets. ``app_tool_max_risk`` and
-``app_tool_groups`` in the agent config narrow the attached tool list. Tools
-marked ``sensitive`` also require HITL approval (see ``MANDATORY_HITL_TOOLS``).
+``app_tool_groups`` in the agent config narrow the attached tool list. The
+``sensitive`` risk tier also feeds least-privilege filtering; the subset that
+is irreversible or externally visible additionally requires HITL approval (see
+``APP_HITL_TOOL_NAMES``).
 """
 
 from __future__ import annotations
@@ -32,11 +34,14 @@ APP_TOOL_GROUPS_ALL = (
     GROUP_LIFECYCLE,
 )
 
-# Read/reversible writes are safe to run directly; sensitive operations need
-# explicit user approval because they can destroy data, expose it, or change
-# the app's security posture.
+# Read/reversible writes are safe to run directly; sensitive operations keep
+# the strictest least-privilege tier because they can destroy data, expose it,
+# or change the app's security posture. HITL is the narrower set below.
 APP_TOOL_RISKS: dict[str, str] = {
     "app_inspect_file": RISK_READ,
+    "app_get_plan": RISK_READ,
+    "app_propose_plan": RISK_WRITE,
+    "app_cancel_plan": RISK_WRITE,
     "app_list": RISK_READ,
     "app_list_bindings": RISK_READ,
     "app_list_services": RISK_READ,
@@ -75,6 +80,9 @@ APP_TOOL_RISKS: dict[str, str] = {
 
 APP_TOOL_CATEGORIES: dict[str, str] = {
     "app_inspect_file": GROUP_DATA,
+    "app_get_plan": GROUP_LIFECYCLE,
+    "app_propose_plan": GROUP_LIFECYCLE,
+    "app_cancel_plan": GROUP_LIFECYCLE,
     "app_list": GROUP_LIFECYCLE,
     "app_list_bindings": GROUP_INTEGRATION,
     "app_list_services": GROUP_INTEGRATION,
@@ -111,9 +119,51 @@ APP_TOOL_CATEGORIES: dict[str, str] = {
     "app_delete": GROUP_LIFECYCLE,
 }
 
+# Tools that require a human decision. Kept explicit rather than derived from
+# ``RISK_SENSITIVE``: the risk tier also drives ``app_tool_max_risk`` tool
+# attachment, while HITL should only cover irreversible, data-destroying or
+# externally-visible actions. Owner-reversible actions (creating/reusing a
+# share link, hiding a table, deleting an integration, testing a webhook) stay
+# sensitive for attachment filtering but do not prompt. ``app_share_link`` is
+# therefore not in this set: its owner/admin checks and audit are the gate,
+# and the channel-bound personal auth link must not require a second approval.
 APP_HITL_TOOL_NAMES = frozenset(
-    name for name, risk in APP_TOOL_RISKS.items() if risk == RISK_SENSITIVE
+    {
+        "app_alter_schema",
+        "app_delete_row",
+        "app_import_rows",
+        "app_set_table_visibility",
+        "app_add_service",
+        "app_remove_service",
+        "app_integration_create_ingress",
+        "app_integration_update_ingress",
+        "app_integration_test_ingress",
+        "app_integration_create_webhook",
+        "app_integration_update_webhook",
+        "app_delete",
+    }
 )
+
+# Setup tools that may be skipped for the rest of a chat after the user
+# explicitly chooses "Allow these tools for this chat" on an approval card.
+# This keeps a multi-step creation flow from re-prompting for every import /
+# service call while destructive and data-exposing tools stay mandatory.
+APP_SETUP_HITL_TOOLS = frozenset(
+    {
+        "app_import_rows",
+        "app_add_service",
+        "app_remove_service",
+    }
+)
+"""HITL tools whose approval may be remembered per thread.
+
+``app_delete``, schema changes, row deletes, visibility/sharing and
+integration changes are intentionally excluded: they stay mandatory even
+under an allow-all thread policy.
+"""
+
+APP_MANDATORY_HITL_TOOLS = APP_HITL_TOOL_NAMES - APP_SETUP_HITL_TOOLS
+"""HITL tools that always ask, regardless of the thread policy."""
 
 
 def tool_risk(name: str) -> str:
@@ -176,6 +226,8 @@ def filter_app_tools(tools: list[Any], cfg: Mapping[str, Any]) -> list[Any]:
 
 __all__ = [
     "APP_HITL_TOOL_NAMES",
+    "APP_MANDATORY_HITL_TOOLS",
+    "APP_SETUP_HITL_TOOLS",
     "APP_TOOL_CATEGORIES",
     "APP_TOOL_GROUPS_ALL",
     "APP_TOOL_RISKS",

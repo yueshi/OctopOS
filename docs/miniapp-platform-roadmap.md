@@ -43,7 +43,7 @@
 |---|---|---|
 | **R1** | 能力清单、发布快照、composeMessage、限流、回滚、多 Board | 更安全、更好用的 MiniApp 工作台 |
 | **R2** | 实时外部数据、事件收件箱/告警、统一定时任务、对外看板 | 读书记录台等外部数据应用可用 |
-| **R3** | 迁移包、IM owner 认证链接、渠道身份绑定 | 跨主机迁移；Feishu 内打开完整应用 |
+| **R3** | 迁移包、IM 公开链接、owner 身份绑定（D4-lite） | 跨主机迁移；Feishu 内以 owner 身份打开完整应用 |
 
 ---
 
@@ -58,7 +58,7 @@
 | 5 | 事件范围 | **复用 `infra/events`，分阶段**；MVP 做 `app.inbox` + 出站 webhook + Agent 通知，渠道直投后置 |
 | 6 | 定时任务 | **新建 `light_app_schedules` + 扩展 AppSourceScheduler**；cron + 服务器时区；迁移 `schedule_seconds`；不动 `cron_jobs` |
 | 7 | 跨主机迁移 | **Bundle v2：内容 + 声明，不带凭据/token**；目标机重新绑定 connector；调度默认停用 |
-| 8 | IM 全功能 | **先 owner 认证链接，后渠道身份绑定**；私聊 owner 发一次性链接，群聊/非 owner 只读；默认 `identity_mode=owner` |
+| 8 | IM 全功能 | **公开链接 + owner 自证**：owner 在 Dashboard 生成绑定码、在 IM 私聊 `/bind` 后，机器人可发个人认证链接；未绑定发送者与群聊仍按 agent owner 会话归属处理，但拿不到个人链接 |
 | 9 | 发布节奏 | **R1 / R2 / R3 三个独立里程碑**，每个阶段可独立合并、验收、回滚 |
 | 10 | R2.0 收尾范围（2026-11-15） | **`published` row_scope 已取消**：公开面只用表级 `public_visible` 表达，`row_scope` 只保留 `app`/`user` 描述内部协作者可见性；需要只公开部分行时使用独立公开表/投影，不再新增 row scope。计算字段延后；触发器（`on_create`/`on_update`）归 R2.2；实际切换到 external 服务归 R2.1。R2.0 以内置数据集、bindings、`app`/`user` 行级范围、状态机规则与 dataset 导出/导入收尾 |
 
@@ -474,29 +474,21 @@ app_access_codes (
 )
 ```
 
-- `POST /api/apps/{id}/access-link`：已登录用户为自己生成；TTL 60 秒、单次消费。
-- `GET /auth/app?code=...`：消费 code → 复用 SSO `exchange_login_code_response` 模式签发 JWT → 302 到 `/apps/{id}`。
-- `app_share_link` 增加 `mode="auth"`：仅在**私聊且发送者是 owner** 时返回认证链接；群聊/非 owner 回退只读公开链接。
-- 安全：code 只存哈希；单次；短 TTL；审计；不把 JWT 放进 IM 文本。
+- **已实现（2026-11-20，2026-11-21 接入 D4-lite）**：`app_share_link(mode="auto")` 在发送者已绑定为 app owner 的 IM 私聊且 `public_base_url` 已配置时生成认证链接；TTL 10 分钟、单次消费。
+- 链接形如 `${public_base_url}/login/app-access?code=...`；SPA 确认页调用 `POST /api/auth/app-access/preview`（只读）和 `POST /api/auth/app-access/exchange`（消费并签发 **app-scoped** JWT），**不是** `GET /auth/app?code=`，避免链接预览提前消费。
+- 兑换得到的是 app-scoped token（TTL 2 小时）：只允许 `/api/apps/{app_id}` 子路由与少量只读启动接口，其余 `/api/*` 返回 `APP_SCOPE_FORBIDDEN`；滑动续期不会把它升级为全量 token。 确认后进入独立路由树中的全屏运行时（不挂载 AuthGuard/AgentProvider/MainLayout，避免全局请求被 scope 拒绝），而不是完整工作台。
+- 签发身份仍是 agent owner（IM 会话归属不变）；只有绑定到该 owner 的私聊发送者会被标记 `octop_identity_verified`。群聊、未绑定发送者、绑定到其他用户都不签发认证链接，回退公开只读链接。
+- 安全：code 只存 SHA-256；单次；10 分钟 TTL；审计；JWT 不出现在任何 URL；fragment 不进服务端日志。
 
-### 7.3 D4 渠道身份绑定
+### 7.3 D4-lite 渠道身份绑定（2026-11-21）
 
-```sql
-channel_identities (
-  id                   INTEGER PRIMARY KEY,
-  channel_type         TEXT NOT NULL,
-  external_subject_id  TEXT NOT NULL,
-  user_id              INTEGER NOT NULL REFERENCES users(id),
-  verified_at          INTEGER NOT NULL,
-  created_at           INTEGER NOT NULL,
-  UNIQUE(channel_type, external_subject_id)
-)
-```
-
-- `/bind <code>`：Dashboard 生成绑定码 → 用户在 IM 发送 → gateway 校验（含 user_id、TTL 5 分钟、单次）→ 写入映射。
-- `channel.identity_mode`：默认 `owner`（不改变现有行为）；开启 `bound` 的渠道才按绑定用户处理。
-- D4 完成后，才允许给非 owner 发认证链接。
-- 群聊策略：不发个人认证链接；只发公开只读链接；写入需私聊或 `/bind`。
+- Dashboard「个人设置 → IM 账号绑定」调用 `POST /api/auth/channel-bindings/code` 生成一次性绑定码（TTL 5 分钟、哈希存储）。
+- 用户在绑定该 Agent 的 IM 私聊发送 `/bind <code>`；网关校验私聊、单次、TTL 后写入 `channel_identities(channel_type, external_subject_id → user_id)`。群聊、Dashboard、CLI 一律拒绝。
+- **只信任 owner 本人**：网关仅在 `绑定 user_id == agent.user_id` 时置 `octop_identity_verified=True`；不切换 acting user、不改会话归属，避免权限回归。绑定到其他用户的身份不产生个人链接。
+- 同一 IM 身份已绑定其他用户时拒绝覆盖，需先在原账号 `DELETE /api/auth/channel-bindings` 解绑；绑定/解绑写审计。
+- HITL 恢复时按 session 的 `channel_type + channel_subject_id` 重新校验；若由其他用户（如管理员）审批，恢复的 `identity_verified` 强制为 False。
+- 表 `channel_identities` / `channel_bind_codes` 在 045 迁移中，本次不新增迁移。
+- 本节描述的是**当前已实现状态**。外部参与者 / guest 的后续身份模型见 [`docs/miniapp-identity-access-plan.md`](./miniapp-identity-access-plan.md)（v3）；P2a 会在 `channel_identities` 上扩展 `account_key + sender_id`，并用 `/link` 握手支持非 owner 绑定。
 
 ### 7.4 D5 渠道矩阵
 
@@ -513,8 +505,9 @@ channel_identities (
 ### 7.5 R3 验收
 
 - A 主机导出 → B 主机导入可用；数据一致；connector 提示重新绑定；无凭据/token 泄露。
-- Feishu 私聊 owner 点卡片按钮 → 认证 WebView 打开完整应用；群聊/非 owner 只读。
-- D4 后绑定用户按自己的 ACL 读写；默认 `identity_mode=owner` 的渠道行为不变。
+- owner 在 Dashboard 生成绑定码 → IM 私聊 `/bind` → 要链接 → 点确认 → 以 owner 身份完整操作该 MiniApp；其它页面返回 403。
+- 群聊、未绑定发送者、绑定到其他用户只拿公开只读链接。
+- 兑换 token 无法访问 `/api/agents` 等非本应用接口，且 2 小时后失效。
 
 ---
 
@@ -537,7 +530,7 @@ channel_identities (
 - 当前 schema 为 **v30**。
 - R1 的 `capabilities_json`、`previous_html*`、发布快照列、`miniapp_boards`：若 030 未发布，折进 030；若已发布，切 031。
 - R2 的 `light_app_services`/`light_app_service_cache`/`light_app_events`/`light_app_schedules`：按当时最新未发布版本折入，或新切一个版本。
-- R3 的 `app_access_codes`/`channel_identities`：同上。
+- R3 的 `app_access_codes`、`channel_identities`、`channel_bind_codes` 均已启用（045）。
 - 始终维护 `.sql` / `.pg.sql` 成对文件；SQLite 需要重建的操作放 `migrate.py` 幂等 helper；同步 `tests/unit/db/test_db_pool.py` 版本断言。
 - 兼容路径：
   - 空 `capabilities_json` → 旧应用全开。
@@ -556,7 +549,7 @@ channel_identities (
 | 发布快照改变“改完即生效”预期 | 用户困惑 | 状态页明确“有未发布修改”；`app_share_link` 自动发布 |
 | 快照与实时行漂移 | 页面字段空白 | `stale_reasons` 提示重新发布；公开 rows 按快照列过滤 |
 | 公开实时被滥用 | 外部额度/SSRF | 仅结构化 adapter + `public_live` + 缓存优先 + 限流 + 熔断 |
-| IM 身份改造 | 会话归属/权限回归 | D3 先 owner-only；D4 按渠道 opt-in；默认 `identity_mode=owner` |
+| IM 身份改造 | 会话归属/权限回归 | D4-lite 只做 owner 本人绑定，不切换 acting user；群聊/未绑定不发个人链接；兑换为 app-scoped 短 TTL token |
 | 迁移包含 PII | 数据泄露 | 导出提示；大小上限；可选密码加密；不入凭据/token |
 | Board 新依赖 | 构建/体积 | 使用 MIT 的 `react-grid-layout`；锁定版本；预提交 build 验证 |
 | 多 worker 限流不全局 | 绕过限制 | 文档注明每实例限流；需要全局时用 DB 租约 |
