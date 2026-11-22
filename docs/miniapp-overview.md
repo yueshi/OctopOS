@@ -12,7 +12,7 @@
 >
 > **AI-native 增强开发计划见 [MiniApp AI-native 增强开发计划](./miniapp-ai-native-plan.md)。**
 >
-> **P1a/P1b/P2 已落地（2026-11-22）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`。预算预扣、任务 HITL、页面上传/查询下推/审核参考应用仍按计划进行。
+> **P1a/P1b/P2 已落地（2026-11-22）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`、页面图片上传（`asset.write` + `octopApp.upload`）。预算预扣、任务 HITL、查询下推、审核参考应用仍按计划进行。
 >
 > **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现并部署。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 
@@ -44,7 +44,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - 42 个 `app_*` Agent 工具（含 3 个 setup plan 工具、3 个只读集成诊断工具、8 个 HITL 集成运维工具、4 个 AI 任务工具）；约 102 个 HTTP 路由 + 1 个公开宿主页（apps / public / boards / game；另有访问申请与认证链接路由）。
 - 每个用户最多 50 个应用；每个应用最多 12 张表、每表 50 列、2 万行、5 MB。
 - 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB。
-- 11 个应用能力位：10 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
+- 12 个应用能力位：11 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
 - 后端 `infra/apps/` 约 1.88 万行；应用 API 路由约 4,700 行；前端 MiniApp 页面/宿主约 1.8 万行（不含桌面 Shell；含桌面 Shell 约 3.1 万行）。
 - 最近验证（2026-11-22）：PR-10 已部署（schema v47）；PR-11/12 定向验证——identity/gateway/agents 1879、apps 505、db 245、集成 103、前端 33 个用例，`make lint` / `make typecheck` 通过。线上服务已迁移到 schema v48。全量 `make all` 在本机跑到 88% 因资源被中止，尚未得到一次完整全绿记录。
 
@@ -659,6 +659,7 @@ MiniApp 有两套正交的权限：
 | `data.read` | `schema` / `tables` / `rows` / `aggregate` | 开 | ✅ |
 | `data.write` | `append` / `update` / `updateMany` / `remove` | 开 | ✅ |
 | `asset.read` | `asset` | 开 | ✅ |
+| `asset.write` | `upload` | 关 | ✅ 页面上传（PNG/JPEG/WebP/GIF，≤5MB） |
 | `external.open` | `openExternal` | 开 | ✅ |
 | `chat.compose` | `composeMessage` | 开 | ✅ |
 | `events.read` | `events` / `ackEvents`（R2.2） | 开 | ✅ 收件箱游标 + ack |

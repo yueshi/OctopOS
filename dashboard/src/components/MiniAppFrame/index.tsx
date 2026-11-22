@@ -274,6 +274,18 @@ export default function MiniAppFrame({
               system: String(params.system ?? ""),
             });
           }
+          if (method === "upload") {
+            const bytes = params.bytes;
+            if (!(bytes instanceof ArrayBuffer)) {
+              throw new Error("upload requires file bytes");
+            }
+            const file = new File(
+              [bytes],
+              String(params.fileName || "upload.png"),
+              { type: String(params.fileType || "") },
+            );
+            return await appsApi.uploadAsset(appId, file);
+          }
           if (method === "runTask") {
             return await appsApi.createTask(appId, {
               task_type: String(params.taskType ?? ""),

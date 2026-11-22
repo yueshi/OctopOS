@@ -20,6 +20,7 @@ from octop.infra.errors import ErrorCode, OctopError
 CAP_DATA_READ = "data.read"
 CAP_DATA_WRITE = "data.write"
 CAP_ASSET_READ = "asset.read"
+CAP_ASSET_WRITE = "asset.write"
 CAP_EXTERNAL_OPEN = "external.open"
 CAP_CHAT_COMPOSE = "chat.compose"
 CAP_EVENTS_READ = "events.read"
@@ -34,6 +35,7 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     CAP_DATA_READ,
     CAP_DATA_WRITE,
     CAP_ASSET_READ,
+    CAP_ASSET_WRITE,
     CAP_EXTERNAL_OPEN,
     CAP_CHAT_COMPOSE,
     CAP_EVENTS_READ,
@@ -159,6 +161,7 @@ __all__ = [
     "CAP_AI_GENERATE",
     "CAP_AI_TASK",
     "CAP_ASSET_READ",
+    "CAP_ASSET_WRITE",
     "CAP_CHAT_COMPOSE",
     "CAP_DATA_READ",
     "CAP_DATA_WRITE",

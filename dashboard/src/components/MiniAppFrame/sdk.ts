@@ -144,6 +144,18 @@ export const APP_SDK = `(function () {
         system: (options || {}).system || ""
       });
     },
+    upload: function (file) {
+      if (!file || typeof file.arrayBuffer !== "function") {
+        return Promise.reject(new Error("upload requires a File"));
+      }
+      return file.arrayBuffer().then(function (buffer) {
+        return call("upload", {
+          fileName: file.name || "upload.png",
+          fileType: file.type || "",
+          bytes: buffer
+        });
+      });
+    },
     runTask: function (options) {
       var opts = options || {};
       return call("runTask", {

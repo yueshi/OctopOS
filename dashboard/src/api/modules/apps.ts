@@ -1093,6 +1093,16 @@ export const appsApi = {
       `/apps/${encodeId(appId)}/assets`,
     ),
 
+  /** Upload one page asset. `page=true` enforces the asset.write capability. */
+  uploadAsset: (appId: string, file: File, page = true) => {
+    const form = new FormData();
+    form.append("file", file);
+    return requestUpload<{ name: string; size: number }>(
+      `/apps/${encodeId(appId)}/assets${page ? "?page=true" : ""}`,
+      form,
+    );
+  },
+
   files: (appId: string) =>
     request<{ files: AppFile[] }>(`/apps/${encodeId(appId)}/files`),
 

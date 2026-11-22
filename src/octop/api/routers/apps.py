@@ -3149,17 +3149,23 @@ async def list_app_assets(
     summary="Upload an app asset",
     description=(
         "Stores a PNG, JPEG, WebP or GIF image (at most 5 MB) next to the app. "
-        "The app page cannot load remote images, so covers and icons are "
-        "stored here. Requires edit_data."
+        "Requires edit_data. Pass ``page=true`` for page-originated uploads; "
+        "that also requires the ``asset.write`` capability."
     ),
 )
 async def upload_app_asset(
     app_id: str,
     file: UploadFile = File(...),  # noqa: B008
+    page: bool = Query(
+        default=False,
+        description="Enforce the page capability asset.write for page uploads.",
+    ),
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AssetOut:
     service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_ASSETS)
+    if page:
+        service.require_capability(row, app_capabilities.CAP_ASSET_WRITE)
     data = await read_upload_capped(
         file,
         max_bytes=MAX_ASSET_BYTES,

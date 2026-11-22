@@ -30,6 +30,12 @@ describe("bridge request checks", () => {
     expect(checkMethodAllowed("serviceDetailed", [CAP.DATA_READ])).toBe(false);
   });
 
+  it("gates page uploads behind asset.write", () => {
+    expect(checkMethodAllowed("upload", [CAP.ASSET_WRITE])).toBe(true);
+    expect(checkMethodAllowed("upload", [CAP.ASSET_READ])).toBe(false);
+    expect(checkMethodAllowed("upload", [CAP.DATA_WRITE])).toBe(false);
+  });
+
   it("gates AI task methods behind ai.agent_task", () => {
     for (const method of ["runTask", "getTask", "cancelTask"]) {
       expect(checkMethodAllowed(method, [CAP.AI_TASK])).toBe(true);

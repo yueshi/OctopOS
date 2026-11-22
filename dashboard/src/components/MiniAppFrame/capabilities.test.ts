@@ -20,6 +20,9 @@ describe("MiniApp capabilities", () => {
     expect(isMethodAllowed("rows", [CAP.DATA_READ])).toBe(true);
     expect(isMethodAllowed("append", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("generate", [CAP.AI_GENERATE])).toBe(true);
+    expect(isMethodAllowed("upload", [CAP.ASSET_WRITE])).toBe(true);
+    expect(isMethodAllowed("upload", [CAP.ASSET_READ])).toBe(false);
+    expect(isMethodAllowed("upload", [CAP.DATA_WRITE])).toBe(false);
     expect(isMethodAllowed("runTask", [CAP.AI_TASK])).toBe(true);
     expect(isMethodAllowed("getTask", [CAP.AI_TASK])).toBe(true);
     expect(isMethodAllowed("cancelTask", [CAP.AI_TASK])).toBe(true);

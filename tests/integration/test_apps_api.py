@@ -1202,6 +1202,36 @@ async def test_asset_upload_and_fetch(
     assert r.status_code == 403
 
 
+async def test_page_asset_upload_requires_capability(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    png = b"\x89PNG\r\n\x1a\n" + b"1" * 16
+
+    r = await client.post(
+        f"/api/apps/{app_id}/assets?page=true",
+        headers=alice_auth,
+        files={"file": ("page.png", png, "image/png")},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_CAPABILITY_DENIED"
+
+    r = await client.put(
+        f"/api/apps/{app_id}/capabilities",
+        headers=alice_auth,
+        json={"capabilities": ["data.read", "data.write", "asset.write"]},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        f"/api/apps/{app_id}/assets?page=true",
+        headers=alice_auth,
+        files={"file": ("page.png", png, "image/png")},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "page.png"
+
+
 async def test_asset_upload_rejects_non_images(
     env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
 ) -> None:

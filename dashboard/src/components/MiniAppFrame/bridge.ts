@@ -41,6 +41,9 @@ export interface BridgeParams {
   taskId?: string;
   input?: Record<string, unknown>;
   idempotencyKey?: string;
+  bytes?: ArrayBuffer;
+  fileName?: string;
+  fileType?: string;
 }
 
 /** One row of a batch update sent by the page. */
@@ -110,6 +113,7 @@ export const KNOWN_METHODS: ReadonlySet<string> = new Set([
   "updateMany",
   "remove",
   "generate",
+  "upload",
   "runTask",
   "getTask",
   "cancelTask",

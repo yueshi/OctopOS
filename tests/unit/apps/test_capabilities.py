@@ -33,6 +33,7 @@ def test_legacy_set_is_frozen_at_the_r1_capabilities() -> None:
     assert caps.CAP_EXTERNAL_FETCH not in caps.LEGACY_CAPABILITIES
     assert caps.CAP_EVENTS_EMIT not in caps.LEGACY_CAPABILITIES
     assert caps.CAP_SCHEDULES_MANAGE not in caps.LEGACY_CAPABILITIES
+    assert caps.CAP_ASSET_WRITE not in caps.LEGACY_CAPABILITIES
     assert frozenset(caps.ALL_CAPABILITIES) > caps.LEGACY_CAPABILITIES
 
 
@@ -43,6 +44,7 @@ def test_new_apps_get_the_safe_default() -> None:
     assert caps.CAP_GAME_LAUNCH not in caps.NEW_APP_CAPABILITIES
     assert caps.CAP_EXTERNAL_FETCH not in caps.NEW_APP_CAPABILITIES
     assert caps.CAP_EVENTS_EMIT not in caps.NEW_APP_CAPABILITIES
+    assert caps.CAP_ASSET_WRITE not in caps.NEW_APP_CAPABILITIES
 
 
 def test_agent_settable_capabilities_reject_high_risk() -> None:
@@ -56,6 +58,7 @@ def test_agent_settable_capabilities_reject_high_risk() -> None:
         caps.CAP_EXTERNAL_FETCH,
         caps.CAP_EVENTS_EMIT,
         caps.CAP_SCHEDULES_MANAGE,
+        caps.CAP_ASSET_WRITE,
     ):
         with pytest.raises(OctopError) as exc:
             caps.validate_agent_settable([capability])
