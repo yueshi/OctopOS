@@ -24,7 +24,7 @@ from octop.api.deps import current_user, get_server
 from octop.api.routers.chat.sse import format_sse
 from octop.config import DEFAULT_MAX_UPLOAD_MB, upload_mb_to_bytes
 from octop.infra.apps import capabilities as app_capabilities
-from octop.infra.apps.access import Action, Decision, can_view_pii
+from octop.infra.apps.access import ROLE_OWNER, Action, Decision, can_view_pii
 from octop.infra.apps.assistant import AppAssistant
 from octop.infra.apps.dataset import BuiltinDatasetService
 from octop.infra.apps.game_sessions import create_game_token
@@ -895,6 +895,11 @@ def _parse_row_filters(raw: list[str]) -> dict[str, str]:
 
 
 def _summary(service: AppService, row: AppRecord, permission: str) -> AppSummary:
+    # The access kernel distinguishes ``owner`` from ``edit_structure`` so it
+    # can gate owner-only actions; the public contract exposes owner/admin as
+    # ``edit_structure`` and the dashboard keys its management UI off that.
+    if permission == ROLE_OWNER:
+        permission = "edit_structure"
     view = service.view(row, permission)
     return AppSummary(**asdict(view), has_html=view.has_html)
 
