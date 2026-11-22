@@ -78,6 +78,15 @@ describe("MiniAppFrame write bridge", () => {
     vi.clearAllMocks();
   });
 
+  it("refetches the HTML when reloadToken changes", async () => {
+    const view = render(<MiniAppFrame appId="app_1" reloadToken={0} />);
+    await waitFor(() => expect(appsApi.getHtml).toHaveBeenCalledTimes(1));
+
+    view.rerender(<MiniAppFrame appId="app_1" reloadToken={1} />);
+
+    await waitFor(() => expect(appsApi.getHtml).toHaveBeenCalledTimes(2));
+  });
+
   it("updates one row", async () => {
     const { frame } = await mountFrame(["data.read", "data.write"]);
 

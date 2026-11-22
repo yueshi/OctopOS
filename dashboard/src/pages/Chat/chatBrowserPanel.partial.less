@@ -352,6 +352,53 @@
   border-bottom: 1px solid var(--fn-color-brand-border);
 }
 
+.sessionAppsInfoBtn,
+.sessionAppsRefreshBtn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--fn-color-brand-border);
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    color var(--fn-transition-fast, 0.15s ease),
+    border-color var(--fn-transition-fast, 0.15s ease),
+    background var(--fn-transition-fast, 0.15s ease);
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+/* Brand-tinted target: the info entry should stand out from the flat bar. */
+.sessionAppsInfoBtn {
+  color: var(--fn-color-brand);
+  background: var(--fn-color-brand-bg);
+
+  &:hover,
+  &:focus-visible {
+    color: #fff;
+    border-color: var(--fn-color-brand);
+    background: var(--fn-color-brand);
+  }
+}
+
+.sessionAppsRefreshBtn {
+  color: var(--fn-text-secondary);
+  background: var(--fn-bg-elevated);
+
+  &:hover,
+  &:focus-visible {
+    color: var(--fn-color-brand);
+    border-color: var(--fn-color-brand);
+    background: var(--fn-color-brand-bg);
+  }
+}
+
 .sessionAppsFrame {
   position: relative;
   flex: 1;

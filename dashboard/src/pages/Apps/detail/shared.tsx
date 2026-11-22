@@ -1,24 +1,9 @@
 import type { ReactNode } from "react";
 import { Typography } from "antd";
 
-import type { AppDetail } from "../../../api/modules/apps";
+export { permissionLabel } from "../../../components/MiniAppFrame/permissionLabel";
 
 const { Text } = Typography;
-
-export function permissionLabel(
-  permission: AppDetail["permission"],
-  t: (key: string) => string,
-  isOwner?: boolean,
-): string {
-  if (permission === "edit_structure") {
-    return isOwner === false
-      ? t("apps.permissionAdmin")
-      : t("apps.editStructure");
-  }
-  if (permission === "edit_data") return t("apps.editData");
-  if (permission === "participate") return t("apps.memberParticipate");
-  return t("apps.viewOnly");
-}
 
 /** One titled block in the details drawer; keeps section rhythm consistent. */
 export function InfoSection({

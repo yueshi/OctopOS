@@ -1,16 +1,27 @@
 import { useCallback, useState } from "react";
 import { Button, Empty, Typography } from "antd";
-import { AppWindow, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  AppWindow,
+  ChevronLeft,
+  ChevronRight,
+  Info,
+  RefreshCw,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { appPreviewPath } from "../../../api/modules/apps";
+import { appPreviewPath, type AppDetail } from "../../../api/modules/apps";
 import MiniAppFrame from "../../../components/MiniAppFrame";
 import { usePreviewImage } from "../../../hooks/usePreviewImage";
 import type { SessionApp } from "../utils/sessionApps";
+import SessionAppInfoDrawer from "./SessionAppInfoDrawer";
 import styles from "../index.module.less";
 
 const { Text } = Typography;
+
+type SessionAppPatch = Partial<
+  Pick<SessionApp, "name" | "description" | "capabilities">
+>;
 
 function SessionAppThumb({ app }: { app: SessionApp }) {
   const url = usePreviewImage(
@@ -66,7 +77,15 @@ export default function ChatDockSessionApps({
   const navigate = useNavigate();
   const location = useLocation();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = apps.find((app) => app.app_id === selectedId) ?? null;
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [patches, setPatches] = useState<Record<string, SessionAppPatch>>({});
+  const withPatch = (app: SessionApp): SessionApp => {
+    const patch = patches[app.app_id];
+    return patch ? { ...app, ...patch } : app;
+  };
+  const selectedBase = apps.find((app) => app.app_id === selectedId) ?? null;
+  const selected = selectedBase ? withPatch(selectedBase) : null;
 
   const prefillViaChat = useCallback(
     (text: string) => {
@@ -74,6 +93,17 @@ export default function ChatDockSessionApps({
     },
     [location.pathname, navigate],
   );
+
+  const handleAppUpdated = useCallback((detail: AppDetail) => {
+    setPatches((prev) => ({
+      ...prev,
+      [detail.app_id]: {
+        name: detail.name,
+        description: detail.description,
+        capabilities: detail.capabilities,
+      },
+    }));
+  }, []);
 
   if (apps.length === 0) {
     return (
@@ -94,6 +124,7 @@ export default function ChatDockSessionApps({
   }
 
   if (selected) {
+    const infoLabel = t("apps.info", "Info");
     return (
       <div className={styles.sessionAppsOpen}>
         <div className={styles.sessionAppsBar}>
@@ -101,13 +132,35 @@ export default function ChatDockSessionApps({
             type="text"
             size="small"
             icon={<ChevronLeft size={16} />}
-            onClick={() => setSelectedId(null)}
+            onClick={() => {
+              setInfoOpen(false);
+              setSelectedId(null);
+            }}
           >
             {t("chat.sessionAppsBack", "Back to list")}
           </Button>
           <Text strong ellipsis={{ tooltip: selected.name }}>
             {selected.name}
           </Text>
+          <span style={{ flex: 1 }} />
+          <button
+            type="button"
+            className={styles.sessionAppsRefreshBtn}
+            aria-label={t("chat.sessionAppsReload", "Reload MiniApp")}
+            title={t("chat.sessionAppsReload", "Reload MiniApp")}
+            onClick={() => setReloadToken((value) => value + 1)}
+          >
+            <RefreshCw size={15} strokeWidth={2.2} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className={styles.sessionAppsInfoBtn}
+            aria-label={infoLabel}
+            title={infoLabel}
+            onClick={() => setInfoOpen(true)}
+          >
+            <Info size={16} strokeWidth={2.2} aria-hidden />
+          </button>
         </div>
         <div className={styles.sessionAppsFrame}>
           <MiniAppFrame
@@ -116,47 +169,57 @@ export default function ChatDockSessionApps({
             capabilities={selected.capabilities}
             active={active}
             foreground={active}
+            reloadToken={reloadToken}
             onComposeMessage={onComposeMessage ?? prefillViaChat}
             onOpenExternal={onOpenExternal}
             fill
           />
         </div>
+        <SessionAppInfoDrawer
+          open={infoOpen}
+          appId={selected.app_id}
+          onClose={() => setInfoOpen(false)}
+          onUpdated={handleAppUpdated}
+        />
       </div>
     );
   }
 
   return (
     <div className={styles.sessionAppsList}>
-      {apps.map((app) => (
-        <button
-          key={app.app_id}
-          type="button"
-          className={styles.sessionAppsRow}
-          onClick={() => {
-            onSelectApp?.(app);
-            setSelectedId(app.app_id);
-          }}
-        >
-          <SessionAppThumb app={app} />
-          <span className={styles.sessionAppsRowMain}>
-            <Text strong ellipsis={{ tooltip: app.name }}>
-              {app.name}
-            </Text>
-            <Text type="secondary" className={styles.sessionAppsRowMeta}>
-              {typeof app.row_count === "number"
-                ? t("apps.rows", "{{count}} rows", {
-                    count: app.row_count,
-                  })
-                : app.description || ""}
-            </Text>
-          </span>
-          <ChevronRight
-            size={16}
-            className={styles.sessionAppsRowChevron}
-            aria-hidden
-          />
-        </button>
-      ))}
+      {apps.map((app) => {
+        const shown = withPatch(app);
+        return (
+          <button
+            key={app.app_id}
+            type="button"
+            className={styles.sessionAppsRow}
+            onClick={() => {
+              onSelectApp?.(app);
+              setSelectedId(app.app_id);
+            }}
+          >
+            <SessionAppThumb app={shown} />
+            <span className={styles.sessionAppsRowMain}>
+              <Text strong ellipsis={{ tooltip: shown.name }}>
+                {shown.name}
+              </Text>
+              <Text type="secondary" className={styles.sessionAppsRowMeta}>
+                {typeof shown.row_count === "number"
+                  ? t("apps.rows", "{{count}} rows", {
+                      count: shown.row_count,
+                    })
+                  : shown.description || ""}
+              </Text>
+            </span>
+            <ChevronRight
+              size={16}
+              className={styles.sessionAppsRowChevron}
+              aria-hidden
+            />
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -2,12 +2,52 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AppDetail } from "../../../api/modules/apps";
 import ChatDockSessionApps from "./ChatDockSessionApps";
 
 vi.mock("../../../components/MiniAppFrame", () => ({
-  default: ({ appId }: { appId: string }) => (
-    <div data-testid="mini-app-frame" data-app-id={appId} />
+  default: ({
+    appId,
+    reloadToken = 0,
+  }: {
+    appId: string;
+    reloadToken?: number;
+  }) => (
+    <div
+      data-testid="mini-app-frame"
+      data-app-id={appId}
+      data-reload-token={reloadToken}
+    />
   ),
+}));
+
+vi.mock("./SessionAppInfoDrawer", () => ({
+  default: ({
+    open,
+    appId,
+    onUpdated,
+  }: {
+    open: boolean;
+    appId: string | null;
+    onUpdated?: (detail: AppDetail) => void;
+  }) =>
+    open ? (
+      <div data-testid="app-info-drawer" data-app-id={appId}>
+        <button
+          type="button"
+          onClick={() =>
+            onUpdated?.({
+              app_id: appId,
+              name: "新名字",
+              description: "新描述",
+              capabilities: ["data.read"],
+            } as unknown as AppDetail)
+          }
+        >
+          mock-save
+        </button>
+      </div>
+    ) : null,
 }));
 
 vi.mock("../../../hooks/usePreviewImage", () => ({
@@ -80,5 +120,41 @@ describe("ChatDockSessionApps", () => {
       "data-app-id",
       "app_b",
     );
+  });
+
+  it("opens the info drawer for the running MiniApp", () => {
+    renderDock(apps);
+    fireEvent.click(screen.getByText("客户台账"));
+
+    expect(screen.queryByTestId("app-info-drawer")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+
+    expect(screen.getByTestId("app-info-drawer")).toHaveAttribute(
+      "data-app-id",
+      "app_a",
+    );
+  });
+
+  it("reflects name changes made in the info drawer", () => {
+    renderDock(apps);
+    fireEvent.click(screen.getByText("客户台账"));
+    fireEvent.click(screen.getByRole("button", { name: "Info" }));
+    fireEvent.click(screen.getByRole("button", { name: "mock-save" }));
+
+    expect(screen.getAllByText("新名字").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to list" }));
+    expect(screen.getByText("新名字")).toBeInTheDocument();
+  });
+
+  it("reloads the running MiniApp on demand", () => {
+    renderDock(apps);
+    fireEvent.click(screen.getByText("客户台账"));
+
+    const frame = screen.getByTestId("mini-app-frame");
+    expect(frame).toHaveAttribute("data-reload-token", "0");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reload MiniApp" }));
+    expect(frame).toHaveAttribute("data-reload-token", "1");
   });
 });
