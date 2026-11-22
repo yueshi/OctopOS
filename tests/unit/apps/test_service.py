@@ -2820,6 +2820,50 @@ async def test_query_rows_filters_and_sorts(world: World) -> None:
     assert [item["title"] for item in rows] == ["C"]
 
 
+async def test_query_rows_pushes_filter_sort_paging_to_sql(
+    world: World,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    await world.service.append_row(row, {"title": "Alpha", "qty": "", "status": "new"})
+    await world.service.append_row(row, {"title": "alpha", "qty": "9", "status": "new"})
+    await world.service.append_row(row, {"title": "Beta", "qty": "10", "status": "doing"})
+
+    def no_full_read(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("query_rows_detailed must not load the whole table")
+
+    monkeypatch.setattr(world.repo, "list_all_data_rows", no_full_read)
+
+    _schema, rows, meta, total = await world.service.query_rows_detailed(
+        row,
+        filters={"title": "ALPHA"},
+        sort="-qty",
+        limit=1,
+        offset=0,
+    )
+    assert total == 2
+    assert [item["title"] for item in rows] == ["Alpha"]
+    assert len(meta) == 1
+
+    _schema, rows, _meta, total = await world.service.query_rows_detailed(
+        row,
+        filters={"title": "ALPHA"},
+        sort="-qty",
+        limit=1,
+        offset=1,
+    )
+    assert total == 2
+    assert [item["title"] for item in rows] == ["alpha"]
+
+    # Empty numeric cells sort after numbers ascending and before them
+    # descending, matching the previous Python key.
+    _schema, rows, _meta, _total = await world.service.query_rows_detailed(row, sort="qty")
+    assert [item["title"] for item in rows] == ["alpha", "Beta", "Alpha"]
+    _schema, rows, _meta, _total = await world.service.query_rows_detailed(row, sort="-qty")
+    assert [item["title"] for item in rows] == ["Alpha", "Beta", "alpha"]
+
+
 async def test_query_rows_rejects_unknown_filter_and_sort_columns(world: World) -> None:
     app_id = await _create(world)
     row = world.service.get(app_id)

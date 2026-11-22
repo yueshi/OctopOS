@@ -478,8 +478,9 @@ cron、主动专家、团队 autopilot、事件触发的 `app.agent_turn`、后�
 | **P2a 任务 UI** | ✅ | 应用详情新增「AI 任务」页签：列表、状态、结果、取消、活动任务 3 秒轮询；i18n 双语 |
 | **P2b-1 创建入口** | ✅ | 4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）；`GET /apps/{id}/task-types`；数据页行操作「AI 任务」+ `RunTaskModal`（选类型/写列），创建后跳到任务页签 |
 | **P2b-2a 页面上传** | ✅ | `asset.write` 能力位；`octopApp.upload(file)` → 宿主桥 → `POST /assets?page=true`；PNG/JPEG/WebP/GIF，≤5MB；服务端魔数校验 + ACL + 能力位 |
-| **P1b / P2 余量** | 未开始 | `usage_budgets` / `usage_reservations` 预扣；任务 HITL；查询下推（P0-4）、审核参考应用、通知；per-app 模型/profile 版本 |
+| **P2b-2b 查询下推** | ✅ | SQLite `json_extract` / PG `values_json::jsonb->>` 过滤、排序、计数与分页；2 万行实测 ~47ms（目标 ≤50ms）；空数值排序、大小写不敏感、稳定 id tie-breaker；聚合仍为 Python 分组 |
+| **P1b / P2 余量** | 未开始 | `usage_budgets` / `usage_reservations` 预扣；任务 HITL；审核参考应用、通知；per-app 模型/profile 版本 |
 
-**验证（P0 + P1a + P1b + P2）**：`make lint`、`make typecheck` 通过；`tests/unit/apps` 525 passed；`tests/unit/db` 245 passed；`tests/unit/agents/test_agent_manager.py` 155 passed + 1 skipped；`tests/integration/test_apps_api.py` 80 passed；前端任务相关 6 passed、`MiniAppFrame` 62 passed；`tsc -b`、ESLint 通过。完整 `make all` 仍待 CI/停服窗口补跑。
+**验证（P0 + P1a + P1b + P2）**：`make lint`、`make typecheck` 通过；`tests/unit/apps` 526 passed；`tests/unit/db` 245 passed；`tests/unit/agents/test_agent_manager.py` 155 passed + 1 skipped；`tests/integration/test_apps_api.py` 80 passed；前端任务相关 6 passed、`MiniAppFrame` 62 passed；`tsc -b`、ESLint 通过。完整 `make all` 仍待 CI/停服窗口补跑。
 
 **当前限制**：Tier 1 单次模型调用；Tier 2 是应用内只读工具循环，不是完整 owner expert；任务按单车道串行执行，超时（Tier 1 60s / Tier 2 120s）短于租约（300s），尚无心跳；每日 token 上限是 check-then-run，不是预扣；任务结果写回使用行 CAS，冲突即失败，不自动重试。

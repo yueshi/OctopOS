@@ -8,7 +8,7 @@ and permission checks do not need to touch every agent workspace.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -607,6 +607,65 @@ class LightAppRepo:
                 tuple(params),
             ).fetchone()
         return map_rows(rows, LightAppDataRow), int(total["c"]) if total else 0
+
+    def _row_text_expr(self, column: str) -> str:
+        """SQL expression for one stored cell (dialect-specific JSON access)."""
+        if self._db.dialect == "postgresql":
+            return f"(values_json::jsonb ->> '{column}')"
+        return f"json_extract(values_json, '$.\"{column}\"')"
+
+    def query_data_rows(
+        self,
+        app_id: str,
+        table_key: str,
+        *,
+        filters: Mapping[str, str] | None = None,
+        sort_column: str | None = None,
+        sort_numeric: bool = False,
+        descending: bool = False,
+        limit: int,
+        offset: int,
+        created_by: int | None = None,
+    ) -> tuple[list[LightAppDataRow], int]:
+        """Filter/sort/page rows in SQL instead of loading the whole table."""
+        where = "app_id = ? AND table_key = ?"
+        params: list[object] = [app_id, table_key]
+        if created_by is not None:
+            where += " AND COALESCE(row_owner_user_id, created_by) = ?"
+            params.append(created_by)
+        for column, value in (filters or {}).items():
+            expr = self._row_text_expr(column)
+            where += f" AND LOWER(COALESCE({expr}, '')) = ?"
+            params.append(str(value).strip().lower())
+
+        direction = "DESC" if descending else "ASC"
+        order = "id ASC"
+        if sort_column:
+            expr = self._row_text_expr(sort_column)
+            if sort_numeric:
+                blank = f"CASE WHEN COALESCE({expr}, '') = '' THEN 1 ELSE 0 END"
+                number = f"CAST(REPLACE(COALESCE({expr}, ''), ',', '') AS REAL)"
+                order = f"{blank} {direction}, {number} {direction}, id {direction}"
+            else:
+                order = f"LOWER(COALESCE({expr}, '')) {direction}, id {direction}"
+
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                f"SELECT *, COUNT(*) OVER() AS __row_total FROM light_app_rows "
+                f"WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+                (*params, int(limit), int(offset)),
+            ).fetchall()
+            if rows:
+                total = int(rows[0]["__row_total"])
+            else:
+                # An offset past the end returns no page; COUNT(*) is the only
+                # way to tell the caller how many rows the filter matched.
+                count = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM light_app_rows WHERE {where}",
+                    tuple(params),
+                ).fetchone()
+                total = int(count["c"]) if count else 0
+        return map_rows(rows, LightAppDataRow), total
 
     def list_all_data_rows(self, app_id: str, table_key: str) -> list[LightAppDataRow]:
         with self._db.connect() as conn:

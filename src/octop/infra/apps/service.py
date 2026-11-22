@@ -3487,13 +3487,26 @@ class AppService:
                     )
             owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
             if current.storage_version >= 2:
-                data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
-                if owner_filter is not None:
-                    data_rows = [
-                        item for item in data_rows if app_access.row_owner_id(item) == owner_filter
-                    ]
-                rows = _normalize_rows(schema, [item.values for item in data_rows])
-                meta = [
+                sort_numeric = False
+                if sort_spec is not None:
+                    sort_column = schema.column(sort_spec[0])
+                    sort_numeric = sort_column is not None and sort_column.type in {
+                        "number",
+                        "integer",
+                    }
+                data_rows, total = self._app_repo.query_data_rows(
+                    current.app_id,
+                    key,
+                    filters=clean_filters,
+                    sort_column=sort_spec[0] if sort_spec is not None else None,
+                    sort_numeric=sort_numeric,
+                    descending=sort_spec[1] if sort_spec is not None else False,
+                    limit=safe_limit,
+                    offset=safe_offset,
+                    created_by=owner_filter,
+                )
+                page_rows = _normalize_rows(schema, [item.values for item in data_rows])
+                page_meta = [
                     {
                         "row_id": item.row_id,
                         "version": item.version,
@@ -3501,7 +3514,9 @@ class AppService:
                     }
                     for item in data_rows
                 ]
-                owners: list[int | None] = [app_access.row_owner_id(item) for item in data_rows]
+                page_owners: list[int | None] = [
+                    app_access.row_owner_id(item) for item in data_rows
+                ]
             else:
                 if owner_filter is not None:
                     raise OctopError(
@@ -3510,50 +3525,58 @@ class AppService:
                     )
                 rows = await self._read_rows_file(ws, current.app_id, schema, key)
                 meta = [{"row_id": "", "version": 1, "source": "manual"} for _ in rows]
-                owners = [None] * len(rows)
-        if clean_filters:
-            wanted = {col: val.strip().lower() for col, val in clean_filters.items()}
-            keep = [
-                index
-                for index, item in enumerate(rows)
-                if all(item.get(col, "").strip().lower() == val for col, val in wanted.items())
-            ]
-            rows = [rows[index] for index in keep]
-            meta = [meta[index] for index in keep]
-            owners = [owners[index] for index in keep]
-        if sort_spec is not None:
-            sort_name, descending = sort_spec
-            sort_column = schema.column(sort_name)
-            numeric = sort_column is not None and sort_column.type in {"number", "integer"}
-            order = sorted(
-                range(len(rows)),
-                key=lambda index: _row_sort_key(rows[index].get(sort_name, ""), numeric),
-                reverse=descending,
-            )
-            rows = [rows[index] for index in order]
-            meta = [meta[index] for index in order]
-            owners = [owners[index] for index in order]
-        end = safe_offset + safe_limit
+                owners: list[int | None] = [None] * len(rows)
+                if clean_filters:
+                    wanted = {col: val.strip().lower() for col, val in clean_filters.items()}
+                    keep = [
+                        index
+                        for index, item in enumerate(rows)
+                        if all(
+                            item.get(col, "").strip().lower() == val for col, val in wanted.items()
+                        )
+                    ]
+                    rows = [rows[index] for index in keep]
+                    meta = [meta[index] for index in keep]
+                    owners = [owners[index] for index in keep]
+                if sort_spec is not None:
+                    sort_name, descending = sort_spec
+                    sort_column = schema.column(sort_name)
+                    numeric = sort_column is not None and sort_column.type in {
+                        "number",
+                        "integer",
+                    }
+                    order = sorted(
+                        range(len(rows)),
+                        key=lambda index: _row_sort_key(rows[index].get(sort_name, ""), numeric),
+                        reverse=descending,
+                    )
+                    rows = [rows[index] for index in order]
+                    meta = [meta[index] for index in order]
+                    owners = [owners[index] for index in order]
+                total = len(rows)
+                end = safe_offset + safe_limit
+                page_rows = rows[safe_offset:end]
+                page_meta = meta[safe_offset:end]
+                page_owners = owners[safe_offset:end]
         if pii_policy is not None:
             schema, page, masked = _apply_pii_policy(
                 schema,
-                rows[safe_offset:end],
-                owners[safe_offset:end],
+                page_rows,
+                page_owners,
                 pii_policy=pii_policy,
                 viewer_user_id=viewer_user_id,
             )
         else:
             schema, page = _apply_pii(
                 schema,
-                rows[safe_offset:end],
+                page_rows,
                 redact_pii=redact_pii,
             )
             masked = [redact_pii] * len(page)
         page_meta = [
-            {**item, "pii_masked": flag}
-            for item, flag in zip(meta[safe_offset:end], masked, strict=True)
+            {**item, "pii_masked": flag} for item, flag in zip(page_meta, masked, strict=True)
         ]
-        return schema, page, page_meta, len(rows)
+        return schema, page, page_meta, total
 
     async def append_row(
         self,
