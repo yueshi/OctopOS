@@ -23,6 +23,7 @@ from octop.infra.db.repos.apps import LightAppRepo
 from octop.infra.db.repos.audit import AuditRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo
+from octop.infra.db.services import RepoBundle
 from octop.infra.utils.ulid import new_ulid
 
 COLUMNS: list[dict[str, object]] = [
@@ -49,6 +50,7 @@ class World:
     bob_id: int
     admin_id: int
     audit_repo: AuditRepo
+    repos: RepoBundle
 
 
 class _Workspaces:
@@ -91,6 +93,7 @@ def world(tmp_path: Path) -> World:
         bob_id=bob_id,
         admin_id=admin_id,
         audit_repo=audit_repo,
+        repos=RepoBundle.from_pool(db),
     )
 
 
@@ -977,6 +980,69 @@ async def test_app_share_link_bound_viewer_gets_personal_link(world: World) -> N
         out = json.loads(await share.ainvoke({"app_id": app_id}))
 
     assert "https://octop.test/login/app-access?code=" in out[0]["text"]
+
+
+async def test_app_share_link_bound_member_gets_own_personal_link(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test", repos=world.repos)
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+    world.service.set_shares(world.service.get(app_id), [("bob", "view")])
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+        octop_sender_user_id=str(world.bob_id),
+        octop_sender_id="wx-bob",
+        octop_account_key="bot-1",
+        octop_chat_type="dm",
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id}))
+
+    text = out[0]["text"]
+    assert "https://octop.test/login/app-access?code=" in text
+    code = text.split("?code=", 1)[1].strip()
+    preview = world.service.preview_access_link(code)
+    assert preview is not None
+    assert preview.user_id == world.bob_id
+    assert preview.sender_id == "wx-bob"
+    assert preview.account_key == "bot-1"
+
+
+async def test_app_share_link_unbound_dm_gets_join_code(world: World) -> None:
+    tools = build_app_tools(world.service, public_base_url="https://octop.test", repos=world.repos)
+    create = _tool_by_name(tools, "app_create")
+    share = _tool_by_name(tools, "app_share_link")
+
+    with _configurable(agent_id=world.agent_id, user=str(world.alice_id)):
+        app_id = json.loads(await create.ainvoke({"name": "Tracker", "columns": COLUMNS}))["app_id"]
+    world.agent_repo.set_external_sharing_policy(
+        world.agent_id,
+        json.dumps(
+            {
+                "allow_external_participants": True,
+                "require_host_approval": False,
+                "max_guests_per_app": 50,
+            }
+        ),
+    )
+
+    with _configurable(
+        agent_id=world.agent_id,
+        user=str(world.alice_id),
+        octop_source="weixin/ch1",
+        session_key=_session_key(world),
+        octop_chat_type="dm",
+    ):
+        out = json.loads(await share.ainvoke({"app_id": app_id}))
+
+    text = out[0]["text"]
+    assert "https://octop.test/join?code=" in text
+    assert world.repos.app_join_code_repo.list_for_app(app_id)
 
 
 async def test_app_share_link_rotate_keeps_public_link(world: World) -> None:

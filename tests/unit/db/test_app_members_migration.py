@@ -64,7 +64,7 @@ def test_v47_adds_collaborator_fields_and_tables(
     monkeypatch.setattr(migrate, "_discover", real_discover)
     migrate.run_migrations(db)
 
-    assert _version(db) == 47
+    assert _version(db) == 48
     assert {"status", "joined_via", "invited_by"} <= _columns(db, "light_app_collaborators")
     assert "external_sharing_policy" in _columns(db, "agents")
     assert {"app_member_invites", "app_join_codes", "app_sessions"} <= _table_names(db)
@@ -113,7 +113,7 @@ def test_v47_replay_is_idempotent(tmp_path: Path) -> None:
     migrate.run_migrations(db)
     migrate.run_migrations(db)
 
-    assert _version(db) == 47
+    assert _version(db) == 48
     assert {"status", "joined_via", "invited_by"} <= _columns(db, "light_app_collaborators")
     assert "external_sharing_policy" in _columns(db, "agents")
     assert {"app_member_invites", "app_join_codes", "app_sessions"} <= _table_names(db)
@@ -134,7 +134,7 @@ def test_v47_repairs_schema_when_version_was_recorded(tmp_path: Path) -> None:
 
     migrate.run_migrations(db)
 
-    assert _version(db) == 47
+    assert _version(db) == 48
     assert {"status", "joined_via", "invited_by"} <= _columns(db, "light_app_collaborators")
     assert "external_sharing_policy" in _columns(db, "agents")
     assert {"app_member_invites", "app_join_codes", "app_sessions"} <= _table_names(db)

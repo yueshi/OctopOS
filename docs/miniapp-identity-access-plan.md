@@ -1,11 +1,13 @@
 # MiniApp 用户管理与接入方案（v3）
 
-> Status: design proposal / revised draft  
-> Date: 2026-11-21  
+> Status: design implemented (P0/P1/P2a)  
+> Date: 2026-11-21（updated 2026-11-22）  
 > Branch: `feature/miniapp-capabilities`  
 > Scope: MiniApp 用户管理、Octop 用户接入、IM 渠道接入  
 > Companion deck: [`docs/slides/miniapp-identity-access-plan.html`](./slides/miniapp-identity-access-plan.html)  
 > Implementation plan: [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)
+>
+> **实现状态（2026-11-22）**：P0 / P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`），包括 Principal / token scope、`authorize()`、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。P2a（`account_key` / `sender_id`、`ToolScope`、app 数据工具收口、`/link`）由 PR-11/12 实现（schema v48），待合并 / 部署；P2b / P3 不在当前范围。
 
 ---
 
@@ -78,7 +80,7 @@ v2 的方向（主体抽象、成员 + 表可见性 + 行所有权、统一授�
 
 根因：`users.id` 同时承担了“平台账号”和“应用用户”，缺少 **应用成员 + 表级可见性 + 主体抽象**。
 
-### 1.2 现状代码事实（2026-11-21 工作树）
+### 1.2 设计时代码事实（2026-11-21 工作树；P0/P1 已实施，见文首状态）
 
 | 层 | 代码事实 | 对方案的含义 |
 |---|---|---|
@@ -740,9 +742,11 @@ DM 需求 → 解析 sender（account_key + sender_id）
 
 ## 12. 实施路线图
 
+> 状态（2026-11-22）：P0 / P1 已完成并部署；P2a 已实现（v48），待合并 / 部署；P2b / P3 暂缓。
+>
 > 任务级拆分、文件清单、DDL、API 契约与测试矩阵见 [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)。
 
-### P0：身份基座 + 授权内核（不改 UI）
+### P0：身份基座 + 授权内核（不改 UI）✅
 
 **交付**
 
@@ -763,7 +767,7 @@ DM 需求 → 解析 sender（account_key + sender_id）
 - 现有 user-scoped 行仍对原创建者可见（`row_owner` 回填回归）。
 - `make all` 绿；不改前端行为。
 
-### P1：Web 成员 + 表可见性 + guest
+### P1：Web 成员 + 表可见性 + guest ✅
 
 **交付**
 
@@ -783,7 +787,7 @@ DM 需求 → 解析 sender（account_key + sender_id）
 - guest 不能登录、不能拿平台 token、不能出现在用户列表。
 - `make all` 绿；`cd dashboard && npx tsc -b` 绿；i18n parity 绿。
 
-### P2a：IM 链接交付
+### P2a：IM 链接交付 ✅
 
 **交付**
 

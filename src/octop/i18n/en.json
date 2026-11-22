@@ -322,6 +322,10 @@
       "memory": {
         "label": "Memory maintenance",
         "description": "Slim memory databases, reclaim freed disk with VACUUM FULL, or check maintenance progress."
+      },
+      "link": {
+        "label": "Link MiniApp account",
+        "description": "Bind this IM account to the MiniApp guest/member session (send /link <code> in a private chat)"
       }
     },
     "memory": {
@@ -345,6 +349,13 @@
       "compact_busy": "This agent is in a conversation. Wait until it is idle, then run /memory compact --confirm.",
       "compact_not_running": "This agent is not running, so its memory database cannot be compacted from chat.",
       "compact_no_memory": "This agent has no memory store to compact."
+    },
+    "link": {
+      "usage": "Usage: /link <code>. Open the MiniApp /join page and generate the code there.",
+      "success": "Linked this {channel_type} account to the MiniApp session.",
+      "dm_only": "Link codes can only be used in a private chat with the bot.",
+      "unavailable": "Account linking is unavailable on this server.",
+      "invalid": "This link code is invalid, expired, or has already been used. Generate a new one in the MiniApp."
     }
   },
   "connector": {
@@ -750,7 +761,9 @@
     "drive_disable": "Stop drive loop",
     "drive_list": "Show drive loop",
     "ask_creator": "Ask the creator",
-    "deliverable_update": "Update goal deliverable"
+    "deliverable_update": "Update goal deliverable",
+    "im_group_denied": "MiniApp data tools are only available in a private chat with the app owner's bound account. This is a group chat.",
+    "im_owner_required": "This IM account is not bound to the MiniApp owner, so it cannot read or write app data. Ask the owner for an entry link or use the public read-only link."
   },
   "plugins": {
     "arxiv_search": {

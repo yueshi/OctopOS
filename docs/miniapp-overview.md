@@ -1,6 +1,6 @@
 # MiniApp 功能与架构现状
 
-> 快照：2026-11-21，分支 `feature/miniapp-capabilities`，schema **v46**（含工作树中的 `046_miniapp_identity`）。
+> 快照：2026-11-22，分支 `feature/miniapp-capabilities`，schema **v48**（046/047/048；048 已实现、待部署）；P2a 已实现，待提交 / 部署。
 >
 > 口径：**以当前代码与测试为准**。仓库里多份 `light-apps-*` / `miniapp-*` 文档是不同阶段的设计稿，只保留动机与历史记录，并在文首指向本文；本文把已落地的事实和明确未落地的部分分开写。
 >
@@ -10,7 +10,7 @@
 >
 > **产品定位、取舍与阶段顺序见 [MiniApp 产品定位与路线图](./miniapp-product-plan.md)。**
 >
-> **身份模型（v3）**：v46 已落 schema 基座（`users.kind`、`light_app_tables.member_visible`、`light_app_rows.row_owner_user_id`），但 `PrincipalDirectory`、`authorize()`、guest / submission、per-sender actor 均未实施；运行时仍按现有 ACL 与 `created_by` 过滤。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
+> **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现，待合并与部署验证。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 
 ---
 
@@ -33,7 +33,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 | 工作台 | ✅ 个人多 Board、12 列网格、缩放/锁定/撤销/全屏/自动排列 |
 | IM | ✅ `app_share_link` 一次调用交付、纯文本格式化、单轮预算 |
 | 集成/分发（R2/R3） | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度、IM 公开链接与 owner 身份绑定（D4-lite）已实现；公开看板、迁移包 v2 未实现 |
-| 身份与访问（v3） | ◐ v46 schema 基座已落地（`users.kind`、`member_visible`、`row_owner_user_id`）；授权内核、guest / submission、per-sender actor 未落地 |
+| 身份与访问（v3） | ✅ P0/P1（PR-01~PR-10）+ P2a（PR-11/12）已实现，schema v48；待合并 / 部署验证 |
 
 关键数字：
 
@@ -42,7 +42,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB。
 - 11 个应用能力位：10 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
 - 后端 `infra/apps/` 约 1.88 万行；应用 API 路由约 4,700 行；前端 MiniApp 页面/宿主约 1.8 万行（不含桌面 Shell；含桌面 Shell 约 3.1 万行）。
-- 最近验证（2026-11-21）：`tests/unit/apps` + `tests/unit/db/test_db_pool.py` + `tests/integration/test_apps_api.py` + `tests/integration/test_boards_api.py` **569 passed, 2 warnings**；本次只改文档，未重跑 `make all`。
+- 最近验证（2026-11-22）：PR-10 已部署（schema v47）；PR-11/12 定向验证——identity/gateway/agents 1879、apps 505、db 245、集成 103、前端 33 个用例，`make lint` / `make typecheck` 通过。schema v48 已实现，待提交 / 部署。全量 `make all` 在本机跑到 88% 因资源被中止，尚未得到一次完整全绿记录。
 
 选场景、落地路径与验收口径见 §5「应用场景与落地」。
 
@@ -118,8 +118,8 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - **服务端聚合**：`GET /api/apps/{id}/aggregate?table=&group_by=&metric=&agg=&filter=&limit=` 按列分组并聚合 `sum/avg/count/min/max`；PII 列不能分组、度量或过滤；页面用 `octopApp.aggregate(options)` 调用，不再拉全表到前端计算。
 - **引用列**：列类型 `reference`，schema 带 `ref_table` / 可选 `ref_label`；值存目标表的 `row_id`，写入/导入时校验目标行存在（`APP_ROW_INVALID`），空值允许。`GET /rows?expand_refs=true` 返回 `refs[column][row_id] = label`；label 列默认取目标表第一个非 PII 字符串列，读取时按目标表 `pii` / `row_scope` 脱敏。被引用行删除返回 `APP_ROW_IN_USE`；`replace` 导入涉及仍被引用的表时同样拒绝。不做级联、多对多或跨应用引用。公开链接不自动展开 `refs`：页面可对公开目标表自行 `listRows()` 映射，私有表/敏感 label 不会因此暴露。
 - **实时刷新（登录态宿主）**：`light_app_tables.data_version` 每次行写入递增；宿主每 5 秒轮询 `GET /apps/{id}/data-version`，变化时向 iframe 发送 `data-changed`，页面用 `octopApp.onDataChange(cb)` 或 `octop:data-changed` DOM 事件局部刷新；页面不可见时暂停轮询。公开链接暂不轮询。
-- **行级范围**：`light_app_tables.row_scope` 为 `app`（协作者共享）或 `user`（普通用户只看自己创建的行，owner/admin 看全部）；`user` 表不会出现在公开链接。当前 `row_scope=user` 仍按 `created_by` 过滤。
-- **身份 schema 基座（v46）**：`users.kind` 区分 `member` / `guest`；`light_app_tables.member_visible` 为后续 `participate` 角色预留；`light_app_rows.row_owner_user_id` 与 `created_by` 分离，迁移时按 `created_by` 回填。三项目前只有 schema / 读取字段，**尚未参与授权判定**；`row_owner_user_id` 也尚未替代 `created_by`。
+- **行级范围**：`light_app_tables.row_scope` 为 `app`（协作者共享）或 `user`（普通用户只看自己的行，owner/admin 看全部）；`user` 表不会出现在公开链接。`row_scope=user` 按 `COALESCE(row_owner_user_id, created_by)` 过滤；`participate` 只能写自己的行。
+- **身份与访问（v3，PR-01~10）**：`users.kind` 区分 member / guest；`light_app_tables.member_visible` 约束 `participate` 可读表，隐藏表返回 404；`light_app_rows.row_owner_user_id` 与 `created_by` 分离，读取 / 写入统一走 `COALESCE(row_owner_user_id, created_by)`；`authorize()` 统一按角色 × 表可见性 × 行归属 × PII 判定。guest 只能持 `participate`，`row_scope=user` 只看自己的行，自己的 PII 不脱敏、他人行脱敏。
 - **幂等**：`client_request_id` 唯一索引；外部源 `(source_id, source_key)` 唯一索引。
 - **懒迁移**：`storage_version=1` 的旧应用首次读/写时把 CSV 灌入 DB，成功后置 2；失败保留 v1 可重试。
 - **Schema 演进**：`app_alter_schema` / `PATCH /schema` 支持改名、删除、改类型；整表先校验，失败整次拒绝。
@@ -174,7 +174,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - **删除守卫**：删除仍有应用的 Agent 返回 `AGENT_HAS_APPS`（409），需 `force=true`。
 - **`app_delete` 强制 HITL**：`MANDATORY_HITL_TOOLS` 包含 `app_delete`，需要用户批准。
 - **团队 host 不挂 `app_*` 工具**：团队 host 使用 board tools / 交付物来引用 MiniApp（`artifact_type="app"`）。
-- **外部参与者未开放**：guest / submission / `participate` 仍是 v3 设计项；当前协作者必须是平台用户，公开链接访问者只读且无身份。`light_app_tables.member_visible` 与 `light_app_rows.row_owner_user_id` 已加，但尚未接入权限判定；`PUT /shares` 仍全量替换平台用户协作者。
+- **外部参与者（P1 已开放）**：guest 与 `participate` 已接入授权与行级 PII；app owner 可创建邀请 / 加入码，host policy 可要求宿主审批；guest 通过 `/join` 进入、在 `/my` 查看已加入应用。`PUT /shares` 仍是旧的全量平台协作者接口，保留 guest 行但不经过 host policy（已知旁路）。IM sender 身份与 `/link` 已在 PR-11/12 实现：数据工具按 sender / 群聊收口，绑定私聊可拿个人入口码。
 
 ### 2.5 发布与公开链接
 
@@ -362,9 +362,9 @@ owner/admin 可以让 Agent 使用两组工具：
 - 微信/QQ：`format_channel_text()` 去掉 Markdown；`withhold_weixin_stream_preamble()` 丢弃最终答案前的中间旁白。
 - 单轮预算：`StreamBudget(max_tool_calls=20, max_seconds=180, max_repeats=3)`，超限取消本轮并提示。
 - 公开链接需要 `OCTOP_PUBLIC_BASE_URL`（或 `config.json.public_base_url`）才是绝对地址；否则返回相对路径。
-- **D4-lite 渠道身份绑定**：Dashboard 个人设置生成一次性绑定码，用户在 IM 私聊发送 `/bind <code>`；只有绑定到 agent owner 本人的发送者会被标记 `octop_identity_verified`，不切换 acting user，群聊不生效。同一 IM 身份不可覆盖绑定到其他用户。
-- **D3 认证链接**：`app_access_codes` 存 SHA-256 code；`app_share_link(mode="auto")` 在已绑定 owner 的私聊、`public_base_url` 已配置时返回 `/login/app-access?code=...`，10 分钟单次有效；SPA 确认页点击后才调用 `POST /api/auth/app-access/exchange` 换取 **app-scoped JWT**（2 小时，只允许该 app 路由和只读启动接口），并直接进入独立路由树中的全屏运行时（不挂载 Dashboard 外壳）。认证链接只登录用户自己，app 权限仍由现有 ACL 校验。
-- **当前边界**：D4-lite 只绑定 owner 本人；群聊、未绑定用户仍走公开只读链接。per-sender actor、群聊成员身份、guest 会话尚未实现（identity v3 P2b / P1）。
+- **渠道身份绑定（PR-11）**：Dashboard 个人设置生成一次性绑定码，用户在 IM 私聊发送 `/bind <code>`；绑定到 agent owner 本人的发送者标记 `owner_verified`，其他 member / guest 绑定记录在 `sender_user_id` 供入口码分流。不切换 acting user，群聊不生效；同一 `(channel_type, account_key, sender_id)` 不可覆盖绑定到其他用户。
+- **D3 认证链接**：`app_access_codes` 存 SHA-256 code；`app_share_link(mode="auto")` 在已绑定的私聊成员、`public_base_url` 已配置时返回 `/login/app-access?code=...`，10 分钟单次有效；SPA 确认页点击后才调用 `POST /api/auth/app-access/exchange` 换取 **app-scoped JWT**（2 小时，只允许该 app 路由和只读启动接口），并直接进入独立路由树中的全屏运行时（不挂载 Dashboard 外壳）。认证链接只登录用户自己，app 权限仍由现有 ACL 校验。
+- **当前边界**：D4-lite 最初只绑定 owner；PR-11 起支持任意 member / guest 的私聊绑定。群聊、未绑定用户仍走公开只读链接。P1 已提供 guest 会话与 Web `/join`；PR-11/12 已加入 `account_key` / `sender_id`、`ToolScope` 与 app 数据工具收口，IM 私聊里的绑定成员 / guest 可拿个人入口码，非 owner / 群聊不能调用数据工具。
 
 ### 2.11 安全与运维
 
@@ -513,19 +513,20 @@ owner/admin 可以让 Agent 使用两组工具：
 | `light_app_webhooks` | 出站 Webhook | `webhook_id`、`app_id`、`name`、`url`、`event_types_json`、`source_id`、`subscription_id`、`secret_blob`、`enabled` |
 | `light_app_ingress` | app-owned 入站入口 | `ingress_id`、`app_id`、`name`、`mode`、`source_id`、`subscription_id`、`enabled` |
 | `app_setup_plans` | 从文件建应用的计划 | `plan_id`、`thread_id`、`agent_id`、`user_id`、`source_path`、`status`、`revision`、`app_id`、`dry_run_json`、`result_json` |
-| `app_access_codes` | IM 一次性认证链接 | `code_hash`、`app_id`、`user_id`、`permission`、`expires_at`、`consumed_at` |
-| `channel_identities` | IM 身份绑定 | `channel_type`、`external_subject_id`、`user_id`、`verified_at`；唯一 `(channel_type, external_subject_id)` |
+| `app_access_codes` | IM 一次性认证链接 | `code_hash`、`app_id`、`user_id`、`permission`、`channel_type`、`account_key`、`sender_id`、`expires_at`、`consumed_at` |
+| `channel_identities` | IM 身份绑定 | `channel_type`、`account_key`、`sender_id`、`user_id`、`verified_at`；唯一 `(channel_type, account_key, sender_id)`；旧行 `account_key=''` 继续兜底 |
+| `channel_link_codes` | WebView → IM 的 `/link` 握手码 | `code_hash`、`user_id`、`app_id`、`expires_at`、`consumed_at` |
 | `channel_bind_codes` | IM 绑定码 | `code_hash`、`user_id`、`expires_at`、`consumed_at` |
 | `notifications` | 用户通知收件箱 | `notification_id`、`user_id`、`kind`、`title`、`body`、`path`、`read_at`、`dedupe_key` |
 | `light_app_row_history` | 行级变更历史 | `app_id`、`table_key`、`row_id`、`version`、`action`、`before_json`、`after_json`、`actor`、`source`、`changed_at` |
 | `light_app_tables.row_scope` | 行级范围 | `app`（协作者共享）或 `user`（普通用户只看自己创建的行） |
-| `light_app_tables.member_visible` | 成员可见性 | v46 预留：未来约束 `participate`；当前未参与授权 |
+| `light_app_tables.member_visible` | 成员可见性 | 已约束 `participate` 可读表；默认 0，owner 在成员页逐表开启 |
 | `light_app_tables.rules_json` | 表规则 | v1 状态机：`state_field` + `transitions`；可选 `triggers.on_create/on_update`（写收件箱） |
-| `light_app_rows.row_owner_user_id` | 行归属 | v46 与 `created_by` 分离；已按 `created_by` 回填，当前未替代行过滤 |
-| `users.kind` | 主体类型 | v46 `member` / `guest`；运行时尚未区分 |
+| `light_app_rows.row_owner_user_id` | 行归属 | 已参与行过滤与行级 PII；读取统一 `COALESCE(row_owner_user_id, created_by)` |
+| `users.kind` | 主体类型 | `member` / `guest` 已参与登录、Principal 解析与运行时授权 |
 | `goal_deliverables` | 团队交付物 | `artifact_type` 支持 `app`，`artifact_ref=app_id` |
 
-迁移编号：025（应用/协作者/多表/助手/数据源）→ 026（交付物）→ 027（外部事件）→ 028（行入库）→ 029（公开链接）→ 030（表可见性/能力清单/HTML 回滚/看板）→ 031（访问申请）→ 032（服务绑定）→ 033（行级范围）→ 034（表规则）→ 035（访问申请双 owner / pending 唯一索引）→ 036（外部服务声明/缓存）→ 037（应用事件收件箱）→ 038（应用级调度）→ 039（通知收件箱）→ 040（行级变更历史）→ 041（事件幂等作用域 / delivery 结果）→ 042（出站 Webhook）→ 043（app-owned 入站入口）→ 044（服务请求头）→ 045（setup plans / channel identity / app access codes）→ 046（MiniApp identity primitives）。当前 `_schema_version = 46`，`tests/unit/db/test_db_pool.py` 断言为 46。
+迁移编号：025（应用/协作者/多表/助手/数据源）→ 026（交付物）→ 027（外部事件）→ 028（行入库）→ 029（公开链接）→ 030（表可见性/能力清单/HTML 回滚/看板）→ 031（访问申请）→ 032（服务绑定）→ 033（行级范围）→ 034（表规则）→ 035（访问申请双 owner / pending 唯一索引）→ 036（外部服务声明/缓存）→ 037（应用事件收件箱）→ 038（应用级调度）→ 039（通知收件箱）→ 040（行级变更历史）→ 041（事件幂等作用域 / delivery 结果）→ 042（出站 Webhook）→ 043（app-owned 入站入口）→ 044（服务请求头）→ 045（setup plans / channel identity / app access codes）→ 046（MiniApp identity primitives）→ 047（collaborator status / invites / join codes / app_sessions / host policy）→ 048（IM identity v2 / access-code sender fields / channel link codes）。当前 `_schema_version = 48`，`tests/unit/db/test_db_pool.py` 断言为 48。
 
 ### 3.4 存储布局
 
@@ -663,18 +664,19 @@ MiniApp 有两套正交的权限：
 | `events.emit` | `emitEvent` | 关 | ✅ 出站 Webhook（v42，至少一次 + HMAC 签名） |
 | `schedules.manage` | — | 关 | ⛔ 预留；应用级调度目前由 Dashboard/API 管理，未开放给页面 SDK |
 
-**身份模型 v3 与现有授权的边界（2026-11-21）**：
+**身份模型 v3 与现有授权的边界（2026-11-22）**：
 
 | 层 | 现状 | 说明 |
 |---|---|---|
-| `users.kind` | schema 有 `member` / `guest` | `UserRow` 已带 `kind`；`User` 与运行时授权尚未区分 |
-| `light_app_tables.member_visible` | schema + `AppTableView` 暴露 | 尚未参与 `permission_for` / 页面读取；为 `participate` 预留 |
-| `light_app_rows.row_owner_user_id` | schema + 回填 | 尚未替代 `created_by`；`row_scope=user` 仍按 `created_by` 过滤 |
-| guest / submission | 未实现 | 没有 guest 登录、`participate`、提交回执 |
-| app-scoped JWT（D3） | 已实现 | 2 小时，仅该 app 路由与只读启动接口 |
-| IM 身份绑定（D4-lite） | 已实现 | 仅 owner 本人私聊；群聊/未绑定仍公开只读 |
+| `users.kind` | ✅ `member` / `guest` | `UserManager` 只加载 member；guest 不能登录、SSO/LDAP、邀请注册；`PrincipalDirectory` 解析 guest |
+| `light_app_tables.member_visible` | ✅ 参与授权 | `participate` 只能读 `member_visible=1`；隐藏表与不可见行统一 404 |
+| `light_app_rows.row_owner_user_id` | ✅ 参与授权 | `row_scope=user` 按 owner 过滤；兼容旧行；`mask_unless_own` 行级 PII |
+| guest / `participate` | ✅ P1 | guest 会话、app token、`/join`、`/my`、邀请 / 加入码、host policy |
+| app-scoped JWT（D3） | ✅ | 2 小时，仅该 app 路由与只读启动接口 |
+| IM 身份绑定（PR-11） | ✅ | `account_key` + `sender_id`、`ToolScope`；app 数据工具在 IM 内要求 owner 私聊 |
+| submission / 匿名公开填报 | ⛔ | P3，不在当前范围 |
 
-因此，当前权限边界仍是：**平台用户 ACL + 页面能力清单 + 公开 token**；不要按 v3 设计文档里的 guest / `participate` / 行级 PII 对外承诺。
+因此，当前权限边界是：**平台成员 / 协作者 / 受邀 guest 的 ACL + 表可见性 + 行归属 + PII**；不要对外承诺匿名公开填报，或 IM 外部 sender 的数据工具能力。
 
 ### 3.7 沙箱模型
 
@@ -764,8 +766,9 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 协作 | 应用交接 | ✅ | 复制文件 + 更新 agent |
 | 协作 | 删除守卫 | ✅ | `AGENT_HAS_APPS` |
 | 协作 | 团队交付物 = 应用 | ✅ | `artifact_type="app"` |
-| 协作 | 身份 schema 基座（v46） | ◐ | `users.kind` / `member_visible` / `row_owner_user_id` 已加；授权未切换 |
-| 协作 | guest / 公开填报 / `participate` | ⛔ | identity v3 P1/P3 未实施；公开链接只读 |
+| 协作 | 身份与访问（v3 P0/P1） | ✅ | `PrincipalDirectory` / `authorize()` / 行级 PII / 成员 / guest / host policy（PR-01~10） |
+| 协作 | guest / `participate` | ✅ | `/join`、`/my`、行级 PII；匿名公开填报仍为 P3 |
+| 协作 | IM 外部 sender 身份 / `/link` | ✅ | PR-11/12：`account_key`/`sender_id`、数据工具收口、私聊个人入口码与 `/link` |
 | 发布 | 只读公开链接 | ✅ | token hash + 撤销/过期 |
 | 发布 | 发布快照 | ✅ | HTML + 公开表结构；行实时 |
 | 发布 | 公开表可见性 | ✅ | 主表默认公开，附加表默认私有 |
@@ -953,11 +956,11 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 |---|---|---|
 | **R1** | 能力清单、发布快照、composeMessage、限流、HTML 回滚、多 Board | ✅ 全部落地（个人看板部分） |
 | **R2** | 实时外部服务、事件收件箱/发送、统一调度、公开看板 | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度已落地；公开看板未做 |
-| **R3** | 迁移包 v2、IM 公开链接、owner 身份绑定 | ◐ IM 公开链接与 D4-lite 身份绑定已落地；迁移包 v2 未做 |
+| **R3** | 迁移包 v2、IM 公开链接、owner 身份绑定 | ◐ IM 公开链接、D4-lite 与 PR-11/12 sender 身份 / `/link` 已实现；迁移包 v2 未做 |
 
 R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `events.emit` 已接入执行链路，`schedules.manage` 仍是可声明、不可执行的能力名，避免未来端点默认放行。
 
-**身份 v3 状态（2026-11-21）**：v46 已落 `users.kind`、`light_app_tables.member_visible`、`light_app_rows.row_owner_user_id` 三个 schema 基座；`PrincipalDirectory`、`authorize()`、路由 action 注册表、guest 会话、submission、per-sender actor 均未实施。对外不要按“已支持外部参与者 / 公开填报”说明。
+**身份 v3 状态（2026-11-22）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47）：`PrincipalDirectory`、`authorize()`、路由 action 注册表、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页。P2a（`account_key` / `sender_id`、`ToolScope`、IM 数据工具收口、`/link`）已实现，待合并 / 部署验证；submission / per-sender actor 仍属 P2b/P3。
 
 ### 4.5 设计文档落地情况
 
@@ -972,8 +975,8 @@ R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `even
 | `miniapp-sandbox-hardening.md` | P0/P1/WebRTC 已实施 | ✅ 一致；13 个浏览器回归通过 |
 | `miniapp-platform-roadmap.md` | R1 / R2.0 已实施；R2.1–R2.3 部分/核心实施 | ◐ 部分一致；以 roadmap 状态行为准 |
 | `miniapp-event-api-design.md` | 收件箱 + 出站 Webhook 已实施 | ◐ 部分一致；`app.inbox` + 游标/ack、`events.emit` + outbound webhook 已落地，CloudEvents/ordering 未做；已知缺口见 [event-model.md](./event-model.md) |
-| `miniapp-identity-access-plan.md` | v3 身份/访问设计（2026-11-21） | ◐ 仅 v46 schema 基座；运行时授权、guest、submission、per-sender actor 未实施 |
-| `miniapp-identity-implementation-plan.md` | P0–P2a 实施拆解（draft） | ◐ 未实施（除 v46 schema 基座） |
+| `miniapp-identity-access-plan.md` | v3 身份/访问设计（2026-11-21） | ✅ P0/P1/P2a 已实现（v48，PR-01~12） |
+| `miniapp-identity-implementation-plan.md` | P0–P2a 实施拆解 | ✅ PR-01~PR-12 已实现；PR-01~PR-10 已部署 |
 | `docs/architecture-overview.md` | 仍是 2026-11-08 旧数据（35 个工具、50 张表、v29） | ⬜ 待同步；以本文为准 |
 
 > 已删除两份已实施且被本文覆盖的设计稿：`light-apps-multi-table-design.md`、`light-apps-assistant-and-import-design.md`；多表、助手与导入内容见 §2.2、§2.6、§2.7。
@@ -993,7 +996,7 @@ MiniApp 适合“结构化数据 + 轻界面 + 可分享交付”的场景。满
 | 数据形态 | 1–12 张表，单表 ≤2 万行 / 5 MB | 高频交易、超大宽表、跨库事务 |
 | 读写比例 | 读多写少；批量导入 / 人工维护 / 外部事件写入 | 高并发写入、强一致账务 |
 | 交付形态 | 台账、看板、进度板、只读页面 | 复杂审批流、实时协同编辑 |
-| 用户 | 平台成员 / 协作者；外部只读或签名 Webhook | 公开填报、匿名写入 |
+| 用户 | 平台成员 / 协作者 / 受邀 guest（邀请、加入码）；IM 私聊可由绑定 guest 拿个人入口 | 匿名公开填报；群聊内仍不开放 app 数据工具 |
 | 迭代方式 | 业务方随改随用，Agent 重写 HTML | 需要传统前端排期的重交互应用 |
 
 ### 5.2 典型场景
@@ -1062,7 +1065,7 @@ A–D 与 `docs/miniapp-product-plan.md` 的四个高频场景一致；本表补
 - 改了 HTML 忘记重新发布，公开链接仍是旧快照。
 - 把 `edit_structure` 当普通编辑权限；它会改 schema / HTML。
 - 用页面过滤当权限控制；公开面只认 `public_visible` 和公开表。
-- 把 v46 的 `member_visible` / `row_owner_user_id` 当成已生效的权限；当前仍是 schema 基座。
+- 把公开链接当成成员权限；公开面只认 `public_visible`，成员表可见性与行级 PII 只在登录 / 成员路径生效。
 
 ---
 
@@ -1071,15 +1074,35 @@ A–D 与 `docs/miniapp-product-plan.md` 的四个高频场景一致；本表补
 ### 6.1 本次运行
 
 ```bash
-uv run pytest tests/unit/apps tests/unit/db/test_db_pool.py \
-  tests/integration/test_apps_api.py tests/integration/test_boards_api.py -q
-# 569 passed, 2 warnings in 746.37s
-
-uv run pytest tests/integration/test_miniapp_sandbox.py -q
-# 13 passed in 36.23s（浏览器沙箱回归，单独运行）
+# PR-10 定向验证（2026-11-22）
+uv run pytest tests/unit/apps tests/unit/db/test_app_members_migration.py \
+  tests/unit/db/test_db_pool.py -q          # 529 passed
+uv run pytest tests/integration/test_apps_api.py \
+  tests/integration/test_app_members_api.py \
+  tests/integration/test_app_host_policy_api.py \
+  tests/integration/test_guest_portal_api.py -q   # 97 passed
+uv run pytest tests/unit/apps/test_members.py -q  # 10 passed
 ```
 
-未运行：`make all`（本次只改文档，不改 Python/前端代码）；前端 `npx tsc -b` / vitest 未重跑。
+前端：`src/api/request.appTokens.test.ts` + Join / Guest / MembersPanel / Detail 共 32 个用例通过；`tsc -b`、ESLint、生产构建通过。线上服务已部署并迁移到 schema v47（`/api/health` `ok:true`，新路由已注册）。
+
+PR-11/12（2026-11-22）：
+```bash
+uv run pytest tests/unit/i18n tests/unit/auth tests/unit/gateway tests/unit/agents -q
+# 1879 passed, 1 skipped
+uv run pytest tests/unit/apps -q          # 505 passed
+uv run pytest tests/unit/db -q            # 245 passed
+uv run pytest tests/integration/test_apps_api.py \
+  tests/integration/test_app_members_api.py \
+  tests/integration/test_app_host_policy_api.py \
+  tests/integration/test_guest_portal_api.py \
+  tests/integration/test_app_access_api.py \
+  tests/integration/test_channel_bindings_api.py -q   # 103 passed
+uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
+```
+`make lint`、`make typecheck` 通过；前端新增 Guest `/link` 码弹窗用例。
+
+未运行：一次完整的 `make all`。PR-01~10 的全量 pytest 在本机跑到 88% 时因内存 / swap 压力被中止；PR-11/12 使用定向测试 + lint + mypy。合并前应在 CI 或停服窗口补跑。
 
 ### 6.2 测试分布
 
@@ -1106,6 +1129,8 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 | **合计** | `tests/unit/apps` + `test_db_pool.py` + 两个集成文件 | **569** |
 | 集成：浏览器沙箱 | `test_miniapp_sandbox.py`（单独运行） | 13 |
 
+> 上表是 2026-11-21 基线。PR-06~PR-10 新增的 `test_pii_policy` / `test_members` / `test_host_policy` / `test_guest_sessions` / 成员与 guest API 集成用例未计入；最新一次定向结果为 529 单测 + 97 集成，见 §6.1。
+
 ### 6.3 手工验证建议
 
 1. 工作台「创建」→ 上传多 sheet Excel → 确认字段 → 生成看板 → 数据 Tab 改一行 → 分享 viewer。
@@ -1116,6 +1141,9 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 6. 上传含身份证列的文件 → 默认不导入 → 标记 `pii` 后公开链接读取显示掩码。
 7. IM 私聊 `/bind` 绑定 owner → `app_share_link` 返回一次性链接 → 兑换后只能访问该 app。
 8. 配一个数据源 + `sync_source` 调度 → 观察 `last_status` / `next_run_at`；再发一条入站 Webhook 测试事件。
+9. 成员页：owner 添加平台成员 / guest、创建邀请与加入码、逐表开启 `member_visible`；agent 宿主只读审批。
+10. 非成员打开 `/apps/{id}` → 403「申请加入 / 使用加入码」；受邀 guest 走 `/join` → `/my` → 应用，只看到可见表和自己的行。
+11. IM 边界：群聊 / 未绑定私聊只应拿到链接 / 加入码，app 数据工具应被拒绝；guest 在 `/my` 生成 `/link` 码，私聊发送后 `app_share_link` 返回个人入口。
 
 ---
 
@@ -1125,8 +1153,8 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 
 | 缺口 | 影响 | 备注 |
 |---|---|---|
-| 身份 v3 运行时 | `users.kind` / `member_visible` / `row_owner_user_id` 仅 schema；无 guest、`participate`、submission、per-sender actor | 设计 / 实施计划见 `miniapp-identity-*.md`；v46 只加字段 |
-| 公开填报 | 公开链接只读；外部写入必须走签名入站 Webhook | identity v3 P1/P3 未实施 |
+| IM per-sender actor（P2b） | IM 会话 / 记忆仍归 agent owner；PR-11 只收口工具与链接，不切换 thread / memory actor | 需要 per-sender thread / memory 隔离，单独设计 |
+| 公开填报 | 公开链接只读；外部写入必须走签名入站 Webhook | 匿名公开填报属 P3；受邀 guest 可登录写自己的行 |
 | R2 外部服务 `light_app_services` | 页面可通过宿主调用已声明的只读连接器工具 | 已支持 CRUD/调用/TTL 缓存/图片资产/公开缓存调用/Agent 工具；promote 待做 |
 | R2 应用级调度 `light_app_schedules` | 统一管理数据源同步与公开快照刷新 | `sync_source` / `snapshot_publication` 已落地；`run_agent` 等动作待做 |
 | R2 公开看板 | Board 不能分享 | 仅个人看板 |
@@ -1147,7 +1175,7 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 | 远程工作区写放大 | `app.html`/assets 仍走对象存储 | 行数据已入库；HTML 写入频率低 |
 | 旧应用静态 frame | 渲染时拒绝并显示错误页 | 需要用户让 Agent 重写 |
 | 团队 host 无 app 工具 | 团队只能通过交付物引用应用 | 设计如此，避免 host 直接操作应用 |
-| 身份 schema 先于授权 | v46 已加 `users.kind` / `member_visible` / `row_owner_user_id`，但权限仍按旧 ACL + `created_by` | 在 `authorize()` / 行级 PII 落地前不要开放 guest / `participate` |
+| IM 会话归 owner | IM 入站仍把外部 sender 归到 agent owner 的 thread / memory；PR-11 已收口 app 工具与个人链接 | P2b 再做 per-sender thread / memory；群聊消息仍共享 owner 的会话上下文 |
 
 ### 7.3 文档漂移
 
@@ -1156,7 +1184,7 @@ uv run pytest tests/integration/test_miniapp_sandbox.py -q
 - 已删除：`light-apps-multi-table-design.md`、`light-apps-assistant-and-import-design.md`（内容已并入本文 §2.2 / §2.6 / §2.7），以及过时的演示稿 `miniapp-platform-roadmap.html` / `.pptx`。
 - 所有保留的 MiniApp 设计稿已加统一的“当前实现状态见 `miniapp-overview.md`”指针；设计稿只保留动机、取舍和历史记录。
 - `docs/miniapp-platform-roadmap.md` 的 R1 状态准确；R2 的外部服务/事件/调度、R3 的 IM 公开链接与 owner 身份绑定（D4-lite）已落地；公开看板与迁移包 v2 仍未做。
-- `docs/miniapp-identity-access-plan.md` 是 v3 设计；v46 只落 schema 基座，运行时授权未实施。
+- `docs/miniapp-identity-access-plan.md` 是 v3 设计；P0/P1/P2a 已实现（v48，PR-01~12）。
 - 本文作为当前状态的单一入口。
 
 ---

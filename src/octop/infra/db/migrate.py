@@ -2318,6 +2318,124 @@ def _ensure_miniapp_im_identity_schema(db: DatabasePool) -> None:
         )
 
 
+def _ensure_miniapp_im_identity_v2_schema(db: DatabasePool) -> None:
+    """Upgrade channel identities to ``(channel_type, account_key, sender_id)``.
+
+    SQLite needs a table rebuild; PostgreSQL can rename the old column. Both
+    paths are idempotent because the runner calls this for v48 and also on
+    every startup to heal databases whose recorded version skipped the file.
+    """
+    if not _table_exists(db, "channel_identities"):
+        pk = _integer_pk_sql(db)
+        with db.connect() as conn:
+            conn.execute(
+                f"""
+                CREATE TABLE channel_identities (
+                  id           {pk},
+                  channel_type TEXT NOT NULL,
+                  account_key  TEXT NOT NULL DEFAULT '',
+                  sender_id    TEXT NOT NULL,
+                  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                  verified_at  INTEGER NOT NULL,
+                  created_at   INTEGER NOT NULL,
+                  UNIQUE(channel_type, account_key, sender_id)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_channel_identities_user "
+                "ON channel_identities(user_id, channel_type)"
+            )
+    else:
+        columns = _table_columns(db, "channel_identities")
+        if "sender_id" not in columns:
+            if db.dialect == "postgresql":
+                with db.transaction() as conn:
+                    conn.execute(
+                        "ALTER TABLE channel_identities "
+                        "RENAME COLUMN external_subject_id TO sender_id"
+                    )
+                    conn.execute(
+                        "ALTER TABLE channel_identities "
+                        "ADD COLUMN account_key TEXT NOT NULL DEFAULT ''"
+                    )
+                    rows = conn.execute(
+                        "SELECT conname FROM pg_constraint "
+                        "WHERE conrelid = 'channel_identities'::regclass "
+                        "AND contype = 'u'"
+                    ).fetchall()
+                    for row in rows:
+                        name = str(row["conname"])
+                        if name != "channel_identities_channel_type_account_key_sender_id_key":
+                            conn.execute(f'ALTER TABLE channel_identities DROP CONSTRAINT "{name}"')
+                    conn.execute(
+                        "ALTER TABLE channel_identities "
+                        "ADD CONSTRAINT channel_identities_channel_type_account_key_sender_id_key "
+                        "UNIQUE (channel_type, account_key, sender_id)"
+                    )
+            else:
+                pk = _integer_pk_sql(db)
+                with db.transaction() as conn:
+                    conn.execute("DROP TABLE IF EXISTS channel_identities_new")
+                    conn.execute(
+                        f"""
+                        CREATE TABLE channel_identities_new (
+                          id           {pk},
+                          channel_type TEXT NOT NULL,
+                          account_key  TEXT NOT NULL DEFAULT '',
+                          sender_id    TEXT NOT NULL,
+                          user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                          verified_at  INTEGER NOT NULL,
+                          created_at   INTEGER NOT NULL,
+                          UNIQUE(channel_type, account_key, sender_id)
+                        )
+                        """
+                    )
+                    conn.execute(
+                        "INSERT INTO channel_identities_new("
+                        "id, channel_type, account_key, sender_id, user_id, "
+                        "verified_at, created_at"
+                        ") SELECT id, channel_type, '', external_subject_id, user_id, "
+                        "verified_at, created_at FROM channel_identities"
+                    )
+                    conn.execute("DROP TABLE channel_identities")
+                    conn.execute("ALTER TABLE channel_identities_new RENAME TO channel_identities")
+                with db.connect() as conn:
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_channel_identities_user "
+                        "ON channel_identities(user_id, channel_type)"
+                    )
+        else:
+            _ensure_column(
+                db,
+                "channel_identities",
+                "account_key",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+    if _table_exists(db, "app_access_codes"):
+        _ensure_column(db, "app_access_codes", "account_key", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(db, "app_access_codes", "sender_id", "TEXT NOT NULL DEFAULT ''")
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS channel_link_codes (
+              id          {pk},
+              code_hash   TEXT NOT NULL UNIQUE,
+              user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              app_id      TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              expires_at  INTEGER NOT NULL,
+              consumed_at INTEGER,
+              created_at  INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel_link_codes_expires "
+            "ON channel_link_codes(expires_at)"
+        )
+
+
 def _light_app_events_has_global_unique(db: DatabasePool) -> bool:
     """Whether SQLite still enforces UNIQUE(event_id) alone (v37–v40)."""
     if not _table_exists(db, "light_app_events"):
@@ -3658,6 +3776,16 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 48:
+            # SQLite rebuild / PG rename; also the repair path for databases
+            # whose recorded version skipped the file.
+            _ensure_miniapp_im_identity_v2_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -3708,6 +3836,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_light_app_table_visibility(db)
     _ensure_light_app_publications_schema(db)
     _ensure_miniapp_im_identity_schema(db)
+    _ensure_miniapp_im_identity_v2_schema(db)
     _ensure_miniapp_identity_schema(db)
     _ensure_app_member_schema(db)
     _ensure_notifications_schema(db)

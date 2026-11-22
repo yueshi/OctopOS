@@ -31,7 +31,7 @@ from octop.infra.agents.teams.team_manager import (
 from octop.infra.agents.teams.team_manager import (
     stamp_team_host_chunk as _maybe_stamp_team_host,
 )
-from octop.infra.auth.channel_binding import is_owner_verified
+from octop.infra.auth.channel_binding import resolve_identity
 from octop.infra.errors import OctopError
 from octop.infra.gateway.cli.events import message_event_to_cli_chunks
 from octop.infra.gateway.hitl.coordinator import (
@@ -64,11 +64,12 @@ from octop.infra.gateway.process.harness_request import (
 from octop.infra.gateway.process.message_keys import (
     COMPOSER_CTX_KEY,
     INBOUND_ATTACHMENTS_KEY,
+    account_key_from_message,
     chat_type_from_message,
     resolve_user_id_for_message,
+    sender_id_from_message,
     session_key_from_message,
     session_metadata_from_message,
-    subject_id_from_message,
 )
 from octop.infra.gateway.process.stream_project import (
     StreamBudget,
@@ -226,6 +227,7 @@ class GlobalProcessor:
         connector_repo: ConnectorRepo,
         channel_identity_repo: Any | None = None,
         channel_bind_code_repo: Any | None = None,
+        channel_link_code_repo: Any | None = None,
         knowledge_repo: Any | None = None,
         settings_repo: Any | None = None,
         provider_repo: Any | None = None,
@@ -248,6 +250,7 @@ class GlobalProcessor:
         self._connector_repo = connector_repo
         self._channel_identity_repo = channel_identity_repo
         self._channel_bind_code_repo = channel_bind_code_repo
+        self._channel_link_code_repo = channel_link_code_repo
         self._knowledge_services = (
             SimpleNamespace(
                 knowledge_repo=knowledge_repo,
@@ -574,20 +577,38 @@ class GlobalProcessor:
     async def on_reply(self, event: ReplyEvent) -> None:
         await self.teams.on_reply(event)
 
-    def _owner_identity_verified(self, msg: InboundMessage, agent_row: Any) -> bool:
-        """True when a DM sender is bound to the agent owner's own account.
+    def _channel_identity(self, msg: InboundMessage, agent_row: Any) -> dict[str, Any]:
+        """Resolve the sender's verified IM identity for this turn.
 
-        IM senders are otherwise treated as the agent owner for session
-        ownership, which is not an identity proof. Only a ``/bind``-verified
-        subject may request a personal MiniApp sign-in link.
+        IM senders still *act* as the agent owner for session ownership, but
+        ``owner_verified`` is the identity proof used by app data tools and
+        personal sign-in links. A non-owner binding is recorded in
+        ``sender_user_id`` (PR-12 uses it to choose join/invite links).
         """
-        return is_owner_verified(
+        channel_type = msg.channel_type or ""
+        account_key = account_key_from_message(msg)
+        sender_id = sender_id_from_message(msg)
+        chat_type = chat_type_from_message(msg)
+        owner_user_id = agent_row.user_id if agent_row is not None else None
+        row = resolve_identity(
             identity_repo=getattr(self, "_channel_identity_repo", None),
-            channel_type=msg.channel_type or "",
-            subject_id=subject_id_from_message(msg),
-            chat_type=chat_type_from_message(msg),
-            owner_user_id=agent_row.user_id if agent_row is not None else None,
+            channel_type=channel_type,
+            sender_id=sender_id,
+            account_key=account_key,
         )
+        sender_user_id = row.user_id if row is not None else None
+        owner_verified = (
+            chat_type == "dm" and owner_user_id is not None and sender_user_id == owner_user_id
+        )
+        return {
+            "account_key": account_key,
+            "sender_id": sender_id,
+            "sender_user_id": sender_user_id,
+            "chat_type": chat_type,
+            "owner_verified": owner_verified,
+            # Compatibility: the pre-PR-11 flag only ever meant owner-verified.
+            "identity_verified": owner_verified,
+        }
 
     def _slash_ctx(
         self,
@@ -598,6 +619,24 @@ class GlobalProcessor:
         session_key: str,
         metadata: dict[str, Any] | None = None,
     ) -> SlashCtx:
+        meta = metadata or {}
+        parts = session_key.split(":", 2)
+        subject = parts[2] if len(parts) >= 3 else str(user_id)
+        sender_id = str(meta.get("sender_id") or subject)
+        account_key = str(meta.get("account_key") or "")
+        agent_row = self._agent_repo.get(agent_id)
+        owner_user_id = agent_row.user_id if agent_row is not None else None
+        identity_row = resolve_identity(
+            identity_repo=getattr(self, "_channel_identity_repo", None),
+            channel_type=channel_type,
+            sender_id=sender_id,
+            account_key=account_key,
+        )
+        sender_user_id = identity_row.user_id if identity_row is not None else None
+        chat = session_key.rpartition(":")[2].strip().lower()
+        owner_verified = (
+            chat == "dm" and owner_user_id is not None and sender_user_id == owner_user_id
+        )
         return build_slash_ctx(
             gateway=self._gateway,
             thread_registry=self._thread_registry,
@@ -606,6 +645,7 @@ class GlobalProcessor:
             user_repo=self._user_repo,
             channel_identity_repo=getattr(self, "_channel_identity_repo", None),
             channel_bind_code_repo=getattr(self, "_channel_bind_code_repo", None),
+            channel_link_code_repo=getattr(self, "_channel_link_code_repo", None),
             audit_repo=self._audit_repo,
             agent_manager=self._agent_manager,
             usage_repo=self._usage_repo,
@@ -613,9 +653,13 @@ class GlobalProcessor:
             user_id=user_id,
             channel_type=channel_type,
             session_key=session_key,
-            metadata=metadata,
+            metadata=meta,
             paths=self._agent_manager.paths,
             default_timezone=self._agent_manager.octop_config.default_timezone,
+            account_key=account_key,
+            sender_id=sender_id,
+            sender_user_id=sender_user_id,
+            owner_verified=owner_verified,
         )
 
     @staticmethod
@@ -791,9 +835,12 @@ class GlobalProcessor:
             msg,
             agent_owner_id=agent_row.user_id if agent_row is not None else None,
         )
-        identity_verified = self._owner_identity_verified(msg, agent_row)
+        identity = self._channel_identity(msg, agent_row)
+        identity_verified = bool(identity["identity_verified"])
         session_key = session_key_from_message(msg, agent_id=agent_id)
-        meta = msg.metadata if isinstance(msg.metadata, dict) else {}
+        meta = dict(msg.metadata) if isinstance(msg.metadata, dict) else {}
+        meta.setdefault("account_key", identity["account_key"])
+        meta.setdefault("sender_id", identity["sender_id"])
         im_meta = session_metadata_from_message(msg)
         bridge_turn_id = str(meta.get("bridge_turn_id") or "").strip()
         if bridge_turn_id:
@@ -828,7 +875,7 @@ class GlobalProcessor:
                     user_id=user_id,
                     channel_type=channel_type,
                     session_key=session_key,
-                    metadata=msg.metadata,
+                    metadata=meta,
                 ),
                 agent_manager=self._agent_manager,
                 locale=locale,
@@ -922,7 +969,7 @@ class GlobalProcessor:
                     user_id=user_id,
                     channel_type=channel_type,
                     session_key=session_key,
-                    metadata=msg.metadata,
+                    metadata=meta,
                 ),
                 sink,
             )
@@ -1019,6 +1066,12 @@ class GlobalProcessor:
             message_kwargs=message_kwargs or None,
             reasoning_overrides=reasoning_overrides,
             identity_verified=identity_verified,
+            owner_verified=bool(identity["owner_verified"]),
+            sender_user_id=identity["sender_user_id"],
+            sender_id=str(identity["sender_id"]),
+            account_key=str(identity["account_key"]),
+            chat_type=str(identity["chat_type"]),
+            locale=locale,
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(
@@ -1191,10 +1244,13 @@ class GlobalProcessor:
             msg,
             agent_owner_id=agent_row.user_id if agent_row is not None else None,
         )
-        identity_verified = self._owner_identity_verified(msg, agent_row)
+        identity = self._channel_identity(msg, agent_row)
+        identity_verified = bool(identity["identity_verified"])
         session_key = session_key_from_message(msg, agent_id=agent_id)
         channel_type = msg.channel_type or "unknown"
-        meta = msg.metadata if isinstance(msg.metadata, dict) else {}
+        meta = dict(msg.metadata) if isinstance(msg.metadata, dict) else {}
+        meta.setdefault("account_key", identity["account_key"])
+        meta.setdefault("sender_id", identity["sender_id"])
         im_meta = session_metadata_from_message(msg)
         if team_host and self._team_coordinator is not None:
             # Shadow ledger: a user message reached a team host (v2 §11.2).
@@ -1380,6 +1436,7 @@ class GlobalProcessor:
             thread_id=thread_id,
             meta=meta,
             identity_verified=identity_verified,
+            identity=identity,
         )
         history_tracker = await self._begin_history(agent_id, thread_id, request)
         await self._observe_turn_start_context(
@@ -1648,7 +1705,9 @@ class GlobalProcessor:
         thread_id: str,
         meta: dict[str, Any],
         identity_verified: bool = False,
+        identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        sender_identity = identity or {}
         media_backend = media_backend_for_agent(self._agent_manager, agent_id)
         source = f"{msg.channel_type}/{msg.channel_id}"
         locale = resolve_user_locale(
@@ -1736,6 +1795,12 @@ class GlobalProcessor:
             message_kwargs=message_kwargs or None,
             reasoning_overrides=reasoning_overrides,
             identity_verified=identity_verified,
+            owner_verified=bool(sender_identity.get("owner_verified")),
+            sender_user_id=sender_identity.get("sender_user_id"),
+            sender_id=str(sender_identity.get("sender_id") or ""),
+            account_key=str(sender_identity.get("account_key") or ""),
+            chat_type=str(sender_identity.get("chat_type") or ""),
+            locale=locale,
         )
         self.teams.stamp_host_runtime(request, agent_id)
         self._attach_turn_knowledge_config(

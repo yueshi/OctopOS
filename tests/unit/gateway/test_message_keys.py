@@ -64,6 +64,36 @@ def test_group_session_is_owned_by_conversation_not_sender() -> None:
 
     assert "group-openid" in key
     assert "member-openid" not in key
+    persisted = sanitize_im_metadata(msg)
+    assert persisted["sender_id"] == "member-openid"
+
+
+def test_sender_and_account_key_helpers() -> None:
+    from octop.infra.gateway.process.message_keys import (
+        account_key_from_message,
+        sender_id_from_message,
+    )
+
+    msg = InboundMessage(
+        channel_type="feishu",
+        channel_id="ch-1",
+        channel_subject=ChannelSubject(subject_id="ou_owner", chat_type="dm"),
+        content=[TextContent(text="hi")],
+        metadata={"sender_id": "ou_owner", "account_key": "cli_app"},
+    )
+    assert sender_id_from_message(msg) == "ou_owner"
+    assert account_key_from_message(msg) == "cli_app"
+    # No explicit metadata: a DM subject is the sender and the channel row is
+    # the bot/account fallback.
+    bare = InboundMessage(
+        channel_type="feishu",
+        channel_id="ch-2",
+        channel_subject=ChannelSubject(subject_id="ou_dm", chat_type="dm"),
+        content=[TextContent(text="hi")],
+        metadata={},
+    )
+    assert sender_id_from_message(bare) == "ou_dm"
+    assert account_key_from_message(bare) == "ch-2"
 
 
 def test_sanitize_im_metadata_persists_xiaoyi_routing() -> None:

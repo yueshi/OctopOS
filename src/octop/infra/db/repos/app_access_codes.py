@@ -17,6 +17,8 @@ class AppAccessCodeRow:
     permission: str
     channel_type: str
     channel_subject_id: str
+    account_key: str
+    sender_id: str
     expires_at: int
     consumed_at: int | None
     created_at: int
@@ -32,6 +34,8 @@ class AppAccessCodeRow:
             permission=str(row["permission"]),
             channel_type=str(row["channel_type"] or ""),
             channel_subject_id=str(row["channel_subject_id"] or ""),
+            account_key=str(row["account_key"] or ""),
+            sender_id=str(row["sender_id"] or ""),
             expires_at=int(row["expires_at"]),
             consumed_at=int(consumed) if consumed is not None else None,
             created_at=int(row["created_at"]),
@@ -52,6 +56,8 @@ class AppAccessCodeRepo:
         channel_type: str,
         channel_subject_id: str,
         expires_at: int,
+        account_key: str = "",
+        sender_id: str = "",
     ) -> int:
         ts = now_ts()
         with self._db.transaction() as conn:
@@ -59,8 +65,8 @@ class AppAccessCodeRepo:
                 conn,
                 "INSERT INTO app_access_codes("
                 "code_hash, app_id, user_id, permission, channel_type, "
-                "channel_subject_id, expires_at, created_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "channel_subject_id, account_key, sender_id, expires_at, created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     code_hash,
                     app_id,
@@ -68,6 +74,8 @@ class AppAccessCodeRepo:
                     permission,
                     channel_type,
                     channel_subject_id,
+                    account_key,
+                    sender_id,
                     expires_at,
                     ts,
                 ),

@@ -23,6 +23,10 @@ class ToolScope:
     session_key: str = ""
     chat_type: str = ""
     identity_verified: bool = False
+    owner_verified: bool = False
+    sender_user_id: int | None = None
+    sender_id: str = ""
+    account_key: str = ""
 
 
 _CURRENT_TOOL_SCOPE: ContextVar[ToolScope | None] = ContextVar(
@@ -40,6 +44,10 @@ def tool_scope(
     session_key: str = "",
     chat_type: str = "",
     identity_verified: bool = False,
+    owner_verified: bool = False,
+    sender_user_id: int | None = None,
+    sender_id: str = "",
+    account_key: str = "",
 ) -> Iterator[None]:
     """Bind the acting identity and IM context for tools invoked during a resume."""
     scope = (
@@ -50,6 +58,10 @@ def tool_scope(
             session_key=session_key,
             chat_type=chat_type,
             identity_verified=identity_verified,
+            owner_verified=owner_verified,
+            sender_user_id=sender_user_id,
+            sender_id=sender_id,
+            account_key=account_key,
         )
         if user_id is not None
         else None

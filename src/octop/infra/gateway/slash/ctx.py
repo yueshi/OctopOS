@@ -33,6 +33,7 @@ class SlashCtx:
     user_repo: UserRepo | None = None
     channel_identity_repo: Any | None = None
     channel_bind_code_repo: Any | None = None
+    channel_link_code_repo: Any | None = None
     audit_repo: Any | None = None
     agent_manager: AgentManager | None = None
     cron_manager: CronManager | None = None
@@ -44,6 +45,10 @@ class SlashCtx:
     """Dashboard composer / turn ``metadata.model`` (``provider/model``), if any."""
     model_ref: str | None = None
     default_timezone: str = "Asia/Shanghai"
+    account_key: str = ""
+    sender_id: str = ""
+    sender_user_id: int | None = None
+    owner_verified: bool = False
 
 
 def lang_of(ctx: SlashCtx) -> Locale:
@@ -108,12 +113,17 @@ def build_slash_ctx(
     repos: RepoBundle | None = None,
     channel_identity_repo: Any | None = None,
     channel_bind_code_repo: Any | None = None,
+    channel_link_code_repo: Any | None = None,
     audit_repo: Any | None = None,
     octop_version: str | None = None,
     server_started_at: int | None = None,
     user_locale: str | None = None,
     channel_metadata: dict[str, object] | None = None,
     default_timezone: str | None = None,
+    account_key: str = "",
+    sender_id: str = "",
+    sender_user_id: int | None = None,
+    owner_verified: bool = False,
 ) -> SlashCtx:
     """Build SlashCtx for GlobalProcessor or other gateway entry points."""
     meta = getattr(gateway, "slash_meta", None) if gateway is not None else None
@@ -131,6 +141,7 @@ def build_slash_ctx(
         usage_repo = usage_repo or repos.usage_repo
         channel_identity_repo = channel_identity_repo or repos.channel_identity_repo
         channel_bind_code_repo = channel_bind_code_repo or repos.channel_bind_code_repo
+        channel_link_code_repo = channel_link_code_repo or repos.channel_link_code_repo
         audit_repo = audit_repo or repos.audit_repo
 
     user_loc = user_locale
@@ -172,6 +183,7 @@ def build_slash_ctx(
         user_repo=user_repo,
         channel_identity_repo=channel_identity_repo,
         channel_bind_code_repo=channel_bind_code_repo,
+        channel_link_code_repo=channel_link_code_repo,
         audit_repo=audit_repo,
         agent_manager=agent_manager,
         cron_manager=cron_manager,
@@ -181,4 +193,8 @@ def build_slash_ctx(
         server_started_at=server_started_at or (meta.started_at if meta else None),
         model_ref=model_ref,
         default_timezone=timezone,
+        account_key=account_key,
+        sender_id=sender_id,
+        sender_user_id=sender_user_id,
+        owner_verified=owner_verified,
     )

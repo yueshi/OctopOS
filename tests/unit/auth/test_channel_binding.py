@@ -42,10 +42,43 @@ def test_issue_and_bind_identity(world) -> None:
         code_repo=codes,
         code=code,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
     )
     assert row.user_id == alice
     assert identities.get("weixin", "wx-alice").user_id == alice
+
+
+def test_bind_isolated_by_account_key(world) -> None:
+    identities, codes, alice, bob = world
+    exact, _ = issue_bind_code(code_repo=codes, user_id=bob)
+    bind_identity(
+        identity_repo=identities,
+        code_repo=codes,
+        code=exact,
+        channel_type="feishu",
+        sender_id="ou-1",
+        account_key="app-b",
+    )
+    legacy, _ = issue_bind_code(code_repo=codes, user_id=alice)
+    bind_identity(
+        identity_repo=identities,
+        code_repo=codes,
+        code=legacy,
+        channel_type="feishu",
+        sender_id="ou-1",
+    )
+    assert identities.get("feishu", "ou-1", account_key="app-b").user_id == bob
+    assert identities.get("feishu", "ou-1").user_id == alice
+    # Another bot key falls back to the legacy owner.
+    assert identities.get("feishu", "ou-1", account_key="app-c").user_id == alice
+    assert is_owner_verified(
+        identity_repo=identities,
+        channel_type="feishu",
+        sender_id="ou-1",
+        chat_type="dm",
+        owner_user_id=bob,
+        account_key="app-b",
+    )
 
 
 def test_bind_code_is_single_use(world) -> None:
@@ -56,7 +89,7 @@ def test_bind_code_is_single_use(world) -> None:
         code_repo=codes,
         code=code,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
     )
     with pytest.raises(OctopError) as exc:
         bind_identity(
@@ -64,7 +97,7 @@ def test_bind_code_is_single_use(world) -> None:
             code_repo=codes,
             code=code,
             channel_type="weixin",
-            subject_id="wx-other",
+            sender_id="wx-other",
         )
     assert exc.value.code is ErrorCode.CHANNEL_BIND_CODE_INVALID
 
@@ -77,7 +110,7 @@ def test_existing_binding_cannot_be_stolen(world) -> None:
         code_repo=codes,
         code=first,
         channel_type="weixin",
-        subject_id="wx-shared",
+        sender_id="wx-shared",
     )
     second, _ = issue_bind_code(code_repo=codes, user_id=bob)
     with pytest.raises(OctopError) as exc:
@@ -86,7 +119,7 @@ def test_existing_binding_cannot_be_stolen(world) -> None:
             code_repo=codes,
             code=second,
             channel_type="weixin",
-            subject_id="wx-shared",
+            sender_id="wx-shared",
         )
     assert exc.value.code is ErrorCode.CHANNEL_IDENTITY_TAKEN
     assert identities.get("weixin", "wx-shared").user_id == alice
@@ -100,13 +133,13 @@ def test_is_owner_verified_requires_dm_and_owner_binding(world) -> None:
         code_repo=codes,
         code=code,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
     )
 
     assert is_owner_verified(
         identity_repo=identities,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
         chat_type="dm",
         owner_user_id=alice,
     )
@@ -114,7 +147,7 @@ def test_is_owner_verified_requires_dm_and_owner_binding(world) -> None:
     assert not is_owner_verified(
         identity_repo=identities,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
         chat_type="group",
         owner_user_id=alice,
     )
@@ -122,7 +155,7 @@ def test_is_owner_verified_requires_dm_and_owner_binding(world) -> None:
     assert not is_owner_verified(
         identity_repo=identities,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
         chat_type="dm",
         owner_user_id=bob,
     )
@@ -130,7 +163,7 @@ def test_is_owner_verified_requires_dm_and_owner_binding(world) -> None:
     assert not is_owner_verified(
         identity_repo=identities,
         channel_type="weixin",
-        subject_id="wx-other",
+        sender_id="wx-other",
         chat_type="dm",
         owner_user_id=alice,
     )
@@ -138,14 +171,14 @@ def test_is_owner_verified_requires_dm_and_owner_binding(world) -> None:
     assert not is_owner_verified(
         identity_repo=None,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
         chat_type="dm",
         owner_user_id=alice,
     )
     assert not is_owner_verified(
         identity_repo=identities,
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
         chat_type="dm",
         owner_user_id=None,
     )

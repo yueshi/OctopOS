@@ -276,3 +276,4 @@ P0 已落地：
 - **D3 认证链接**：`app_share_link(mode="auto")` 在发送者已验证为 app owner 的私聊 + `public_base_url` 时返回 `${public_base_url}/login/app-access?code=...`；10 分钟单次消费。SPA 确认页调用 `POST /api/auth/app-access/preview`（只读）和 `POST /api/auth/app-access/exchange`，不会在 GET/链接预览时消费。
 - **兑换结果**：app-scoped JWT，TTL 2 小时，只允许 `/api/apps/{app_id}` 子路由和少量只读启动接口；其他接口返回 `APP_SCOPE_FORBIDDEN`，滑动续期不会升级为全量 token。
 - **群聊/兼容**：群聊、未绑定身份、绑定到其他用户、dashboard 来源仍返回公开 `/p/` 链接；`rotate=True` 始终走公开链接，不会被 auto 抢成认证链接。
+- **后续（PR-11/12，已实现、待部署）**：`channel_identities` 扩展到 `(channel_type, account_key, sender_id)`，`ToolScope` 增加 sender / owner 标记并收口 app 数据工具；`/link` 握手让 guest 把自己的 Web 会话绑定到 IM 私聊，之后可收个人入口码。

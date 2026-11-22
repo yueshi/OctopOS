@@ -3027,7 +3027,9 @@
     "drive_disable": "停止驱动循环",
     "drive_list": "查看驱动循环",
     "ask_creator": "请示创建人",
-    "deliverable_update": "更新目标产物"
+    "deliverable_update": "更新目标产物",
+    "im_group_denied": "小程序数据工具仅能在与应用所有者绑定账号的私聊中使用；当前是群聊。",
+    "im_owner_required": "当前 IM 账号未绑定到小程序所有者，不能读写应用数据。请向所有者索取入口链接，或使用公开只读链接。"
   },
   "toolSettings": {
     "title": "工具设置",
@@ -8496,6 +8498,11 @@
     "deletedBody": "会话已撤销，你可以使用新的邀请重新加入。",
     "useCode": "使用加入码",
     "noSessionTitle": "没有访客会话",
-    "noSessionBody": "请打开收到的邀请或加入码。"
+    "noSessionBody": "请打开收到的邀请或加入码。",
+    "linkCode": "关联 IM",
+    "linkCodeTitle": "关联「{{name}}」的 IM 账号",
+    "linkCodeHint": "在与机器人的私聊中发送下面的命令。验证码 5 分钟内有效，只能使用一次。",
+    "linkCodeDone": "完成",
+    "linkCodeFailed": "生成关联码失败"
   }
 }

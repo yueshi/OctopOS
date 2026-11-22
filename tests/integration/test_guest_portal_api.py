@@ -187,3 +187,28 @@ async def test_member_app_session_and_pending_member(
     r = await client.post(f"/api/apps/{app_id}/session", headers=bob_auth)
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "APP_MEMBER_PENDING"
+
+
+async def test_guest_mints_link_code_with_app_token(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id)
+    await _enable_external(client, alice_auth, agent_id)
+    redeemed = await _guest_join(client, alice_auth, app_id)
+    app_headers = {"Authorization": f"Bearer {redeemed['app_token']}"}
+
+    r = await client.post(f"/api/apps/{app_id}/link-code", headers=app_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["code"]) >= 6
+    assert body["ttl_seconds"] == 300
+    assert body["expires_at"] > 0
+    assert srv.services is not None
+    with srv.services.db.connect() as conn:
+        row = conn.execute(
+            "SELECT user_id, app_id FROM channel_link_codes ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    assert int(row["user_id"]) == redeemed["user_id"]
+    assert str(row["app_id"]) == app_id

@@ -15,9 +15,9 @@ class _IdentityRepo:
     def __init__(self, bindings: set[tuple[str, str, int]]) -> None:
         self._bindings = bindings
 
-    def get(self, channel_type: str, external_subject_id: str):
+    def get(self, channel_type: str, sender_id: str, *, account_key: str = ""):
         for kind, subject, user_id in self._bindings:
-            if (kind, subject) == (channel_type, external_subject_id):
+            if (kind, subject) == (channel_type, sender_id):
                 return SimpleNamespace(user_id=user_id)
         return None
 
@@ -53,23 +53,41 @@ def _agent(owner_id: int) -> SimpleNamespace:
 
 def test_bound_owner_dm_is_verified() -> None:
     processor = _processor(_IdentityRepo({("weixin", "wx-owner", 7)}))
-    assert processor._owner_identity_verified(_msg(subject="wx-owner"), _agent(7)) is True
+    assert (
+        processor._channel_identity(_msg(subject="wx-owner"), _agent(7))["owner_verified"] is True
+    )
+
+
+def test_bound_non_owner_has_sender_identity_but_no_owner_proof() -> None:
+    processor = _processor(_IdentityRepo({("weixin", "wx-member", 8)}))
+    identity = processor._channel_identity(_msg(subject="wx-member"), _agent(7))
+    assert identity["sender_user_id"] == 8
+    assert identity["owner_verified"] is False
+    assert identity["identity_verified"] is False
 
 
 def test_unbound_and_group_are_not_verified() -> None:
     processor = _processor(_IdentityRepo({("weixin", "wx-owner", 7)}))
-    assert processor._owner_identity_verified(_msg(subject="wx-other"), _agent(7)) is False
     assert (
-        processor._owner_identity_verified(_msg(subject="wx-owner", chat_type="group"), _agent(7))
+        processor._channel_identity(_msg(subject="wx-other"), _agent(7))["owner_verified"] is False
+    )
+    assert (
+        processor._channel_identity(_msg(subject="wx-owner", chat_type="group"), _agent(7))[
+            "owner_verified"
+        ]
         is False
     )
 
 
 def test_binding_to_another_user_is_not_verified() -> None:
     processor = _processor(_IdentityRepo({("weixin", "wx-member", 8)}))
-    assert processor._owner_identity_verified(_msg(subject="wx-member"), _agent(7)) is False
+    assert (
+        processor._channel_identity(_msg(subject="wx-member"), _agent(7))["owner_verified"] is False
+    )
 
 
 def test_missing_repo_is_not_verified() -> None:
     processor = _processor(None)
-    assert processor._owner_identity_verified(_msg(subject="wx-owner"), _agent(7)) is False
+    assert (
+        processor._channel_identity(_msg(subject="wx-owner"), _agent(7))["owner_verified"] is False
+    )

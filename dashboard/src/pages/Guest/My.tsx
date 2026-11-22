@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Empty,
+  Modal,
   Popconfirm,
   Result,
   Space,
@@ -39,6 +40,10 @@ export default function GuestMyPage() {
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
   const [deleted, setDeleted] = useState(false);
+  const [linkCode, setLinkCode] = useState<{
+    appName: string;
+    code: string;
+  } | null>(null);
 
   const refreshSession = useCallback(async (): Promise<boolean> => {
     const refresh = getGuestRefreshToken();
@@ -104,6 +109,22 @@ export default function GuestMyPage() {
       navigate(`/apps/${encodeURIComponent(app.app_id)}`);
     } catch (err) {
       message.error(apiErrorMessage(err, t("guest.openFailed"), t));
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const linkImAccount = async (app: GuestApp) => {
+    setBusyId(app.app_id);
+    try {
+      // `/link-code` is an app route: make sure this tab holds an app token
+      // even after a reload dropped sessionStorage.
+      const session = await appsApi.guestAppSession(app.app_id);
+      setAppToken(app.app_id, session.access_token, session.expires_in);
+      const data = await appsApi.createLinkCode(app.app_id);
+      setLinkCode({ appName: app.name, code: data.code });
+    } catch (err) {
+      message.error(apiErrorMessage(err, t("guest.linkCodeFailed"), t));
     } finally {
       setBusyId("");
     }
@@ -241,6 +262,12 @@ export default function GuestMyPage() {
                   >
                     {t("guest.open")}
                   </Button>
+                  <Button
+                    loading={busyId === app.app_id}
+                    onClick={() => void linkImAccount(app)}
+                  >
+                    {t("guest.linkCode")}
+                  </Button>
                   <Popconfirm
                     title={t("guest.leaveConfirm")}
                     onConfirm={() => void leaveApp(app)}
@@ -263,6 +290,21 @@ export default function GuestMyPage() {
           </Button>
         </Space>
       </Space>
+      <Modal
+        open={linkCode != null}
+        title={t("guest.linkCodeTitle", { name: linkCode?.appName ?? "" })}
+        onCancel={() => setLinkCode(null)}
+        onOk={() => setLinkCode(null)}
+        okText={t("guest.linkCodeDone")}
+        cancelButtonProps={{ style: { display: "none" } }}
+      >
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          <Text>{t("guest.linkCodeHint")}</Text>
+          <Text strong copyable style={{ fontSize: 24, letterSpacing: 4 }}>
+            /link {linkCode?.code ?? ""}
+          </Text>
+        </Space>
+      </Modal>
     </Standalone>
   );
 }

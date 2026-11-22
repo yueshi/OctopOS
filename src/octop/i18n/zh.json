@@ -322,6 +322,10 @@
       "memory": {
         "label": "记忆库整理",
         "description": "瘦身记忆库、用 VACUUM FULL 把删掉的空间还给磁盘，或查看整理进度。"
+      },
+      "link": {
+        "label": "关联小程序账号",
+        "description": "把当前 IM 账号关联到小程序访客/成员会话（在私聊发送 /link <验证码>）"
       }
     },
     "memory": {
@@ -345,6 +349,13 @@
       "compact_busy": "这个 Agent 正在对话。等它空闲后再发送 /memory compact --confirm。",
       "compact_not_running": "这个 Agent 没有在运行，无法从对话里压缩它的记忆库。",
       "compact_no_memory": "这个 Agent 没有可压缩的记忆库。"
+    },
+    "link": {
+      "usage": "用法：/link <验证码>。请先在小程序 /join 页面生成验证码。",
+      "success": "已将当前 {channel_type} 账号关联到小程序会话。",
+      "dm_only": "关联码只能在与机器人的私聊中使用。",
+      "unavailable": "当前服务未启用账号关联。",
+      "invalid": "关联码无效、已过期或已被使用。请在小程序内重新生成。"
     }
   },
   "connector": {
@@ -750,7 +761,9 @@
     "drive_disable": "停止驱动循环",
     "drive_list": "查看驱动循环",
     "ask_creator": "请示创建人",
-    "deliverable_update": "更新目标产物"
+    "deliverable_update": "更新目标产物",
+    "im_group_denied": "小程序数据工具仅能在与应用所有者绑定账号的私聊中使用；当前是群聊。",
+    "im_owner_required": "当前 IM 账号未绑定到小程序所有者，不能读写应用数据。请向所有者索取入口链接，或使用公开只读链接。"
   },
   "plugins": {
     "arxiv_search": {

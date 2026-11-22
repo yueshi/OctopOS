@@ -22,6 +22,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 from octop.infra.agents.tool_scope import current_tool_context, current_tool_scope
+from octop.infra.apps.im_guard import im_tool_denial
 from octop.infra.apps.tool_policy import (
     APP_HITL_TOOL_NAMES,
     APP_TOOL_CATEGORIES,
@@ -133,6 +134,24 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
         identity_verified = bool(scope and scope.identity_verified) or bool(
             configurable.get("octop_identity_verified")
         )
+        owner_verified = bool(scope and scope.owner_verified) or bool(
+            configurable.get("octop_owner_verified")
+        )
+        chat_type = (
+            scope.chat_type
+            if scope is not None and scope.chat_type.strip()
+            else str(configurable.get("octop_chat_type") or "")
+        )
+        sender_id = (
+            scope.sender_id
+            if scope is not None and scope.sender_id.strip()
+            else str(configurable.get("octop_sender_id") or "")
+        )
+        account_key = (
+            scope.account_key
+            if scope is not None and scope.account_key.strip()
+            else str(configurable.get("octop_account_key") or "")
+        )
         fingerprint = hashlib.sha256(
             json.dumps(_sanitize(args), ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -150,6 +169,10 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
             "source": source,
             "session_key_present": bool(session_key),
             "identity_verified": identity_verified,
+            "owner_verified": owner_verified,
+            "chat_type": chat_type,
+            "sender_id": sender_id,
+            "account_key": account_key,
             "arg_keys": sorted(str(key) for key in args),
             "args_sha256": fingerprint,
             "status": status,
@@ -159,6 +182,44 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
             payload["error_type"] = error_type
         target = str(app_id) if isinstance(app_id, str) and app_id else name
         return target, json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def _im_denial(self, request: ToolCallRequest) -> ToolMessage | None:
+        """Return a localized error when an IM sender may not use this tool."""
+        tool_call = request.tool_call
+        name = str(tool_call.get("name") or "").rsplit("/", 1)[-1]
+        if name not in APP_TOOL_RISKS:
+            return None
+        configurable = _configurable()
+        scope = current_tool_context()
+        source = (
+            scope.source
+            if scope is not None and scope.source.strip()
+            else str(configurable.get("octop_source") or "")
+        )
+        chat_type = (
+            scope.chat_type
+            if scope is not None and scope.chat_type.strip()
+            else str(configurable.get("octop_chat_type") or "")
+        )
+        owner_verified = bool(scope and scope.owner_verified) or bool(
+            configurable.get("octop_owner_verified")
+        )
+        locale = str(configurable.get("octop_locale") or "zh")
+        message = im_tool_denial(
+            name,
+            source=source,
+            chat_type=chat_type,
+            owner_verified=owner_verified,
+            locale=locale,
+        )
+        if message is None:
+            return None
+        return ToolMessage(
+            content=message,
+            tool_call_id=str(tool_call.get("id") or ""),
+            name=name,
+            status="error",
+        )
 
     def _write(
         self,
@@ -195,6 +256,10 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
         started = time.monotonic()
+        denied = self._im_denial(request)
+        if denied is not None:
+            self._write(request, status="denied", started=started, error_type="ImToolDenied")
+            return denied
         try:
             result = handler(request)
         except Exception as exc:
@@ -210,6 +275,10 @@ class ToolAuditMiddleware(AgentMiddleware[Any, Any]):
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         started = time.monotonic()
+        denied = self._im_denial(request)
+        if denied is not None:
+            self._write(request, status="denied", started=started, error_type="ImToolDenied")
+            return denied
         try:
             result = await handler(request)
         except Exception as exc:

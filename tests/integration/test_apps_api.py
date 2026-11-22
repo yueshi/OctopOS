@@ -81,6 +81,9 @@ async def test_owner_app_flow(
     assert r.status_code == 200
     detail = r.json()
     assert detail["name"] == "Tracker"
+    # The access kernel calls the creator "owner"; the API contract exposes
+    # that as edit_structure so the dashboard enables management controls.
+    assert detail["permission"] == "edit_structure"
     assert detail["has_html"] is False
     assert [col["name"] for col in detail["columns"]] == ["title", "status"]
     assert [item["table_key"] for item in detail["tables"]] == ["main"]
@@ -143,6 +146,7 @@ async def test_owner_app_flow(
     assert r.status_code == 200
     assert r.json()["name"] == "Renamed"
     assert r.json()["description"] == ""
+    assert r.json()["permission"] == "edit_structure"
 
     r = await client.delete(f"/api/apps/{app_id}", headers=alice_auth)
     assert r.status_code == 200

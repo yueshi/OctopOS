@@ -213,7 +213,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | R2.3 最小 workflow runner | 低（建议不做） | 见 §6 取舍 3 |
 | R2.4 公开看板 | 中（可滑档） | 见 §4 阶段 5 |
 | R3 Bundle v2（跨主机迁移） | 高 | 见 §4 阶段 6（建议提前） |
-| R3 IM 认证链接 / 渠道身份 | 中 | 与平台级身份统一合并做 |
+| R3 IM 认证链接 / 渠道身份 | 中 | D4-lite 已落地；PR-11/12 的 sender 身份、app 工具收口与 `/link` 已实现（schema v48），待部署 |
 | `data_version` 实时刷新 | **已完成（2026-11-15）** | `GET /api/apps/{id}/data-version` + 5 秒两段式轮询 + `data-changed` 事件（`dashboard/src/components/MiniAppFrame/useMiniAppDataVersion.ts`） |
 | 页面写能力（`updateRow` / 批量写） | **已完成（2026-11-15）** | SDK + 双宿主 bridge + 行级 CAS；见 §3.3 V1 |
 | 行查询 `filter` / `sort` | **已完成（2026-11-15）** | `GET /rows?filter=&sort=`；未下推，见 §3.3 P0-4 |
@@ -424,6 +424,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 - **6c 渠道身份绑定（D4-lite）**：Dashboard 个人设置生成一次性绑定码，用户在 IM 私聊发送
   `/bind <code>`，写入 `channel_identities`。仅绑定到 agent owner 本人的发送者会签发个人链接；
   不切换 acting user，群聊不生效。同一 IM 身份不可覆盖绑定到其他用户。
+  PR-11/12 已将其扩展为 `(channel_type, account_key, sender_id)`、`ToolScope` 工具收口与 `/link` 握手（schema v48）。
 - **建议**：把「作用域能力令牌（capability token）」从 MiniApp 私有（game token / share token）
   提升为**平台级**身份原语，MiniApp、IM 认证链接、外部 origin 应用（游戏、外部工具）共用一套。
 

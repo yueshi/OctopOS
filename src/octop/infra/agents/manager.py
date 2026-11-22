@@ -65,7 +65,7 @@ from octop.infra.agents.settings.runtime_limits import (
     resolve_context_max_tokens as config_context_max_tokens,
 )
 from octop.infra.agents.tool_scope import tool_scope
-from octop.infra.auth.channel_binding import is_owner_verified
+from octop.infra.auth.channel_binding import resolve_identity
 from octop.infra.backend.docker_spec import (
     enrich_docker_backend_spec,
     inject_docker_global_environment,
@@ -1976,26 +1976,41 @@ class AgentManager:
         channel_id = session.channel_id if session is not None else None
         chat_type = (session.channel_chat_type or session.chat_type) if session is not None else ""
         source = f"{channel_type}/{channel_id}" if channel_id else channel_type
+        metadata = (session.channel_metadata or {}) if session is not None else {}
         subject = session.channel_subject_id if session is not None else ""
+        sender_id = str(metadata.get("sender_id") or subject or "")
+        account_key = str(metadata.get("account_key") or channel_id or "")
         agent_id = session.agent_id if session is not None else ""
         agent_row = self._repos.agent_repo.get(agent_id) if agent_id else None
         owner_user_id = agent_row.user_id if agent_row is not None else None
-        identity_verified = is_owner_verified(
+        identity_row = resolve_identity(
             identity_repo=self._repos.channel_identity_repo,
             channel_type=channel_type,
-            subject_id=subject,
-            chat_type=chat_type,
-            owner_user_id=owner_user_id,
+            sender_id=sender_id,
+            account_key=account_key,
+        )
+        sender_user_id = identity_row.user_id if identity_row is not None else None
+        owner_verified = (
+            chat_type.strip().lower() == "dm"
+            and owner_user_id is not None
+            and sender_user_id == owner_user_id
         )
         if acting_user_id is not None and acting_user_id != owner_user_id:
             # A different user resumed the pause (e.g. an admin approving from
             # the dashboard); the channel identity no longer describes them.
-            identity_verified = False
+            # Treat the resume as a dashboard action so the IM tool gate does
+            # not block the approved tool call.
+            owner_verified = False
+            source = f"dashboard/{acting_user_id}"
         return {
             "source": source,
             "session_key": pending.session_key,
             "chat_type": chat_type,
-            "identity_verified": identity_verified,
+            "identity_verified": owner_verified,
+            "owner_verified": owner_verified,
+            "sender_user_id": sender_user_id if owner_verified else None,
+            "sender_id": sender_id,
+            "account_key": account_key,
         }
 
     async def resume_hitl(

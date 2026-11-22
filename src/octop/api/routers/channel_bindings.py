@@ -28,7 +28,11 @@ class ChannelBindCodeOut(BaseModel):
 
 class ChannelIdentityOut(BaseModel):
     channel_type: str = Field(description="Channel type, e.g. weixin or feishu.")
-    subject_id: str = Field(description="Platform user id bound to this account.")
+    subject_id: str = Field(description="Platform sender id bound to this account.")
+    account_key: str = Field(
+        default="",
+        description="Bot/account key; empty for bindings created before identity v2.",
+    )
     verified_at: int = Field(description="Unix timestamp when the binding was verified.")
 
 
@@ -87,7 +91,8 @@ async def list_channel_bindings(
         identities=[
             ChannelIdentityOut(
                 channel_type=row.channel_type,
-                subject_id=row.external_subject_id,
+                subject_id=row.sender_id,
+                account_key=row.account_key,
                 verified_at=row.verified_at,
             )
             for row in rows
@@ -103,13 +108,15 @@ async def list_channel_bindings(
 async def delete_channel_binding(
     channel_type: str = Query(min_length=1, max_length=64),
     subject_id: str = Query(min_length=1, max_length=256),
+    account_key: str = Query(default="", max_length=256),
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> None:
     repos = _repos(server)
     removed = repos.channel_identity_repo.delete(
         channel_type=channel_type.strip().lower(),
-        external_subject_id=subject_id.strip(),
+        sender_id=subject_id.strip(),
+        account_key=account_key.strip(),
         user_id=user.id,
     )
     if not removed:

@@ -8,6 +8,7 @@ import GuestMyPage from "./My";
 
 const api = vi.hoisted(() => ({
   guestApps: vi.fn(),
+  createLinkCode: vi.fn(),
   guestAppSession: vi.fn(),
   leaveGuestApp: vi.fn(),
   refreshGuestSession: vi.fn(),
@@ -106,6 +107,44 @@ describe("GuestMyPage", () => {
       7200,
     );
     expect(await screen.findByText("runtime-app")).toBeInTheDocument();
+  });
+
+  it("shows the /link handshake code for an app", async () => {
+    api.guestApps.mockResolvedValue({
+      apps: [
+        {
+          app_id: "app_1",
+          name: "销售台账",
+          role: "participate",
+          last_opened_at: 0,
+        },
+      ],
+    });
+    api.guestAppSession.mockResolvedValue({
+      access_token: "app-token",
+      token_type: "bearer",
+      expires_in: 7200,
+      scope: "app",
+      app_id: "app_1",
+      role: "participate",
+    });
+    api.createLinkCode.mockResolvedValue({
+      code: "AB12CD34",
+      expires_at: 1_800_000_000,
+      ttl_seconds: 300,
+    });
+    renderPage();
+
+    await screen.findByText("销售台账");
+    await userEvent.click(screen.getByRole("button", { name: "关联 IM" }));
+    expect(await screen.findByText("/link AB12CD34")).toBeInTheDocument();
+    expect(api.guestAppSession).toHaveBeenCalledWith("app_1");
+    expect(session.setAppToken).toHaveBeenCalledWith(
+      "app_1",
+      "app-token",
+      7200,
+    );
+    expect(api.createLinkCode).toHaveBeenCalledWith("app_1");
   });
 
   it("refreshes an expired session once before showing an error", async () => {

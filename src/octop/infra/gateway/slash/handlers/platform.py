@@ -8,7 +8,7 @@ from octop_harness.slash import SlashCommand, SlashSink
 
 from octop.i18n.domains.slash import localized_rows, tr
 from octop.infra.agents.security import tool_execution_may_pause
-from octop.infra.auth.channel_binding import bind_identity
+from octop.infra.auth.channel_binding import bind_identity, redeem_link_code
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.gateway.slash.catalog import channel_origin
 from octop.infra.gateway.slash.ctx import (
@@ -192,7 +192,8 @@ async def cmd_bind(d: SlashDispatcher, cmd: SlashCommand, ctx: SlashCtx, sink: S
             code_repo=ctx.channel_bind_code_repo,
             code=code,
             channel_type=ctx.channel_type,
-            subject_id=subject_id(ctx),
+            sender_id=ctx.sender_id or subject_id(ctx),
+            account_key=ctx.account_key,
         )
     except OctopError as exc:
         await sink.text(exc.localized_message(lang))
@@ -201,10 +202,54 @@ async def cmd_bind(d: SlashDispatcher, cmd: SlashCommand, ctx: SlashCtx, sink: S
         ctx.audit_repo.write(
             actor=f"user:{row.user_id}",
             action="auth.channel_identity.bind",
-            target=f"{row.channel_type}:{row.external_subject_id}",
+            target=f"{row.channel_type}:{row.account_key}:{row.sender_id}",
             payload="",
         )
     await sink.text(tr("bind.success", lang, channel_type=row.channel_type))
+
+
+async def cmd_link(d: SlashDispatcher, cmd: SlashCommand, ctx: SlashCtx, sink: SlashSink) -> None:
+    lang = lang_of(ctx)
+    if ctx.channel_identity_repo is None or ctx.channel_link_code_repo is None:
+        await sink.text(tr("link.unavailable", lang))
+        return
+    if ctx.channel_type in (
+        ThreadRegistry.CHANNEL_DASHBOARD,
+        ThreadRegistry.CHANNEL_CLI,
+        ThreadRegistry.CHANNEL_MCP,
+    ):
+        await sink.text(tr("link.dm_only", lang))
+        return
+    if chat_type(ctx) != ThreadRegistry.CHAT_TYPE_DM:
+        await sink.text(tr("link.dm_only", lang))
+        return
+    code = cmd.args.strip()
+    if not code:
+        await sink.text(tr("link.usage", lang))
+        return
+    try:
+        row = redeem_link_code(
+            identity_repo=ctx.channel_identity_repo,
+            link_code_repo=ctx.channel_link_code_repo,
+            code=code,
+            channel_type=ctx.channel_type,
+            sender_id=ctx.sender_id or subject_id(ctx),
+            account_key=ctx.account_key,
+        )
+    except OctopError as exc:
+        await sink.text(exc.localized_message(lang))
+        return
+    if row is None:
+        await sink.text(tr("link.invalid", lang))
+        return
+    if ctx.audit_repo is not None:
+        ctx.audit_repo.write(
+            actor=f"user:{row.user_id}",
+            action="auth.channel_identity.link",
+            target=f"{row.channel_type}:{row.account_key}:{row.sender_id}",
+            payload="",
+        )
+    await sink.text(tr("link.success", lang, channel_type=row.channel_type))
 
 
 PLATFORM_HANDLERS: dict[str, GatewayHandler] = {
@@ -215,4 +260,5 @@ PLATFORM_HANDLERS: dict[str, GatewayHandler] = {
     "connectors": cmd_connectors,
     "exit": cmd_exit,
     "bind": cmd_bind,
+    "link": cmd_link,
 }

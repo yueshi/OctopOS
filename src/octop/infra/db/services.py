@@ -30,6 +30,7 @@ from octop.infra.db.repos.channel_identities import (
     ChannelBindCodeRepo,
     ChannelIdentityRepo,
 )
+from octop.infra.db.repos.channel_link_codes import ChannelLinkCodeRepo
 from octop.infra.db.repos.channels import ChannelRepo
 from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.cron import CronJobRepo
@@ -80,6 +81,7 @@ class RepoBundle:
     channel_repo: ChannelRepo
     channel_identity_repo: ChannelIdentityRepo
     channel_bind_code_repo: ChannelBindCodeRepo
+    channel_link_code_repo: ChannelLinkCodeRepo
     cron_repo: CronJobRepo
     session_repo: SessionRepo
     thread_repo: ThreadRepo
@@ -142,6 +144,7 @@ class RepoBundle:
             channel_repo=ChannelRepo(db),
             channel_identity_repo=ChannelIdentityRepo(db),
             channel_bind_code_repo=ChannelBindCodeRepo(db),
+            channel_link_code_repo=ChannelLinkCodeRepo(db),
             cron_repo=CronJobRepo(db),
             session_repo=SessionRepo(db),
             thread_repo=ThreadRepo(db),
@@ -235,6 +238,10 @@ class SharedServices:
     @property
     def channel_bind_code_repo(self) -> ChannelBindCodeRepo:
         return self.repos.channel_bind_code_repo
+
+    @property
+    def channel_link_code_repo(self) -> ChannelLinkCodeRepo:
+        return self.repos.channel_link_code_repo
 
     @property
     def cron_repo(self) -> CronJobRepo:

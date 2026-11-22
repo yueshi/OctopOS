@@ -81,6 +81,53 @@ async def test_preview_does_not_consume_and_exchange_returns_jwt(
     assert second.json()["error"]["code"] == "APP_ACCESS_LINK_INVALID"
 
 
+async def test_guest_access_link_returns_a_guest_session(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, _alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    assert srv.services is not None
+    alice = srv.services.user_repo.get_by_username("alice")
+    assert alice is not None
+    guest_id = srv.services.user_repo.create(
+        username="guest-link",
+        password_hash=None,
+        role="user",
+        kind="guest",
+    )
+    service = _service(srv)
+    app = await service.create(
+        agent_id=agent_id,
+        owner_user_id=alice.id,
+        name="Guest tracker",
+        columns=COLUMNS,
+    )
+    srv.services.light_app_repo.upsert_collaborator(
+        app.app_id, guest_id, "participate", status="active"
+    )
+    code, _ = service.create_access_link(
+        app,
+        user_id=guest_id,
+        channel_type="feishu",
+        account_key="app_1",
+        sender_id="ou_guest",
+        origin="test",
+    )
+
+    exchanged = await client.post("/api/auth/app-access/exchange", json={"code": code})
+    assert exchanged.status_code == 200, exchanged.text
+    login = exchanged.json()
+    assert login["guest_token"]
+    assert login["refresh_token"]
+    auth = {"Authorization": f"Bearer {login['access_token']}"}
+    detail = await client.get(f"/api/apps/{app.app_id}", headers=auth)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["permission"] == "participate"
+    # The app token is scoped to this app; the guest portal has its own token.
+    portal = await client.get("/api/guest/apps", headers=auth)
+    assert portal.status_code == 403
+    assert portal.json()["error"]["code"] == "APP_SCOPE_FORBIDDEN"
+
+
 async def test_invalid_access_code_is_410(
     env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
 ) -> None:

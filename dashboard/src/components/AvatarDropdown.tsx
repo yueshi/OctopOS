@@ -320,16 +320,23 @@ export default function AvatarDropdown({
   };
 
   const handleUnbindChannel = async (item: ChannelBinding) => {
-    const key = `${item.channel_type}:${item.subject_id}`;
+    const key = `${item.channel_type}:${item.account_key ?? ""}:${
+      item.subject_id
+    }`;
     setUnbindBusy(key);
     try {
-      await authApi.deleteChannelBinding(item.channel_type, item.subject_id);
+      await authApi.deleteChannelBinding(
+        item.channel_type,
+        item.subject_id,
+        item.account_key,
+      );
       setChannelBindings((prev) =>
         prev.filter(
           (row) =>
             !(
               row.channel_type === item.channel_type &&
-              row.subject_id === item.subject_id
+              row.subject_id === item.subject_id &&
+              (row.account_key ?? "") === (item.account_key ?? "")
             ),
         ),
       );
@@ -721,7 +728,9 @@ export default function AvatarDropdown({
         {channelBindings.length > 0 ? (
           <ul className={`${styles.ssoList} ${styles.bindingList}`}>
             {channelBindings.map((item) => {
-              const key = `${item.channel_type}:${item.subject_id}`;
+              const key = `${item.channel_type}:${item.account_key ?? ""}:${
+                item.subject_id
+              }`;
               return (
                 <li key={key} className={styles.ssoRow}>
                   <div className={styles.ssoMeta}>

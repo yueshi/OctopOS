@@ -17,7 +17,8 @@ from octop.infra.db.repos._base import DbRow, insert_returning_id, now_ts
 class ChannelIdentityRow:
     pk: int
     channel_type: str
-    external_subject_id: str
+    account_key: str
+    sender_id: str
     user_id: int
     verified_at: int
     created_at: int
@@ -27,7 +28,8 @@ class ChannelIdentityRow:
         return cls(
             pk=int(row["id"]),
             channel_type=str(row["channel_type"]),
-            external_subject_id=str(row["external_subject_id"]),
+            account_key=str(row["account_key"] or ""),
+            sender_id=str(row["sender_id"]),
             user_id=int(row["user_id"]),
             verified_at=int(row["verified_at"]),
             created_at=int(row["created_at"]),
@@ -60,12 +62,28 @@ class ChannelIdentityRepo:
     def __init__(self, db: DatabasePool) -> None:
         self._db = db
 
-    def get(self, channel_type: str, external_subject_id: str) -> ChannelIdentityRow | None:
+    def get(
+        self,
+        channel_type: str,
+        sender_id: str,
+        *,
+        account_key: str = "",
+    ) -> ChannelIdentityRow | None:
+        """Exact ``account_key`` binding first, then the legacy empty-key row."""
+        clean_key = account_key.strip()
         with self._db.connect() as conn:
+            if clean_key:
+                row = conn.execute(
+                    "SELECT * FROM channel_identities "
+                    "WHERE channel_type = ? AND account_key = ? AND sender_id = ?",
+                    (channel_type, clean_key, sender_id),
+                ).fetchone()
+                if row is not None:
+                    return ChannelIdentityRow.from_row(row)
             row = conn.execute(
                 "SELECT * FROM channel_identities "
-                "WHERE channel_type = ? AND external_subject_id = ?",
-                (channel_type, external_subject_id),
+                "WHERE channel_type = ? AND account_key = '' AND sender_id = ?",
+                (channel_type, sender_id),
             ).fetchone()
         return ChannelIdentityRow.from_row(row) if row is not None else None
 
@@ -81,41 +99,92 @@ class ChannelIdentityRepo:
         self,
         *,
         channel_type: str,
-        external_subject_id: str,
+        sender_id: str,
         user_id: int,
+        account_key: str = "",
     ) -> ChannelIdentityRow | None:
-        """Create or refresh this subject's binding to *user_id*.
+        """Create or refresh this sender's binding to *user_id*.
 
-        A subject already bound to a different user is left untouched and
+        A sender already bound to a different user is left untouched and
         ``None`` is returned, so an attacker cannot steal an existing binding.
+        The legacy ``account_key=''`` row is kept for older bots; the exact
+        key is inserted alongside it. A legacy row owned by another user
+        blocks the exact binding (the sender is already claimed).
         """
+        key = account_key.strip()
         ts = now_ts()
         with self._db.transaction() as conn:
-            conn.execute(
-                "INSERT INTO channel_identities("
-                "channel_type, external_subject_id, user_id, verified_at, created_at"
-                ") VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(channel_type, external_subject_id) DO UPDATE SET "
-                "user_id = excluded.user_id, verified_at = excluded.verified_at "
-                "WHERE channel_identities.user_id = excluded.user_id",
-                (channel_type, external_subject_id, user_id, ts, ts),
-            )
-            row = conn.execute(
+            exact = conn.execute(
                 "SELECT * FROM channel_identities "
-                "WHERE channel_type = ? AND external_subject_id = ?",
-                (channel_type, external_subject_id),
+                "WHERE channel_type = ? AND account_key = ? AND sender_id = ?",
+                (channel_type, key, sender_id),
             ).fetchone()
-        if row is None or int(row["user_id"]) != user_id:
-            return None
-        return ChannelIdentityRow.from_row(row)
-
-    def delete(self, *, channel_type: str, external_subject_id: str, user_id: int) -> bool:
-        with self._db.transaction() as conn:
-            cursor = conn.execute(
-                "DELETE FROM channel_identities "
-                "WHERE channel_type = ? AND external_subject_id = ? AND user_id = ?",
-                (channel_type, external_subject_id, user_id),
+            legacy = (
+                conn.execute(
+                    "SELECT * FROM channel_identities "
+                    "WHERE channel_type = ? AND account_key = '' AND sender_id = ?",
+                    (channel_type, sender_id),
+                ).fetchone()
+                if key
+                else None
             )
+            for row in (exact, legacy):
+                if row is not None and int(row["user_id"]) != user_id:
+                    return None
+            if exact is not None:
+                conn.execute(
+                    "UPDATE channel_identities SET verified_at = ? WHERE id = ?",
+                    (ts, int(exact["id"])),
+                )
+                target_id = int(exact["id"])
+            else:
+                # A concurrent /bind may win the unique key between the probe
+                # above and this insert; DO NOTHING keeps the loser a clean
+                # "taken" result instead of a 500.
+                conn.execute(
+                    "INSERT INTO channel_identities("
+                    "channel_type, account_key, sender_id, user_id, verified_at, created_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(channel_type, account_key, sender_id) DO NOTHING",
+                    (channel_type, key, sender_id, user_id, ts, ts),
+                )
+                row = conn.execute(
+                    "SELECT * FROM channel_identities "
+                    "WHERE channel_type = ? AND account_key = ? AND sender_id = ?",
+                    (channel_type, key, sender_id),
+                ).fetchone()
+                if row is None or int(row["user_id"]) != user_id:
+                    return None
+                target_id = int(row["id"])
+            row = conn.execute(
+                "SELECT * FROM channel_identities WHERE id = ?", (target_id,)
+            ).fetchone()
+        return ChannelIdentityRow.from_row(row) if row is not None else None
+
+    def delete(
+        self,
+        *,
+        channel_type: str,
+        sender_id: str,
+        user_id: int,
+        account_key: str = "",
+    ) -> bool:
+        key = account_key.strip()
+        with self._db.transaction() as conn:
+            if key:
+                cursor = conn.execute(
+                    "DELETE FROM channel_identities "
+                    "WHERE channel_type = ? AND sender_id = ? AND user_id = ? "
+                    "AND (account_key = ? OR account_key = '')",
+                    (channel_type, sender_id, user_id, key),
+                )
+            else:
+                cursor = conn.execute(
+                    "DELETE FROM channel_identities "
+                    "WHERE channel_type = ? AND sender_id = ? AND user_id = ? "
+                    "AND account_key = ''",
+                    (channel_type, sender_id, user_id),
+                )
         return bool(cursor.rowcount)
 
 

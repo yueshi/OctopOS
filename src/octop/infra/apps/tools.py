@@ -13,11 +13,14 @@ from pydantic import Field
 from octop.infra.agents.tool_scope import current_tool_context, current_tool_scope
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps.access import Action, Decision
+from octop.infra.apps.host_policy import HostPolicyService
+from octop.infra.apps.im_guard import tool_source_is_im
 from octop.infra.apps.integration_ops import (
     integration_health,
     integration_inventory,
     integration_trace,
 )
+from octop.infra.apps.members import AppMemberService
 from octop.infra.apps.models import MAIN_TABLE_KEY
 from octop.infra.apps.pii import detect_text_pii, find_unmarked_pii
 from octop.infra.apps.service import (
@@ -149,6 +152,16 @@ def _tool_config() -> dict[str, Any]:
             config["session_key"] = scope.session_key
         if scope.identity_verified and not config.get("octop_identity_verified"):
             config["octop_identity_verified"] = True
+        if scope.owner_verified and not config.get("octop_owner_verified"):
+            config["octop_owner_verified"] = True
+        if scope.sender_user_id is not None and not config.get("octop_sender_user_id"):
+            config["octop_sender_user_id"] = str(scope.sender_user_id)
+        if scope.sender_id and not config.get("octop_sender_id"):
+            config["octop_sender_id"] = scope.sender_id
+        if scope.account_key and not config.get("octop_account_key"):
+            config["octop_account_key"] = scope.account_key
+        if scope.chat_type and not config.get("octop_chat_type"):
+            config["octop_chat_type"] = scope.chat_type
     return config
 
 
@@ -163,6 +176,27 @@ def _is_dashboard_source(source: str) -> bool:
 
 def _tool_identity_verified() -> bool:
     return bool(_tool_config().get("octop_identity_verified"))
+
+
+def _tool_owner_verified() -> bool:
+    return bool(_tool_config().get("octop_owner_verified"))
+
+
+def _tool_sender_user_id() -> int | None:
+    raw = _tool_config().get("octop_sender_user_id")
+    try:
+        value = int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _tool_sender_id() -> str:
+    return str(_tool_config().get("octop_sender_id") or "").strip()
+
+
+def _tool_account_key() -> str:
+    return str(_tool_config().get("octop_account_key") or "").strip()
 
 
 def _session_chat_type() -> str:
@@ -610,7 +644,7 @@ def _resolve_app_by_name(
     return row
 
 
-def _auth_link_missing(source: str, public_base_url: str) -> list[str]:
+def _auth_link_missing(source: str, public_base_url: str, *, identity_ready: bool) -> list[str]:
     missing: list[str] = []
     if not public_base_url.strip():
         missing.append("public_base_url")
@@ -618,13 +652,13 @@ def _auth_link_missing(source: str, public_base_url: str) -> list[str]:
         missing.append("im_source")
     if _session_chat_type() != "dm":
         missing.append("dm_chat")
-    if not _tool_identity_verified():
+    if not identity_ready:
         missing.append("identity_verified")
     return missing
 
 
-def _can_issue_auth_link(source: str, public_base_url: str) -> bool:
-    return not _auth_link_missing(source, public_base_url)
+def _can_issue_auth_link(source: str, public_base_url: str, *, identity_ready: bool) -> bool:
+    return not _auth_link_missing(source, public_base_url, identity_ready=identity_ready)
 
 
 async def _channel_link_payload(
@@ -638,36 +672,50 @@ async def _channel_link_payload(
     rotate: bool,
     ttl_days: int,
     origin: str = "app_share_link",
+    repos: RepoBundle | None = None,
 ) -> list[dict[str, Any]]:
-    """Return either a personal sign-in link or the public read-only link."""
+    """Return either a personal sign-in link or the public read-only link.
+
+    PR-12 chooses the subject from the verified IM sender rather than the
+    agent owner. A bound member/guest in a private chat gets their own
+    one-time link; groups and unbound senders keep the public-link path.
+    """
     if mode not in {"auto", "public", "auth"}:
         raise ValueError("mode must be auto, public or auth")
     if mode == "auth" and rotate:
         raise ValueError("rotate only applies to public links")
+    is_im = tool_source_is_im(source)
+    chat_type = _session_chat_type()
+    sender_user_id = _tool_sender_user_id() if is_im else None
+    identity_ready = sender_user_id is not None or _tool_identity_verified() if is_im else True
+    target_user_id = sender_user_id if sender_user_id is not None else user_id
     permission = service.permission_for(
         row,
-        user_id,
-        is_admin=service.is_admin(user_id),
+        target_user_id,
+        is_admin=service.is_admin(target_user_id),
     )
-    if permission is None:
-        raise ValueError("this user has no permission on this MiniApp")
-    auth_ready = _can_issue_auth_link(source, public_base_url)
+    member = permission is not None
     is_manager = service.is_admin(user_id) or row.owner_user_id == user_id
 
     if mode == "auth":
-        missing = _auth_link_missing(source, public_base_url)
+        if not member:
+            raise ValueError(
+                "auth links require the IM sender to be an active member of this MiniApp. "
+                "Ask the app owner for an invite/join code or use a public link."
+            )
+        missing = _auth_link_missing(source, public_base_url, identity_ready=identity_ready)
         if missing:
             guidance = (
                 " This turn is from the dashboard; personal links require a verified "
                 "channel identity in a private IM chat."
                 if _is_dashboard_source(source)
-                else " Personal links require the sender to be /bind-verified as the "
-                "app owner in a private IM chat; use a public link otherwise."
+                else " Personal links require the sender to be /bind-verified in a "
+                "private IM chat; use a public link otherwise."
             )
             raise ValueError(
                 "auth links require a verified channel identity in a private IM chat and a configured "
                 f"public_base_url (missing: {', '.join(missing)}; "
-                f"source={source or 'unknown'}; chat_type={_session_chat_type() or 'unknown'})."
+                f"source={source or 'unknown'}; chat_type={chat_type or 'unknown'})."
                 f"{guidance} Do not create the link with a script, shell command, database "
                 "query or platform source; retry app_share_link from the IM chat."
             )
@@ -678,14 +726,22 @@ async def _channel_link_payload(
         # Rotating a public link must not silently return a personal auth link.
         use_auth = False
     else:
-        use_auth = auth_ready
+        use_auth = (
+            is_im
+            and chat_type == "dm"
+            and identity_ready
+            and member
+            and _can_issue_auth_link(source, public_base_url, identity_ready=identity_ready)
+        )
 
     if use_auth:
         token, _expires_at = service.create_access_link(
             row,
-            user_id=user_id,
+            user_id=target_user_id,
             channel_type=_source_channel_type(source),
             channel_subject_id=_session_subject(),
+            account_key=_tool_account_key(),
+            sender_id=_tool_sender_id(),
             origin=origin,
         )
         # Query, not fragment: IM clients (notably the WeChat in-app browser)
@@ -700,8 +756,55 @@ async def _channel_link_payload(
             },
         ]
 
+    if is_im and chat_type == "dm" and is_manager and repos is not None and mode == "auto":
+        # The sender has no personal membership yet: hand them a join code the
+        # app owner can safely forward in this private chat.
+        member_service = AppMemberService(
+            app_repo=repos.light_app_repo,
+            user_repo=repos.user_repo,
+            invite_repo=repos.app_member_invite_repo,
+            join_code_repo=repos.app_join_code_repo,
+            host_policy=HostPolicyService(repos.agent_repo),
+        )
+        sender_row = repos.user_repo.get(sender_user_id) if sender_user_id is not None else None
+        audience = "member" if sender_row is not None and sender_row.kind == "member" else "guest"
+        join_row, code = member_service.create_join_code(
+            row,
+            audience=audience,
+            permission="view" if audience == "member" else "participate",
+            ttl_seconds=86400,
+            max_uses=1,
+            requires_approval=False,
+            actor=user_id,
+        )
+        repos.audit_repo.write(
+            actor=f"user:{user_id}",
+            action="light_app.join_code.create",
+            target=row.app_id,
+            payload=json.dumps(
+                {
+                    "join_code_id": join_row.join_code_id,
+                    "audience": audience,
+                    "via": origin,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        base = public_base_url.rstrip("/")
+        link = f"{base}/join?code={code}" if base else f"/join?code={code}"
+        return [
+            {"type": "text", "text": f"{row.name}\n{link}"},
+            {
+                "type": "text",
+                "text": "single_use=true\nvalid_for_seconds=86400",
+            },
+        ]
+
     if not is_manager:
-        raise ValueError("only the app owner or an admin can manage public links")
+        raise ValueError(
+            "only the app owner or an admin can manage public links; "
+            "ask them for an entry link instead"
+        )
     if not service.authorize_actor(user_id, row, Action.PUBLISH).allowed:
         raise ValueError("only the app owner or an admin can manage public links")
     payload = await _share_link_payload(
@@ -1128,6 +1231,7 @@ def build_app_tools(
                     rotate=False,
                     ttl_days=0,
                     origin="app_open",
+                    repos=repos,
                 )
                 return _ok(payload)
             except ValueError:
@@ -1188,6 +1292,7 @@ def build_app_tools(
                 mode=mode,
                 rotate=rotate,
                 ttl_days=ttl_days,
+                repos=repos,
             )
             return _ok(payload)
         except Exception as exc:

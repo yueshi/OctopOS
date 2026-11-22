@@ -34,6 +34,9 @@ vi.mock("../api/modules/auth", () => ({
     getOauthStatus: () => Promise.resolve({ providers: [] }),
     updateProfile: vi.fn(),
     logout: vi.fn(),
+    listChannelBindings: () => Promise.resolve({ identities: [] as unknown[] }),
+    createChannelBindCode: vi.fn(),
+    deleteChannelBinding: vi.fn(),
   },
 }));
 

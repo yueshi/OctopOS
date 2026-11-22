@@ -1,10 +1,31 @@
 # MiniApp Identity 功能详细实施计划
 
-> Status: implementation plan / draft  
-> Date: 2026-11-21  
+> Status: P0/P1/P2a implemented; verification / merge pending  
+> Date: 2026-11-21（updated 2026-11-22）  
 > Branch: `feature/miniapp-capabilities`  
 > Design: [`docs/miniapp-identity-access-plan.md`](./miniapp-identity-access-plan.md)（v3）  
 > 本文只回答“怎么做”：任务拆分、文件、DDL、API、测试、顺序、回滚。设计取舍与安全模型见 v3 方案。
+
+---
+
+## 0. 当前状态（2026-11-22）
+
+| 阶段 | PR | 状态 | 说明 |
+|---|---|---|---|
+| P0 | PR-01 ~ PR-05 | ✅ 已完成 | schema v46、Principal / token scope、`authorize()`、路由与 Agent 工具迁移 |
+| P1 | PR-06 | ✅ 已完成 | 行级 PII、行归属、`participate` 行过滤 |
+| P1 | PR-07 | ✅ 已完成 | 成员 / 邀请 / 加入码、`status` / `joined_via`、schema v47 |
+| P1 | PR-08 | ✅ 已完成 | guest 会话、refresh、guest 门户 API、app token |
+| P1 | PR-09 | ✅ 已完成 | host policy、宿主审批、单 owner 访问申请 |
+| P1 | PR-10 | ✅ 已完成并部署 | 成员页、`/join`、`/my`、per-app token、403 CTA |
+| P2a | PR-11 | ✅ 已实现 | 048 迁移、`account_key` / `sender_id`、`ToolScope`、IM 数据工具收口 |
+| P2a | PR-12 | ✅ 已实现 | 分享链接分流、`/link` 握手、guest 个人入口码 |
+| P2b / P3 | — | ⏸ 不在本次范围 | per-sender actor、submission、组织化共享 |
+
+- 代码基线：PR-01~PR-10 已提交 `aed36ded` 并部署（schema v47）；PR-11/12 工作树已完成，schema v48，待提交 / 部署。
+- 验证基线：PR-10 定向测试（应用单测 529、应用集成 97、宿主策略 7、成员服务 10、前端 32 个用例）、`tsc -b`、ESLint、生产构建通过；线上 `/api/health` 与新路由已验收。PR-11/12 定向：identity/gateway/agents 1879、apps 505、db 245、集成 103、备份 22，`make lint` / `make typecheck` 通过。
+- 未完成：PR-01~PR-10 的一次完整 `make all`（本机 88% 中止）；PR-11/12 使用定向测试 + lint + mypy，合并前仍应在 CI 或停服窗口补跑全量。
+- 已知旁路：`PUT /api/apps/{id}/shares` 仍是旧的全量平台协作者接口，保留 guest 行但不经过 host policy；建议在 PR-11 前收口。
 
 ---
 
@@ -12,9 +33,9 @@
 
 ### 1.1 本计划覆盖
 
-- **P0**：身份基座（`users.kind`、`PrincipalDirectory`、三种 token scope）+ 授权内核（`authorize()`）+ 行归属 / 表可见性 schema + 行级 PII + `/shares` 保留 guest。
-- **P1**：Web 端成员、邀请、加入码、guest 会话、guest 门户、host policy、成员管理 UI。
-- **P2a**：IM 身份键 v2、`ToolScope` sender 字段、`app_share_link` 分流、app 数据工具收口、`/link` 握手。
+- **P0** ✅：身份基座（`users.kind`、`PrincipalDirectory`、三种 token scope）+ 授权内核（`authorize()`）+ 行归属 / 表可见性 schema + 行级 PII + `/shares` 保留 guest。
+- **P1** ✅：Web 端成员、邀请、加入码、guest 会话、guest 门户、host policy、成员管理 UI。
+- **P2a** 🚧：IM 身份键 v2、`ToolScope` sender 字段、`app_share_link` 分流、app 数据工具收口、`/link` 握手。
 - **P2b / P3**：只给前置条件和拆分建议，不在本次实施。
 
 ### 1.2 完成定义（每个 PR 都适用）
@@ -791,6 +812,14 @@ function tokenFor(path: string): string {
 
 ### WP5：IM 身份与链接（P2a）
 
+> **PR-11 开工基线（2026-11-22）**
+>
+> - `ToolScope` 已存在（`src/octop/infra/agents/tool_scope.py`），但只有 `identity_verified`；PR-11 增加 `owner_verified` / `sender_user_id` / `sender_id` / `account_key`，保留 `identity_verified` 作为兼容字段。
+> - `channel_identities` 目前仍是 045 的 `external_subject_id` 单键；048 重建后，旧行的 `account_key = ''`，查询先精确后 legacy。
+> - `app_share_link` 当前通过 `_channel_link_payload` 使用 `user_id`（IM 场景即 agent owner）决定个人码；PR-12 改为使用 `ToolScope.sender_user_id`。
+> - `octop-gateway` 是外部包；若适配器尚未在 `InboundMessage.metadata` 暴露 `account_key` / 稳定 `sender_id`，需要同步升级包或在 Octop 适配层补齐。`harness_request.py` 已消费 `metadata.sender_id` 做群聊标签，可作为字段命名参考。
+> - 048 迁移同时加 `app_access_codes.account_key` / `sender_id`，并新增 `channel_link_codes`。
+
 #### T5.1 `channel_identities` v2（PR-11）
 
 **迁移（048，SQLite 重建）**
@@ -852,9 +881,11 @@ PG 用 `ALTER TABLE ... RENAME COLUMN` + 删除旧唯一约束 + 新增唯一约
 **文件**
 
 - `src/octop/infra/agents/tool_scope.py`
+- `src/octop/infra/agents/middleware/tool_audit.py`（IM 工具闸门）
+- `src/octop/infra/apps/im_guard.py`（新）
 - `src/octop/infra/gateway/process/processor.py`
 - `src/octop/infra/gateway/process/harness_request.py`
-- `tests/unit/agents/test_tool_scope.py`
+- `tests/unit/agents/test_tool_scope.py`、`test_im_tool_guard.py`
 
 **字段**
 
@@ -891,6 +922,8 @@ account_key: str
 - 未绑定 DM → `app_read_data` 拒绝，`app_share_link` 允许。
 - 群聊 → 全部数据工具拒绝。
 - owner DM → 数据工具允许。
+
+> **PR-12 开工基线（2026-11-22）**：PR-11 必须先落地。当前 `create_access_link` / `preview_access_link` / `consume_access_link` 位于 `src/octop/infra/apps/service.py`；`api/routers/app_access_link.py` 的 `_linked_user` 仍走 `user_manager.get_by_id`（member-only），兑换 guest 时必须改为 `user_repo.get` 并支持返回 `guest_token`。`/join` 页面已有 guest 会话与 app token，可直接显示 `/link` 引导。
 
 #### T5.5 `app_share_link` 分流（PR-12）
 
@@ -957,8 +990,9 @@ CREATE TABLE channel_link_codes (
 - `src/octop/infra/gateway/slash/catalog.py`
 - `src/octop/infra/gateway/slash/handlers/platform.py`
 - `src/octop/infra/auth/channel_binding.py`
-- `src/octop/api/routers/app_join.py`（link-code）
-- `tests/unit/gateway/test_slash_link.py`
+- `src/octop/api/routers/app_link_codes.py`（新，`POST /api/apps/{id}/link-code`）
+- `src/octop/infra/db/repos/channel_link_codes.py`（新）
+- `tests/unit/gateway/test_slash_link.py`、`tests/unit/auth/test_link_codes.py`
 
 ---
 
@@ -994,6 +1028,8 @@ CREATE TABLE channel_link_codes (
 | 047 | P1 | `light_app_collaborators.status/joined_via/invited_by`、`app_join_codes`、`app_member_invites`、`app_sessions`、`agents.external_sharing_policy` |
 | 048 | P2a | `channel_identities` 重建、`app_access_codes.account_key/sender_id`、`channel_link_codes` |
 | 049 | P3 | `light_app_rows.submitter_ref`、`app_submit_tokens`、用户组 / SSO 域 |
+
+> 状态：046（v46）、047（v47）已发布并部署；048（v48）已实现，待提交 / 部署。
 
 > 若开工时确认 045 未发布且所有环境 < 45，可把 046 折入 045；否则坚持 046+。**不要**在已到 v45 的库上改 045。
 
@@ -1310,17 +1346,17 @@ dashboard/src/locales/{en,zh}.json
 
 - [ ] 确认迁移水位（046 / 047 / 048）
 - [ ] 建 `tests/support/identity.py`
-- [ ] PR-01 schema + 回填 + 迁移测试
-- [ ] PR-02 User.kind + PrincipalDirectory + scope
-- [ ] PR-03 access.py + route registry
-- [ ] PR-04 路由迁移 + grep
-- [ ] PR-05 工具迁移 + `/shares`
-- [ ] PR-06 PII + row_owner
-- [ ] PR-07 成员 / 邀请 / 加入码
-- [ ] PR-08 guest session / portal
-- [ ] PR-09 host policy / access request 分支
-- [ ] PR-10 dashboard
-- [ ] PR-11 channel identity v2 / tool gate
-- [ ] PR-12 share-link / `/link`
-- [ ] 回退验证全部通过
-- [ ] 文档回写（设计文档 §12 / 本计划状态）
+- [x] PR-01 schema + 回填 + 迁移测试
+- [x] PR-02 User.kind + PrincipalDirectory + scope
+- [x] PR-03 access.py + route registry
+- [x] PR-04 路由迁移 + grep
+- [x] PR-05 工具迁移 + `/shares`
+- [x] PR-06 PII + row_owner
+- [x] PR-07 成员 / 邀请 / 加入码
+- [x] PR-08 guest session / portal
+- [x] PR-09 host policy / access request 分支
+- [x] PR-10 dashboard
+- [x] PR-11 channel identity v2 / tool gate
+- [x] PR-12 share-link / `/link`
+- [ ] 回退验证全部通过（PR-11/12 完成后统一复核）
+- [x] 文档回写（设计文档 §12 / 本计划状态）

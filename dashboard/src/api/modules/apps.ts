@@ -1484,6 +1484,12 @@ export const appsApi = {
       method: "POST",
     }),
 
+  createLinkCode: (appId: string) =>
+    request<{ code: string; expires_at: number; ttl_seconds: number }>(
+      `/apps/${encodeId(appId)}/link-code`,
+      { method: "POST" },
+    ),
+
   refreshGuestSession: (refreshToken: string) =>
     request<GuestTokenPair>("/guest/session/refresh", {
       method: "POST",

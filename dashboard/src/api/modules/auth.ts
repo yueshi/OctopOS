@@ -94,6 +94,11 @@ export interface AppAccessExchange extends LoginResponse {
   /** Always ``app``: the token only unlocks this MiniApp's routes. */
   scope: string;
   app_id: string;
+  /** Present when the personal link belongs to a guest account. */
+  guest_token?: string | null;
+  refresh_token?: string | null;
+  guest_expires_in?: number | null;
+  refresh_expires_in?: number | null;
 }
 
 export interface ChannelBindCode {
@@ -106,6 +111,8 @@ export interface ChannelBindCode {
 export interface ChannelBinding {
   channel_type: string;
   subject_id: string;
+  /** Bot/account key; empty for bindings created before identity v2. */
+  account_key?: string;
   verified_at: number;
 }
 
@@ -311,11 +318,16 @@ export const authApi = {
     request<ChannelBindingList>("/auth/channel-bindings"),
 
   /** Remove one IM identity from this account. */
-  deleteChannelBinding: (channelType: string, subjectId: string) =>
+  deleteChannelBinding: (
+    channelType: string,
+    subjectId: string,
+    accountKey = "",
+  ) =>
     request<void>(
       `/auth/channel-bindings?channel_type=${encodeURIComponent(
         channelType,
-      )}&subject_id=${encodeURIComponent(subjectId)}`,
+      )}&subject_id=${encodeURIComponent(subjectId)}` +
+        (accountKey ? `&account_key=${encodeURIComponent(accountKey)}` : ""),
       { method: "DELETE" },
     ),
 

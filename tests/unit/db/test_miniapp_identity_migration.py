@@ -60,7 +60,7 @@ def test_v46_adds_columns_and_backfills_row_owner(
     monkeypatch.setattr(migrate, "_discover", real_discover)
     migrate.run_migrations(db)
 
-    assert _version(db) == 47
+    assert _version(db) == 48
     assert "kind" in _columns(db, "users")
     assert "member_visible" in _columns(db, "light_app_tables")
     assert "row_owner_user_id" in _columns(db, "light_app_rows")
@@ -96,7 +96,7 @@ def test_v46_replay_is_idempotent(tmp_path: Path) -> None:
     migrate.run_migrations(db)
     migrate.run_migrations(db)
 
-    assert _version(db) == 47
+    assert _version(db) == 48
     assert "kind" in _columns(db, "users")
     assert "member_visible" in _columns(db, "light_app_tables")
     assert "row_owner_user_id" in _columns(db, "light_app_rows")
@@ -115,7 +115,7 @@ def test_v46_repairs_columns_when_version_was_recorded(tmp_path: Path) -> None:
 
     migrate.run_migrations(db)
 
-    assert _version(db) == 47
+    assert _version(db) == 48
     assert "kind" in _columns(db, "users")
     assert "member_visible" in _columns(db, "light_app_tables")
     assert "row_owner_user_id" in _columns(db, "light_app_rows")

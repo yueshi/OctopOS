@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Result, Space, Spin, Typography } from "antd";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { setAppScope, setAuthToken } from "../../api";
+import {
+  setAppScope,
+  setAppToken,
+  setAuthToken,
+  setGuestSession,
+} from "../../api";
 import { authApi, type AppAccessPreview } from "../../api/modules/auth";
 import { refreshServerLabels } from "../../i18n";
 import { applyUserLocale } from "../../utils/locale";
@@ -65,7 +70,20 @@ export default function AppAccessComplete() {
       .then(async (res) => {
         // The exchanged token is app-scoped and short-lived; keep it in this
         // tab only and tell the request layer not to treat it as a full login.
-        setAuthToken(res.access_token, false);
+        if (res.guest_token) {
+          // Guest links carry a refreshable guest session; the app token stays
+          // per-app so the guest portal remains available after the exchange.
+          setGuestSession({
+            guestToken: res.guest_token,
+            refreshToken: res.refresh_token,
+            guestExpiresIn: res.guest_expires_in ?? undefined,
+            refreshExpiresIn: res.refresh_expires_in ?? undefined,
+            remember: true,
+          });
+          setAppToken(res.app_id, res.access_token, res.expires_in);
+        } else {
+          setAuthToken(res.access_token, false);
+        }
         setAppScope({
           app_id: res.app_id,
           expires_at: Math.floor(Date.now() / 1000) + res.expires_in,

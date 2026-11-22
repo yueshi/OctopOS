@@ -7276,6 +7276,8 @@ class AppService:
         user_id: int,
         channel_type: str = "",
         channel_subject_id: str = "",
+        account_key: str = "",
+        sender_id: str = "",
         ttl_seconds: int = ACCESS_LINK_TTL_SECONDS,
         origin: str = "",
     ) -> tuple[str, int]:
@@ -7309,6 +7311,8 @@ class AppService:
             permission=permission,
             channel_type=channel_type.strip(),
             channel_subject_id=channel_subject_id.strip(),
+            account_key=account_key.strip(),
+            sender_id=sender_id.strip(),
             expires_at=expires_at,
         )
         self._audit_access(
@@ -7318,6 +7322,8 @@ class AppService:
             payload={
                 "permission": permission,
                 "channel_type": channel_type.strip(),
+                "account_key": account_key.strip(),
+                "sender_id": sender_id.strip(),
                 "expires_at": expires_at,
                 "origin": origin_value,
             },

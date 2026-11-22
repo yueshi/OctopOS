@@ -185,13 +185,10 @@ class PrincipalDirectory:
         account_key: str,
         sender_id: str,
     ) -> Principal | None:
-        """Resolve a bound IM sender.
-
-        ``account_key`` is carried now and used by the P2a identity migration;
-        the current ``channel_identities`` table only has the legacy key.
-        """
-        del account_key
-        row = self._repos.channel_identity_repo.get(channel_type, sender_id)
+        """Resolve a bound IM sender (exact account key, then legacy key)."""
+        row = self._repos.channel_identity_repo.get(
+            channel_type, sender_id, account_key=account_key
+        )
         if row is None:
             return None
         return self.get_user(row.user_id)

@@ -306,6 +306,12 @@ def build_harness_request(
     message_kwargs: dict[str, Any] | None = None,
     reasoning_overrides: dict[str, Any] | None = None,
     identity_verified: bool = False,
+    owner_verified: bool = False,
+    sender_user_id: int | None = None,
+    sender_id: str = "",
+    account_key: str = "",
+    chat_type: str = "",
+    locale: str = "",
 ) -> dict[str, Any]:
     if messages is not None:
         req: dict[str, Any] = {
@@ -325,6 +331,18 @@ def build_harness_request(
             configurable["octop_reasoning_overrides"] = reasoning_overrides
         if identity_verified:
             configurable["octop_identity_verified"] = True
+        if owner_verified:
+            configurable["octop_owner_verified"] = True
+        if sender_user_id is not None:
+            configurable["octop_sender_user_id"] = str(sender_user_id)
+        if sender_id:
+            configurable["octop_sender_id"] = sender_id
+        if account_key:
+            configurable["octop_account_key"] = account_key
+        if chat_type:
+            configurable["octop_chat_type"] = chat_type
+        if locale:
+            configurable["octop_locale"] = locale
         if configurable:
             req["configurable"] = configurable
         if model:
@@ -363,6 +381,18 @@ def build_harness_request(
         configurable_turn["octop_reasoning_overrides"] = reasoning_overrides
     if identity_verified:
         configurable_turn["octop_identity_verified"] = True
+    if owner_verified:
+        configurable_turn["octop_owner_verified"] = True
+    if sender_user_id is not None:
+        configurable_turn["octop_sender_user_id"] = str(sender_user_id)
+    if sender_id:
+        configurable_turn["octop_sender_id"] = sender_id
+    if account_key:
+        configurable_turn["octop_account_key"] = account_key
+    if chat_type:
+        configurable_turn["octop_chat_type"] = chat_type
+    if locale:
+        configurable_turn["octop_locale"] = locale
     if configurable_turn:
         req["configurable"] = configurable_turn
     if model:

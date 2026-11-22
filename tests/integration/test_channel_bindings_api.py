@@ -33,7 +33,7 @@ async def test_bind_code_and_binding_lifecycle(
         code_repo=srv.services.repos.channel_bind_code_repo,
         code=body["code"],
         channel_type="weixin",
-        subject_id="wx-alice",
+        sender_id="wx-alice",
     )
 
     listed = await client.get("/api/auth/channel-bindings", headers=alice_auth)
@@ -43,6 +43,7 @@ async def test_bind_code_and_binding_lifecycle(
         {
             "channel_type": "weixin",
             "subject_id": "wx-alice",
+            "account_key": "",
             "verified_at": identities[0]["verified_at"],
         }
     ]

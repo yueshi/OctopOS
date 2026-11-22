@@ -15,18 +15,14 @@ from octop.api.routers.auth import _user_json
 from octop.infra.apps.limits import public_slot
 from octop.infra.apps.service import AppService
 from octop.infra.apps.wiring import build_app_service
-from octop.infra.auth.tokens import sign_token
+from octop.infra.auth.guest_sessions import AppSessionService
+from octop.infra.db.repos.users import UserRow
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
+from octop.infra.users.principals import principal_from_user_row
 
 router = APIRouter(prefix="/app-access")
-
-# The exchanged session is app-scoped, so it does not inherit the global
-# dashboard TTL. Two hours is enough to work in the app and keeps a forwarded
-# link's blast radius small.
-APP_ACCESS_SESSION_TTL_SECONDS = 7200
-
 
 class AppAccessCodeBody(BaseModel):
     code: str = Field(min_length=1, max_length=512, description="One-time access code.")
@@ -50,6 +46,16 @@ class AppAccessExchangeOut(BaseModel):
     app_id: str = Field(description="MiniApp this session is limited to.")
     user: dict[str, Any] = Field(description="User profile for the signed-in user.")
     redirect: str = Field(description="Dashboard path to open after login.")
+    guest_token: str | None = Field(
+        default=None,
+        description="Guest-session JWT; present only when the link belongs to a guest.",
+    )
+    refresh_token: str | None = Field(
+        default=None,
+        description="Guest refresh token; rotate it at /api/guest/session/refresh.",
+    )
+    guest_expires_in: int | None = None
+    refresh_expires_in: int | None = None
 
 
 def _service(server: OctopServer) -> AppService:
@@ -65,10 +71,17 @@ def _invalid() -> OctopError:
     return OctopError.localized(ErrorCode.APP_ACCESS_LINK_INVALID)
 
 
-def _linked_user(server: OctopServer, user_id: int) -> User:
-    if server.user_manager is None:
+def _linked_user_row(server: OctopServer, user_id: int) -> UserRow:
+    if server.services is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
-    user = server.user_manager.get_by_id(user_id)
+    row = server.services.user_repo.get(user_id)
+    if row is None or row.disabled or str(row.kind or "member") not in {"member", "guest"}:
+        raise _invalid()
+    return row
+
+
+def _linked_user(server: OctopServer, user_id: int) -> User:
+    user = principal_from_user_row(_linked_user_row(server, user_id)).user
     if user is None:
         raise _invalid()
     return user
@@ -143,34 +156,46 @@ async def exchange_app_access(
     row = service.consume_access_link(body.code)
     if row is None:
         raise _invalid()
-    user = _linked_user(server, row.user_id)
-    secret = server.services.secret_repo.get("jwt")
-    if secret is None:
-        raise OctopError(ErrorCode.INTERNAL_ERROR, "jwt secret missing")
-    ttl = APP_ACCESS_SESSION_TTL_SECONDS
-    token = sign_token(
-        secret,
-        sub=user.id,
-        uname=user.username,
-        role=user.role,
-        ttl_seconds=ttl,
-        extra={"scope": "app", "app_id": row.app_id, "perm": row.permission},
-    )
+    user_row = _linked_user_row(server, row.user_id)
+    user = principal_from_user_row(user_row).user
+    if user is None:
+        raise _invalid()
+    sessions = AppSessionService(server.services.repos)
+    guest = None
+    if user.kind == "guest":
+        guest = sessions.create_guest_session(user.id)
+        token = sessions.mint_app_token(
+            user_row,
+            row.app_id,
+            role=row.permission,
+            session_id=guest.session_id,
+        )
+    else:
+        token = sessions.mint_app_token(user_row, row.app_id, role=row.permission)
     server.services.audit_repo.write(
         actor=f"user:{user.id}",
         action="light_app.access_link.exchange",
         target=row.app_id,
         payload=json.dumps(
-            {"permission": row.permission, "scope": "app", "ttl_seconds": ttl},
+            {
+                "permission": row.permission,
+                "scope": "app",
+                "kind": user.kind,
+                "ttl_seconds": token.expires_in,
+            },
             ensure_ascii=False,
         ),
     )
     _no_store(response)
     return AppAccessExchangeOut(
-        access_token=token,
-        expires_in=ttl,
+        access_token=token.access_token,
+        expires_in=token.expires_in,
         scope="app",
         app_id=row.app_id,
         user=_user_json(user, locale=user.locale),
         redirect=f"/apps/{row.app_id}",
+        guest_token=guest.guest_token if guest is not None else None,
+        refresh_token=guest.refresh_token if guest is not None else None,
+        guest_expires_in=guest.guest_expires_in if guest is not None else None,
+        refresh_expires_in=guest.refresh_expires_in if guest is not None else None,
     )

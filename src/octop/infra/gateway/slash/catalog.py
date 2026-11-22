@@ -272,6 +272,16 @@ CATALOG: tuple[SlashCommandSpec, ...] = (
         persist_checkpoint=False,
     ),
     SlashCommandSpec(
+        name="link",
+        usage="/link <code>",
+        icon="Link2",
+        tone="emerald",
+        category="system",
+        origins=frozenset({"im"}),
+        # The code is a credential; do not persist it in the agent history.
+        persist_checkpoint=False,
+    ),
+    SlashCommandSpec(
         name="exit",
         aliases=("quit",),
         usage="/exit",

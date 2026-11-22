@@ -488,7 +488,7 @@ app_access_codes (
 - 同一 IM 身份已绑定其他用户时拒绝覆盖，需先在原账号 `DELETE /api/auth/channel-bindings` 解绑；绑定/解绑写审计。
 - HITL 恢复时按 session 的 `channel_type + channel_subject_id` 重新校验；若由其他用户（如管理员）审批，恢复的 `identity_verified` 强制为 False。
 - 表 `channel_identities` / `channel_bind_codes` 在 045 迁移中，本次不新增迁移。
-- 本节描述的是**当前已实现状态**。外部参与者 / guest 的后续身份模型见 [`docs/miniapp-identity-access-plan.md`](./miniapp-identity-access-plan.md)（v3）；P2a 会在 `channel_identities` 上扩展 `account_key + sender_id`，并用 `/link` 握手支持非 owner 绑定。
+- 本节描述的是**当前已实现状态**。Web 侧 guest / 成员身份已在 P1 落地；IM 侧 P2a（PR-11/12，已实现、待部署）在 `channel_identities` 上扩展了 `account_key + sender_id`，用 `ToolScope` 收口 app 数据工具，并用 `/link` 握手支持非 owner 绑定。见 [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)。
 
 ### 7.4 D5 渠道矩阵
 

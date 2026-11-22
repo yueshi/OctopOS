@@ -3027,7 +3027,9 @@
     "drive_disable": "Stop drive loop",
     "drive_list": "Show drive loop",
     "ask_creator": "Ask the creator",
-    "deliverable_update": "Update goal deliverable"
+    "deliverable_update": "Update goal deliverable",
+    "im_group_denied": "MiniApp data tools are only available in a private chat with the app owner's bound account. This is a group chat.",
+    "im_owner_required": "This IM account is not bound to the MiniApp owner, so it cannot read or write app data. Ask the owner for an entry link or use the public read-only link."
   },
   "toolSettings": {
     "title": "Tool settings",
@@ -8496,6 +8498,11 @@
     "deletedBody": "Your sessions are revoked. You can join again with a new invite.",
     "useCode": "Use a join code",
     "noSessionTitle": "No guest session",
-    "noSessionBody": "Open the invite or join code you received to get started."
+    "noSessionBody": "Open the invite or join code you received to get started.",
+    "linkCode": "Link IM account",
+    "linkCodeTitle": "Link IM account for {{name}}",
+    "linkCodeHint": "In the private chat with the bot, send this command. It expires in 5 minutes and can be used once.",
+    "linkCodeDone": "Done",
+    "linkCodeFailed": "Could not create a link code"
   }
 }

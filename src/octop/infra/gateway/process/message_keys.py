@@ -109,9 +109,33 @@ def resolve_user_id_for_message(
 
 
 def subject_id_from_message(msg: InboundMessage) -> str:
+    """Reply/conversation subject: the peer in a DM, the chat in a group."""
     if msg.channel_subject and msg.channel_subject.subject_id:
         return msg.channel_subject.subject_id
     return "0"
+
+
+def sender_id_from_message(msg: InboundMessage) -> str:
+    """Stable platform sender id.
+
+    Group adapters keep the author in ``metadata.sender_id``; in a DM the
+    channel subject is the sender. Fall back to the subject when an adapter
+    does not provide the explicit field.
+    """
+    raw = str((msg.metadata or {}).get("sender_id") or "").strip()
+    return raw or subject_id_from_message(msg)
+
+
+def account_key_from_message(msg: InboundMessage) -> str:
+    """Bot/account dimension for an IM identity.
+
+    Adapters may pass the platform app/bot id in ``metadata.account_key``.
+    Until every adapter provides it, the Octop channel instance id is the
+    stable fallback: one channel row is one bot, so two bots never share an
+    identity by accident.
+    """
+    raw = str((msg.metadata or {}).get("account_key") or "").strip()
+    return raw or str(msg.channel_id or "").strip()
 
 
 def chat_type_from_message(msg: InboundMessage) -> str:
@@ -177,6 +201,9 @@ _PERSISTED_META_KEYS = (
     "ws_connection_id",
     "session_id",
     "task_id",
+    "account_key",
+    "sender_id",
+    "sender_name",
 )
 
 

@@ -127,7 +127,7 @@ def test_resolve_channel_and_get_user(tmp_path: Path) -> None:
     services, member_id, guest_id = _setup(tmp_path)
     services.channel_identity_repo.bind(
         channel_type="telegram",
-        external_subject_id="sender-1",
+        sender_id="sender-1",
         user_id=guest_id,
     )
     directory = PrincipalDirectory(services.repos)

@@ -85,10 +85,11 @@ does not set these headers itself.
 | `GET`    | `/auth/oidc/callback` | public | Identity-provider callback; redirects to dashboard login completion |
 | `POST`   | `/auth/oidc/exchange` | public | body `{code}` → same JWT response as `/auth/login` |
 | `POST`   | `/auth/app-access/preview` | public | body `{code}` → `{app_id, app_name, username, display_name, expires_at}`; read-only, does not consume |
-| `POST`   | `/auth/app-access/exchange` | public | body `{code}` → app-scoped JWT (`scope: "app"`, `app_id`, 2h TTL) plus `redirect`; consumes the one-time MiniApp access link. Only this app's routes and read-only bootstrap endpoints are allowed. The redirect opens the MiniApp full-screen runtime (no dashboard shell) |
+| `POST`   | `/auth/app-access/exchange` | public | body `{code}` → app-scoped JWT (`scope: "app"`, `app_id`, 2h TTL) plus `redirect`; guest links also return `guest_token` / `refresh_token`. Consumes the one-time MiniApp access link. Only this app's routes and read-only bootstrap endpoints are allowed. The redirect opens the MiniApp full-screen runtime (no dashboard shell) |
 | `POST`   | `/auth/channel-bindings/code` | user | Mint a one-time IM bind code (5 min) to send as `/bind <code>` in a private chat |
-| `GET`    | `/auth/channel-bindings` | user | `{identities: [{channel_type, subject_id, verified_at}]}` bound to this account |
-| `DELETE` | `/auth/channel-bindings` | user | Query `channel_type`, `subject_id` → `204`; only removes bindings owned by the caller |
+| `GET`    | `/auth/channel-bindings` | user | `{identities: [{channel_type, account_key, subject_id, verified_at}]}` bound to this account |
+| `DELETE` | `/auth/channel-bindings` | user | Query `channel_type`, `subject_id`, optional `account_key` → `204`; only removes bindings owned by the caller |
+| `POST`   | `/apps/{app_id}/link-code` | app or platform token | Mint a 5-minute one-time `/link <code>` handshake code for this app; requires active app membership |
 | `GET`    | `/auth/oidc/config` | admin | OIDC provider configuration and callback URL; client secret is omitted |
 | `PUT`    | `/auth/oidc/config` | admin | Write OIDC provider configuration; `client_secret` is write-only |
 | `POST`   | `/auth/oidc/config/test` | admin | Verify configured discovery metadata and JWKS endpoint |

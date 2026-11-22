@@ -72,6 +72,8 @@ async def test_access_link_is_one_shot_and_preview_does_not_consume(world) -> No
         user_id=alice,
         channel_type="weixin",
         channel_subject_id="wx-alice",
+        account_key="app_1",
+        sender_id="ou_alice",
         origin="test",
     )
     assert expires_at == 1_600
@@ -80,6 +82,8 @@ async def test_access_link_is_one_shot_and_preview_does_not_consume(world) -> No
     assert preview is not None
     assert preview.app_id == app.app_id
     assert preview.permission == "edit_structure"
+    assert preview.account_key == "app_1"
+    assert preview.sender_id == "ou_alice"
     assert service.preview_access_link(code) is not None  # still not consumed
 
     consumed = service.consume_access_link(code)

@@ -3179,18 +3179,28 @@ def test_hitl_resume_context_restores_weixin_session(manager: AgentManager) -> N
         "session_key": session_key,
         "chat_type": "dm",
         "identity_verified": False,
+        "owner_verified": False,
+        "sender_user_id": None,
+        "sender_id": "wx-bound",
+        "account_key": channel_id,
     }
 
     # A /bind-verified owner keeps the flag across HITL resume.
     bound = manager._repos.channel_identity_repo.bind(
         channel_type="weixin",
-        external_subject_id="wx-bound",
+        sender_id="wx-bound",
         user_id=user_id,
     )
     assert bound is not None
     context = manager._hitl_resume_context("thr_bound")
     assert context["identity_verified"] is True
+    assert context["owner_verified"] is True
+    assert context["sender_user_id"] == user_id
 
     # An approval by a different user must not inherit the owner's identity.
     context = manager._hitl_resume_context("thr_bound", acting_user_id=user_id + 1)
     assert context["identity_verified"] is False
+    assert context["owner_verified"] is False
+    # An admin approval from the dashboard is a trusted source, so the IM
+    # tool gate does not block the tool that was approved.
+    assert context["source"] == f"dashboard/{user_id + 1}"

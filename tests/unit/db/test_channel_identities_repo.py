@@ -27,11 +27,34 @@ def test_bind_reuses_same_user_and_lists(db: SqlitePool) -> None:
     alice = users.create(username="alice", password_hash="h", role="user")
     repo = ChannelIdentityRepo(db)
 
-    first = repo.bind(channel_type="weixin", external_subject_id="wx-1", user_id=alice)
-    again = repo.bind(channel_type="weixin", external_subject_id="wx-1", user_id=alice)
+    first = repo.bind(channel_type="weixin", sender_id="wx-1", user_id=alice)
+    again = repo.bind(channel_type="weixin", sender_id="wx-1", user_id=alice)
     assert first is not None and again is not None
     assert again.user_id == alice
-    assert [row.external_subject_id for row in repo.list_for_user(alice)] == ["wx-1"]
+    assert [row.sender_id for row in repo.list_for_user(alice)] == ["wx-1"]
+
+
+def test_account_key_scopes_and_legacy_fallback(db: SqlitePool) -> None:
+    users = UserRepo(db)
+    alice = users.create(username="alice", password_hash="h", role="user")
+    bob = users.create(username="bob", password_hash="h", role="user")
+    repo = ChannelIdentityRepo(db)
+
+    assert repo.bind(channel_type="feishu", sender_id="ou-1", account_key="app-b", user_id=bob)
+    assert repo.bind(channel_type="feishu", sender_id="ou-1", user_id=alice)
+    assert repo.get("feishu", "ou-1", account_key="app-b").user_id == bob
+    assert repo.get("feishu", "ou-1").user_id == alice
+    # A missing exact key falls back to the legacy row.
+    assert repo.get("feishu", "ou-1", account_key="app-c").user_id == alice
+    # Another user cannot take an existing exact key.
+    assert (
+        repo.bind(channel_type="feishu", sender_id="ou-1", account_key="app-b", user_id=alice)
+        is None
+    )
+    # A legacy row owned by another user blocks a new exact key.
+    assert (
+        repo.bind(channel_type="feishu", sender_id="ou-1", account_key="app-c", user_id=bob) is None
+    )
 
 
 def test_bind_refuses_to_replace_another_user(db: SqlitePool) -> None:
@@ -39,8 +62,8 @@ def test_bind_refuses_to_replace_another_user(db: SqlitePool) -> None:
     alice = users.create(username="alice", password_hash="h", role="user")
     bob = users.create(username="bob", password_hash="h", role="user")
     repo = ChannelIdentityRepo(db)
-    assert repo.bind(channel_type="weixin", external_subject_id="wx-1", user_id=alice)
-    assert repo.bind(channel_type="weixin", external_subject_id="wx-1", user_id=bob) is None
+    assert repo.bind(channel_type="weixin", sender_id="wx-1", user_id=alice)
+    assert repo.bind(channel_type="weixin", sender_id="wx-1", user_id=bob) is None
     assert repo.get("weixin", "wx-1").user_id == alice
 
 
@@ -49,9 +72,9 @@ def test_delete_only_removes_own_binding(db: SqlitePool) -> None:
     alice = users.create(username="alice", password_hash="h", role="user")
     bob = users.create(username="bob", password_hash="h", role="user")
     repo = ChannelIdentityRepo(db)
-    assert repo.bind(channel_type="feishu", external_subject_id="fs-1", user_id=alice)
-    assert not repo.delete(channel_type="feishu", external_subject_id="fs-1", user_id=bob)
-    assert repo.delete(channel_type="feishu", external_subject_id="fs-1", user_id=alice)
+    assert repo.bind(channel_type="feishu", sender_id="fs-1", user_id=alice)
+    assert not repo.delete(channel_type="feishu", sender_id="fs-1", user_id=bob)
+    assert repo.delete(channel_type="feishu", sender_id="fs-1", user_id=alice)
     assert repo.get("feishu", "fs-1") is None
 
 

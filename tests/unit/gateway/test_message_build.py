@@ -89,6 +89,30 @@ def test_build_harness_request_with_messages_override():
     assert req["thread_id"] == "t1"
 
 
+def test_build_harness_request_stamps_sender_identity() -> None:
+    req = build_harness_request(
+        thread_id="t1",
+        user_id=1,
+        source="feishu/ch1",
+        text="hello",
+        identity_verified=True,
+        owner_verified=True,
+        sender_user_id=7,
+        sender_id="ou_1",
+        account_key="app_1",
+        chat_type="dm",
+        locale="zh",
+    )
+    configurable = req["configurable"]
+    assert configurable["octop_identity_verified"] is True
+    assert configurable["octop_owner_verified"] is True
+    assert configurable["octop_sender_user_id"] == "7"
+    assert configurable["octop_sender_id"] == "ou_1"
+    assert configurable["octop_account_key"] == "app_1"
+    assert configurable["octop_chat_type"] == "dm"
+    assert configurable["octop_locale"] == "zh"
+
+
 def test_build_harness_request_marks_auto_route() -> None:
     req = build_harness_request(
         thread_id="t1",
