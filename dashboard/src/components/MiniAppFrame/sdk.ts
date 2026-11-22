@@ -37,7 +37,7 @@ export const APP_SDK = `(function () {
       );
     } catch (e) {}
   }
-  function call(method, params) {
+  function call(method, params, timeoutMs) {
     if (!intact()) {
       reportIntegrity();
       return Promise.reject(new Error("Sandbox integrity check failed"));
@@ -51,7 +51,7 @@ export const APP_SDK = `(function () {
       entry.timer = setTimeout(function () {
         pending.delete(id);
         reject(new Error("Request timed out"));
-      }, TIMEOUT_MS);
+      }, timeoutMs || TIMEOUT_MS);
       parent.postMessage(
         { source: "octop-app", type: "request", id: id, method: method, params: params || {} },
         "*"
@@ -153,7 +153,7 @@ export const APP_SDK = `(function () {
           fileName: file.name || "upload.png",
           fileType: file.type || "",
           bytes: buffer
-        });
+        }, 120000);
       });
     },
     runTask: function (options) {
