@@ -192,6 +192,21 @@ describe("app detail header actions", () => {
     expect(screen.queryByText("恢复上一版")).not.toBeInTheDocument();
   });
 
+  it("returns to the all-MiniApps gallery from the back button", async () => {
+    render(
+      <AntdApp>
+        <MemoryRouter initialEntries={["/apps/app_1"]}>
+          <Routes>
+            <Route path="/apps/:appId" element={<AppDetailPage />} />
+            <Route path="/apps/all" element={<div>all-miniapps-gallery</div>} />
+          </Routes>
+        </MemoryRouter>
+      </AntdApp>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "返回小程序" }));
+    expect(await screen.findByText("all-miniapps-gallery")).toBeInTheDocument();
+  });
   it("hides owner-only actions from an edit_structure collaborator", async () => {
     currentUser.value = { username: "bob", role: "user" };
     renderPage();

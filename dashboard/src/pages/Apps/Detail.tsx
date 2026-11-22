@@ -1429,7 +1429,7 @@ export default function AppDetailPage({
       <Button onClick={() => navigate("/join")}>
         {t("apps.forbiddenUseCode")}
       </Button>
-      <Button onClick={() => navigate("/apps")}>{t("apps.back")}</Button>
+      <Button onClick={() => navigate("/apps/all")}>{t("apps.back")}</Button>
     </Space>
   );
 
@@ -1552,7 +1552,9 @@ export default function AppDetailPage({
     return (
       <PageShell title={t("apps.title")}>
         <Empty description={t("apps.notFound")} style={{ padding: "64px 0" }}>
-          <Button onClick={() => navigate("/apps")}>{t("apps.back")}</Button>
+          <Button onClick={() => navigate("/apps/all")}>
+            {t("apps.back")}
+          </Button>
         </Empty>
       </PageShell>
     );
@@ -1660,7 +1662,7 @@ export default function AppDetailPage({
             type="text"
             icon={<ArrowLeft size={18} />}
             aria-label={t("apps.back")}
-            onClick={() => navigate("/apps")}
+            onClick={() => navigate("/apps/all")}
           />
         </Tooltip>
       }
