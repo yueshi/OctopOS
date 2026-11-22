@@ -16,6 +16,7 @@ import {
   Form,
   Input,
   Modal,
+  Result,
   Select,
   Space,
   Spin,
@@ -62,10 +63,14 @@ import {
   connectorsApi,
   type ConnectorInstance,
 } from "../../api/modules/connectors";
-import { getAppScope } from "../../api";
+import { getAppScope, getAuthToken } from "../../api";
 import PageShell, { pageShellStyles } from "../../layouts/PageShell";
 import { fullscreenContainer } from "../../utils/overlayContainer";
-import { apiErrorMessage, isNotFoundApiError } from "../../utils/apiError";
+import {
+  apiErrorMessage,
+  isNotFoundApiError,
+  parseApiError,
+} from "../../utils/apiError";
 import { useServerTimezone } from "../../hooks/useServerTimezone";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -97,6 +102,7 @@ import AppInterfaceTab from "./detail/AppInterfaceTab";
 import AppPublishModal from "./detail/AppPublishModal";
 import AppShareModal from "./detail/AppShareModal";
 import RowHistoryDrawer from "./detail/RowHistoryDrawer";
+import MembersPanel from "./MembersPanel";
 import { permissionLabel } from "./detail/shared";
 import type { ShareDraft } from "./detail/types";
 
@@ -139,6 +145,13 @@ export default function AppDetailPage({
   const canManage =
     detail?.permission === "edit_structure" &&
     (isOwner === true || isAdmin === true);
+  // The hosting agent's owner can read members and resolve host approvals
+  // without owning the MiniApp itself.
+  const isAgentOwner =
+    currentUser != null &&
+    detail?.agent_owner_user_id != null &&
+    detail.agent_owner_user_id === currentUser.id;
+  const canViewMembers = canManage || isAgentOwner;
   const [capabilityDraft, setCapabilityDraft] = useState<string[]>([]);
   const [savingCapabilities, setSavingCapabilities] = useState(false);
   const [accessRequests, setAccessRequests] = useState<AppAccessRequest[]>([]);
@@ -177,6 +190,12 @@ export default function AppDetailPage({
   const [loading, setLoading] = useState(true);
   const [htmlLoading, setHtmlLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
+  const [membershipPending, setMembershipPending] = useState(false);
+  const [accessRequestOpen, setAccessRequestOpen] = useState(false);
+  const [accessNote, setAccessNote] = useState("");
+  const [accessRequesting, setAccessRequesting] = useState(false);
+  const [accessRequested, setAccessRequested] = useState(false);
   const [gameSession, setGameSession] = useState<AppGameSession | null>(null);
   const [htmlReloadKey, setHtmlReloadKey] = useState(0);
   const [appEscaped, setAppEscaped] = useState(false);
@@ -219,7 +238,7 @@ export default function AppDetailPage({
   const [importBusy, setImportBusy] = useState(false);
   const [importIncludePii, setImportIncludePii] = useState(false);
 
-  const [activeView, setActiveView] = useState<"ui" | "data">("ui");
+  const [activeView, setActiveView] = useState<"ui" | "data" | "members">("ui");
   const [dataTable, setDataTable] = useState("main");
   const [dataSearch, setDataSearch] = useState("");
   const [dataRows, setDataRows] = useState<Record<string, string>[]>([]);
@@ -272,9 +291,22 @@ export default function AppDetailPage({
       const data = await appsApi.get(appId);
       setDetail(data);
       setNotFound(false);
+      setForbidden(false);
+      setMembershipPending(false);
     } catch (err) {
+      const code = parseApiError(err)?.code;
       if (isNotFoundApiError(err)) {
         setNotFound(true);
+      } else if (code === "APP_MEMBER_PENDING") {
+        setMembershipPending(true);
+      } else if (
+        code === "APP_FORBIDDEN" ||
+        code === "APP_SCOPE_FORBIDDEN" ||
+        code === "APP_SESSION_INVALID" ||
+        code === "APP_GUEST_DISABLED" ||
+        /\b403\b/.test(err instanceof Error ? err.message : "")
+      ) {
+        setForbidden(true);
       } else {
         message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
       }
@@ -1331,6 +1363,119 @@ export default function AppDetailPage({
     background: "var(--fn-bg-primary, #fff)",
   };
 
+  const requestAccess = async () => {
+    setAccessRequesting(true);
+    try {
+      await appsApi.createAccessRequest({
+        agent_id: "",
+        app_id: appId,
+        needed: "view",
+        note: accessNote.trim(),
+      });
+      setAccessRequested(true);
+      setAccessRequestOpen(false);
+      message.success(t("apps.forbiddenRequested"));
+    } catch (err) {
+      message.error(apiErrorMessage(err, t("apps.forbiddenRequestFailed"), t));
+    } finally {
+      setAccessRequesting(false);
+    }
+  };
+
+  const forbiddenActions = (
+    <Space wrap>
+      {getAuthToken() && !accessRequested && (
+        <Button type="primary" onClick={() => setAccessRequestOpen(true)}>
+          {t("apps.forbiddenRequest")}
+        </Button>
+      )}
+      {accessRequested && <Tag color="gold">{t("apps.forbiddenPending")}</Tag>}
+      <Button onClick={() => navigate("/join")}>
+        {t("apps.forbiddenUseCode")}
+      </Button>
+      <Button onClick={() => navigate("/apps")}>{t("apps.back")}</Button>
+    </Space>
+  );
+
+  if (membershipPending) {
+    const platform = Boolean(getAuthToken());
+    const content = (
+      <Result
+        status="info"
+        title={t("apps.memberPendingTitle")}
+        subTitle={t("apps.memberPendingHint")}
+        extra={
+          <Button
+            onClick={() =>
+              platform ? navigate("/apps") : window.location.replace("/my")
+            }
+          >
+            {platform ? t("join.goApps") : t("join.goMy")}
+          </Button>
+        }
+      />
+    );
+    if (scopedRuntime) {
+      return (
+        <div
+          style={{
+            ...scopedRuntimeStyle,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+          }}
+        >
+          {content}
+        </div>
+      );
+    }
+    return <PageShell title={t("apps.title")}>{content}</PageShell>;
+  }
+
+  if (forbidden) {
+    const content = (
+      <>
+        <Result
+          status="403"
+          title={t("apps.forbiddenTitle")}
+          subTitle={t("apps.forbiddenHint")}
+          extra={forbiddenActions}
+        />
+        <Modal
+          title={t("apps.forbiddenRequest")}
+          open={accessRequestOpen}
+          onCancel={() => setAccessRequestOpen(false)}
+          onOk={() => void requestAccess()}
+          confirmLoading={accessRequesting}
+          destroyOnHidden
+        >
+          <Input.TextArea
+            value={accessNote}
+            onChange={(event) => setAccessNote(event.target.value)}
+            placeholder={t("apps.forbiddenNote")}
+            autoSize={{ minRows: 2, maxRows: 4 }}
+            maxLength={500}
+          />
+        </Modal>
+      </>
+    );
+    if (scopedRuntime) {
+      return (
+        <div
+          style={{
+            ...scopedRuntimeStyle,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+          }}
+        >
+          {content}
+        </div>
+      );
+    }
+    return <PageShell title={t("apps.title")}>{content}</PageShell>;
+  }
+
   if (loading) {
     if (scopedRuntime) {
       return (
@@ -1561,7 +1706,7 @@ export default function AppDetailPage({
         )}
         <Tabs
           activeKey={activeView}
-          onChange={(key) => setActiveView(key as "ui" | "data")}
+          onChange={(key) => setActiveView(key as "ui" | "data" | "members")}
           items={[
             {
               key: "ui",
@@ -1582,6 +1727,37 @@ export default function AppDetailPage({
                 />
               ),
             },
+            ...(canViewMembers
+              ? [
+                  {
+                    key: "members",
+                    label: t("apps.membersTab"),
+                    children: (
+                      <MembersPanel
+                        appId={appId}
+                        agentId={detail.agent_id}
+                        tables={detail.tables}
+                        canManage={canManage}
+                        hostView={isAgentOwner && !canManage}
+                        onTableUpdated={(table) =>
+                          setDetail((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  tables: prev.tables.map((item) =>
+                                    item.table_key === table.table_key
+                                      ? table
+                                      : item,
+                                  ),
+                                }
+                              : prev,
+                          )
+                        }
+                      />
+                    ),
+                  },
+                ]
+              : []),
             {
               key: "data",
               label: t("apps.dataTab"),

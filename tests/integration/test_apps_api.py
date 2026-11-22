@@ -1540,6 +1540,67 @@ async def test_public_rows_keep_snapshot_pii_after_live_flag_removed(
     assert "home" not in r.json()["pii_columns"]
 
 
+async def test_participate_rows_mask_other_users_pii(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    """A participant sees their own PII and only masked values from other rows."""
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        columns=[
+            {"name": "title", "type": "string", "required": True},
+            {"name": "phone", "type": "string", "pii": "phone"},
+        ],
+    )
+    assert srv.services is not None
+    service = _service(srv)
+    app = service.get(app_id)
+    alice = srv.services.user_repo.get_by_username("alice")
+    bob = srv.services.user_repo.get_by_username("bob")
+    assert alice is not None and bob is not None
+    srv.services.light_app_repo.set_collaborators(app_id, [(bob.id, "participate")])
+    r = await client.patch(
+        f"/api/apps/{app_id}/tables/main",
+        headers=alice_auth,
+        json={"public_visible": True, "member_visible": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["member_visible"] is True
+    _index, bob_row = await service.append_row_record(
+        app,
+        {"title": "bob", "phone": "13800000001"},
+        created_by=bob.id,
+    )
+    _index, alice_row = await service.append_row_record(
+        app,
+        {"title": "alice", "phone": "13900000002"},
+        created_by=alice.id,
+    )
+
+    r = await client.get(f"/api/apps/{app_id}/rows", headers=bob_auth)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by_title = {row["title"]: row for row in body["rows"]}
+    assert by_title["bob"]["phone"] == "13800000001"
+    assert by_title["alice"]["phone"] == "••••"
+    assert body["pii_columns"] == ["phone"]
+    assert body["masked_pii_rows"] == [alice_row.row_id]
+    flags = {meta["row_id"]: meta["pii_masked"] for meta in body["row_meta"]}
+    assert flags[bob_row.row_id] is False
+    assert flags[alice_row.row_id] is True
+
+    # The owner and editors still see stored values.
+    r = await client.get(f"/api/apps/{app_id}/rows", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    assert {row["title"]: row["phone"] for row in r.json()["rows"]} == {
+        "bob": "13800000001",
+        "alice": "13900000002",
+    }
+    assert r.json()["masked_pii_rows"] == []
+
+
 async def test_public_page_runs_the_app_inside_the_navigation_sandbox(
     env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
 ) -> None:

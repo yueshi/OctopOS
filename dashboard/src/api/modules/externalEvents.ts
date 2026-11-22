@@ -1,6 +1,10 @@
 import { request } from "../request";
 
-export type ExternalSourceKind = "webhook" | "connector_poll";
+export type ExternalSourceKind =
+  | "webhook"
+  | "connector_poll"
+  | "app_ingress"
+  | "app_outbound";
 export type ExternalTargetType = "expert" | "team" | "app";
 export type ExternalTargetMode =
   | "expert.turn"

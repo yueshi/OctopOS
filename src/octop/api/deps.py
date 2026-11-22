@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Depends, Header, Query, Request
 
+from octop.infra.auth.guest_sessions import AppSessionService
 from octop.infra.auth.tokens import InvalidToken as InvalidToken
 from octop.infra.auth.tokens import TokenExpired as TokenExpired
 from octop.infra.auth.tokens import decode_token as decode_token
 from octop.infra.auth.tokens import sign_token as sign_token
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.permissions import PERMISSIONS, user_has_permission
+from octop.infra.users.principals import Principal, PrincipalDirectory
 
 if TYPE_CHECKING:
     from octop.infra.server import OctopServer
@@ -56,6 +58,11 @@ _JWT_EXEMPT_EXACT = (
     "/api/auth/oidc/exchange",
     "/api/auth/app-access/preview",
     "/api/auth/app-access/exchange",
+    "/api/apps/join/preview",
+    "/api/apps/join/redeem",
+    "/api/apps/invites/preview",
+    "/api/apps/invites/redeem",
+    "/api/guest/session/refresh",
     "/api/auth/oauth/status",
     "/api/auth/oauth/start",
     "/api/auth/oauth/callback",
@@ -127,27 +134,69 @@ _APP_SCOPE_READ_PATHS = frozenset(
     }
 )
 _APP_SCOPE_READ_PREFIXES = ("/api/i18n/",)
+_GUEST_APP_SCOPE_READ_PATHS = frozenset(
+    {
+        "/api/auth/me",
+        "/api/settings/timezone",
+    }
+)
+_GUEST_SCOPE_READ_PATHS = frozenset(
+    {
+        "/api/auth/me",
+        "/api/settings/timezone",
+    }
+)
+_GUEST_SCOPE_PREFIXES = ("/api/i18n/", "/api/guest/")
 
 
 def _app_scope_forbidden() -> OctopError:
     return OctopError.localized(ErrorCode.APP_SCOPE_FORBIDDEN)
 
 
-def _app_scope_allows(*, method: str, path: str, app_id: str, user_id: int) -> bool:
+def _guest_scope_forbidden() -> OctopError:
+    return OctopError.localized(ErrorCode.GUEST_SCOPE_FORBIDDEN)
+
+
+def _app_scope_allows(
+    *,
+    method: str,
+    path: str,
+    app_id: str,
+    user_id: int,
+    guest: bool = False,
+) -> bool:
     """Paths a MiniApp-scoped session may use.
 
     The app's own subtree is fully allowed (its routes still apply their own
     ACL). Everything else is limited to read-only bootstrap calls the SPA
     makes before rendering; the rest of the dashboard stays out of reach.
+    Guests get a smaller bootstrap set: no notifications or preferences until
+    the guest portal exists.
     """
     prefix = f"/api/apps/{app_id}"
     if path == prefix or path.startswith(f"{prefix}/"):
         return True
     if method.upper() != "GET":
         return False
-    if path in _APP_SCOPE_READ_PATHS:
+    read_paths = _GUEST_APP_SCOPE_READ_PATHS if guest else _APP_SCOPE_READ_PATHS
+    if path in read_paths:
         return True
     if any(path.startswith(item) for item in _APP_SCOPE_READ_PREFIXES):
+        return True
+    avatar = f"/api/users/{user_id}/avatar"
+    return path == avatar or path.startswith(f"{avatar}/")
+
+
+def _guest_scope_allows(*, method: str, path: str, user_id: int) -> bool:
+    """Paths a guest-scoped session may use (portal only, no app data)."""
+    if path.startswith("/api/guest/"):
+        # Portal POST/DELETE (refresh, logout, leave app) are route-checked.
+        return True
+    if method.upper() != "GET":
+        return False
+    if path in _GUEST_SCOPE_READ_PATHS:
+        return True
+    if any(path.startswith(item) for item in _GUEST_SCOPE_PREFIXES):
         return True
     avatar = f"/api/users/{user_id}/avatar"
     return path == avatar or path.startswith(f"{avatar}/")
@@ -165,8 +214,29 @@ def _check_app_scope(payload: dict[str, Any], *, method: str, path: str | None) 
         path=path,
         app_id=app_id,
         user_id=int(subject),
+        guest=str(payload.get("kind") or "") == "guest",
     ):
         raise _app_scope_forbidden()
+
+
+def _check_guest_scope(payload: dict[str, Any], *, method: str, path: str | None) -> None:
+    if payload.get("scope") != "guest":
+        return
+    subject = payload.get("sub")
+    if subject is None or path is None:
+        raise _guest_scope_forbidden()
+    if not _guest_scope_allows(method=method, path=path, user_id=int(subject)):
+        raise _guest_scope_forbidden()
+
+
+def _principal_directory(server: OctopServer) -> PrincipalDirectory:
+    if server.services is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
+    return PrincipalDirectory(
+        server.services.repos,
+        user_manager=server.user_manager,
+        guest_sessions=AppSessionService(server.services.repos),
+    )
 
 
 def resolve_user_from_token(
@@ -177,18 +247,18 @@ def resolve_user_from_token(
     path: str | None = None,
 ) -> User:
     payload = _decode(server, token)
-    _check_app_scope(payload, method=method, path=path)
-    assert server.user_manager is not None
-    # The same secret signs other, narrower tokens (a MiniApp game session).
-    # Only a token carrying ``sub`` is an access token; the rest must fail as
-    # an auth error, not as a missing-claim crash.
-    subject = payload.get("sub")
-    if subject is None:
+    scope = str(payload.get("scope") or "platform")
+    if scope == "guest":
+        _check_guest_scope(payload, method=method, path=path)
+    elif scope == "app":
+        _check_app_scope(payload, method=method, path=path)
+    elif str(payload.get("kind") or "") == "guest":
+        # Guests never receive platform tokens; fail closed if one is forged.
+        raise OctopError(ErrorCode.AUTH_FAILED, "guest token cannot be a platform token")
+    principal = _principal_directory(server).resolve_claims(payload)
+    if principal.user is None:
         raise OctopError(ErrorCode.AUTH_FAILED, "not an access token")
-    user = server.user_manager.get_by_id(int(subject))
-    if user is None:
-        raise OctopError(ErrorCode.USER_DISABLED, "user not active")
-    return user
+    return principal.user
 
 
 def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> str | None:
@@ -199,9 +269,9 @@ def maybe_sliding_renew_token(server: OctopServer, token: str, user: User) -> st
     """
     assert server.services is not None
     payload = _decode(server, token)
-    if payload.get("scope") == "app":
-        # A scoped MiniApp session must not be upgraded into a full dashboard
-        # token by sliding renewal.
+    if payload.get("scope") in {"app", "guest"}:
+        # A scoped MiniApp / guest session must not be upgraded into a full
+        # dashboard token by sliding renewal.
         return None
     ttl = int(server.services.config.access_token_ttl_seconds)
     remaining = int(payload["exp"]) - int(time.time())
@@ -255,6 +325,57 @@ async def current_user(
     )
 
 
+async def current_principal(
+    request: Request,
+    server: OctopServer = Depends(get_server),
+    authorization: str | None = Header(None),
+    access_token: str | None = Query(None),
+) -> Principal:
+    """Resolve the token into a Principal, including guest session id."""
+    raw = extract_raw_token(authorization=authorization, access_token=access_token)
+    if not raw:
+        raise OctopError(ErrorCode.AUTH_FAILED, "missing credentials")
+    return _principal_directory(server).resolve_token(
+        raw,
+        method=request.method,
+        path=request.url.path,
+    )
+
+
+async def optional_principal(
+    request: Request,
+    server: OctopServer = Depends(get_server),
+    authorization: str | None = Header(None),
+    access_token: str | None = Query(None),
+) -> Principal | None:
+    """Resolve any valid token without applying route-scope allowlists.
+
+    Public join / invite redemption uses this to reuse an existing guest
+    session; an invalid token is treated as anonymous.
+    """
+    raw = extract_raw_token(authorization=authorization, access_token=access_token)
+    if not raw:
+        return None
+    try:
+        return _principal_directory(server).resolve_token(
+            raw,
+            method=request.method,
+            path=request.url.path,
+        )
+    except OctopError as exc:
+        if exc.code in {
+            ErrorCode.AUTH_FAILED,
+            ErrorCode.TOKEN_EXPIRED,
+            ErrorCode.USER_DISABLED,
+            ErrorCode.APP_GUEST_DISABLED,
+            ErrorCode.APP_SESSION_INVALID,
+            ErrorCode.APP_SCOPE_FORBIDDEN,
+            ErrorCode.GUEST_SCOPE_FORBIDDEN,
+        }:
+            return None
+        raise
+
+
 def require_permission(key: str) -> Callable[..., Awaitable[User]]:
     """Dependency factory: require the module permission ``key``.
 
@@ -265,7 +386,7 @@ def require_permission(key: str) -> Callable[..., Awaitable[User]]:
         raise RuntimeError(f"unknown permission key: {key}")
 
     async def _dep(user: User = Depends(current_user)) -> User:
-        if not user_has_permission(user, key):
+        if getattr(user, "kind", "member") == "guest" or not user_has_permission(user, key):
             raise OctopError(
                 ErrorCode.FORBIDDEN,
                 "permission required",
@@ -280,7 +401,7 @@ def require_admin() -> Callable[..., Awaitable[User]]:
     """Dependency factory: require the admin role (no module key)."""
 
     async def _dep(user: User = Depends(current_user)) -> User:
-        if not user.is_admin:
+        if getattr(user, "kind", "member") == "guest" or not user.is_admin:
             raise OctopError(ErrorCode.FORBIDDEN, "admin required")
         return user
 

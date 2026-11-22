@@ -204,6 +204,34 @@ async def test_update_and_rotate_secret(world: World) -> None:
     assert decrypt_credentials(world.repos.secret_repo, row.secret_blob)["secret"] == new_secret
 
 
+async def test_enabling_a_webhook_created_disabled_restores_delivery(
+    world: World,
+) -> None:
+    view, _secret = await _create(world, enabled=False)
+    row = world.repos.app_webhook_repo.get(view.webhook_id)
+    assert row is not None
+    assert world.repos.external_source_repo.get(row.source_id).enabled is False
+    assert world.repos.external_subscription_repo.get(row.subscription_id).enabled is False
+
+    await world.service.update(
+        world.app,  # type: ignore[arg-type]
+        view.webhook_id,
+        enabled=True,
+    )
+    assert world.repos.external_source_repo.get(row.source_id).enabled is True
+    assert world.repos.external_subscription_repo.get(row.subscription_id).enabled is True
+
+    result = await world.service.emit(
+        world.app,  # type: ignore[arg-type]
+        world.events,
+        event_type="order.approved",
+        payload={"order_id": "A-1"},
+    )
+    assert result["emitted"] == 1
+    assert result["deliveries"] == 1
+    assert result["webhooks"][0]["deliveries"] == 1
+
+
 async def test_update_and_delete_reject_foreign_webhook(world: World) -> None:
     view, _secret = await _create(world)
 

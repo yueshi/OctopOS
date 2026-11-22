@@ -64,6 +64,7 @@ class UserRow:
     permissions: builtins.list[str] = field(default_factory=list)
     role_name: str | None = None
     avatar_icon: str | None = None
+    kind: str = "member"
 
     @classmethod
     def from_row(cls, r: DbRow) -> UserRow:
@@ -72,6 +73,8 @@ class UserRow:
         role_name = str(raw_name).strip() if isinstance(raw_name, str) else ""
         raw_icon = r["avatar_icon"] if "avatar_icon" in keys else None
         avatar_icon = str(raw_icon).strip() if isinstance(raw_icon, str) else ""
+        raw_kind = r["kind"] if "kind" in keys else None
+        kind = str(raw_kind).strip() if isinstance(raw_kind, str) else ""
         return cls(
             id=r["id"],
             username=r["username"],
@@ -90,6 +93,7 @@ class UserRow:
             permissions=_parse_permissions(r["permissions"] if "permissions" in keys else None),
             role_name=role_name or None,
             avatar_icon=avatar_icon or None,
+            kind=kind or "member",
         )
 
 
@@ -110,6 +114,7 @@ class UserRepo:
         sso_subject: str | None = None,
         permissions: builtins.list[str] | None = None,
         role_name: str | None = None,
+        kind: str = "member",
     ) -> int:
         perms_json = json.dumps(permissions or [], ensure_ascii=False)
         with self._db.transaction() as conn:
@@ -117,8 +122,8 @@ class UserRepo:
                 conn,
                 "INSERT INTO users(username, password_hash, role, display_name, locale, "
                 "email, sso_provider_id, sso_subject, disabled, created_at, permissions, "
-                "role_name) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+                "role_name, kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
                 (
                     username,
                     password_hash,
@@ -131,6 +136,7 @@ class UserRepo:
                     now_ts(),
                     perms_json,
                     role_name,
+                    kind,
                 ),
             )
 
@@ -143,6 +149,11 @@ class UserRepo:
         with self._db.connect() as conn:
             r = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return UserRow.from_row(r) if r else None
+
+    def get_member_by_username(self, username: str) -> UserRow | None:
+        """Resolve a platform member; guests share the username namespace but are not members."""
+        row = self.get_by_username(username)
+        return row if row is not None and row.kind == "member" else None
 
     def get_by_sso(self, provider_id: int, subject: str) -> UserRow | None:
         with self._db.connect() as conn:
@@ -263,13 +274,25 @@ class UserRepo:
         with self._db.transaction() as conn:
             conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", params)
 
-    def list(self, *, include_disabled: bool = False) -> builtins.list[UserRow]:
-        sql = "SELECT * FROM users"
+    def list(
+        self,
+        *,
+        include_disabled: bool = False,
+        kind: str | None = None,
+    ) -> builtins.list[UserRow]:
+        clauses: list[str] = []
+        params: list[object] = []
         if not include_disabled:
-            sql += " WHERE disabled = 0"
+            clauses.append("disabled = 0")
+        if kind is not None:
+            clauses.append("kind = ?")
+            params.append(kind)
+        sql = "SELECT * FROM users"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY username"
         with self._db.connect() as conn:
-            rows = conn.execute(sql).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return map_rows(rows, UserRow)
 
     def set_disabled(self, user_id: int, disabled: bool) -> None:
@@ -338,9 +361,16 @@ class UserRepo:
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
-    def count(self) -> int:
+    def count(self, *, kind: str | None = None) -> int:
         with self._db.connect() as conn:
-            return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+            if kind is None:
+                return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+            return int(
+                conn.execute("SELECT COUNT(*) FROM users WHERE kind = ?", (kind,)).fetchone()[0]
+            )
+
+    def count_by_kind(self, kind: str) -> int:
+        return self.count(kind=kind)
 
     def count_by_role(self, role: str) -> int:
         with self._db.connect() as conn:

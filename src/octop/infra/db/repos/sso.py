@@ -321,11 +321,15 @@ class SsoRepo:
         """Attach a one-time login code after a claimed callback succeeds.
 
         Clears ``consumed_at`` so ``consume_login_code`` can finalize the session.
+        Only states created by ``start_login`` (nonce + PKCE verifier) may
+        carry a login code: a row inserted without them did not come from an
+        identity-provider callback.
         """
         with self._db.transaction() as conn:
             conn.execute(
                 "UPDATE sso_login_states SET login_code = ?, user_id = ?, expires_at = ?, "
-                "consumed_at = NULL WHERE state = ? AND login_code IS NULL",
+                "consumed_at = NULL WHERE state = ? AND login_code IS NULL "
+                "AND nonce <> '' AND code_verifier <> ''",
                 (login_code, user_id, expires_at, state),
             )
 
@@ -334,7 +338,8 @@ class SsoRepo:
             row = conn.execute(
                 "UPDATE sso_login_states SET consumed_at = ? "
                 "WHERE login_code = ? AND consumed_at IS NULL AND expires_at > ? "
-                "AND user_id IS NOT NULL RETURNING user_id",
+                "AND user_id IS NOT NULL AND nonce <> '' AND code_verifier <> '' "
+                "RETURNING user_id",
                 (now_ts(), login_code, now_ts()),
             ).fetchone()
         return {"user_id": int(row["user_id"])} if row else None

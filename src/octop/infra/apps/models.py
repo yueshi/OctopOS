@@ -44,6 +44,7 @@ MAX_CSV_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 20_000
 MAX_ROW_READ = 500
 MAX_COLLABORATORS = 50
+MAX_GUESTS = 50
 
 COLUMN_TYPES = frozenset(
     {
@@ -561,12 +562,26 @@ def validate_html(raw: str) -> str:
     return html
 
 
+COLLABORATOR_ROLES = frozenset({"view", "participate", "edit_data", "edit_structure"})
+
+
 def validate_permission(raw: str) -> str:
     permission = raw.strip()
     if permission not in {"view", "edit_data", "edit_structure"}:
         raise _invalid(
             ErrorCode.APP_SHARE_INVALID,
             "permission must be 'view', 'edit_data' or 'edit_structure'",
+        )
+    return permission
+
+
+def validate_collaborator_permission(raw: str) -> str:
+    """Validate any collaborator role, including participate for members."""
+    permission = raw.strip()
+    if permission not in COLLABORATOR_ROLES:
+        raise _invalid(
+            ErrorCode.APP_SHARE_INVALID,
+            "permission must be 'view', 'participate', 'edit_data' or 'edit_structure'",
         )
     return permission
 

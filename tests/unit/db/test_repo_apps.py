@@ -39,7 +39,7 @@ def test_light_app_tables_exist(db: SqlitePool) -> None:
         version = conn.execute("SELECT version FROM _schema_version").fetchone()[0]
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(light_apps)")}
     assert {"light_apps", "light_app_collaborators", "light_app_row_history"} <= names
-    assert version == 45
+    assert version == 47
     assert {"app_id", "agent_id", "owner_user_id", "row_count"} <= columns
 
 

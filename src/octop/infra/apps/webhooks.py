@@ -29,13 +29,13 @@ from octop.infra.db.repos.external_sources import ExternalSourceRepo
 from octop.infra.db.repos.external_subscriptions import ExternalSubscriptionRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.events.service import SOURCE_KIND_APP_OUTBOUND
 from octop.infra.utils.ulid import new_short_id
 
 if TYPE_CHECKING:
     from octop.infra.apps.service import AppRecord, AppService
     from octop.infra.events.service import ExternalEventService, IngestResult
 
-SOURCE_KIND_APP_OUTBOUND = "app_outbound"
 MODE_WEBHOOK_POST = "webhook.post"
 TARGET_WEBHOOK = "webhook"
 MAX_NAME_LEN = 100
@@ -220,6 +220,13 @@ class AppWebhookService:
         )
         if updated is None:
             raise OctopError(ErrorCode.APP_NOT_FOUND, "webhook not found")
+        if enabled is not None:
+            # The internal source/subscription mirror the webhook switch. In
+            # particular, a webhook created disabled has both rows disabled;
+            # enabling it later must re-enable them or ingest fans out to no
+            # subscriber and the page silently loses delivery.
+            self._source_repo.update(existing.source_id, enabled=enabled)
+            self._subscription_repo.update(existing.subscription_id, enabled=enabled)
         return WebhookView.from_row(updated), secret
 
     def delete(self, row: AppRecord, webhook_id: str) -> bool:

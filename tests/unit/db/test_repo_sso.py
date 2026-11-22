@@ -50,6 +50,50 @@ def test_login_code_single_consume(db: SqlitePool) -> None:
     assert repo.consume_login_code("login-code-1") is None
 
 
+def test_login_codes_require_oidc_state_proof(db: SqlitePool) -> None:
+    """A row written without nonce/PKCE did not come from the IdP callback.
+
+    This is the signature of an agent-generated script that minted a full
+    admin login link straight from the database: neither attaching nor
+    consuming a code may work for such a state.
+    """
+    repo = SsoRepo(db)
+    now = int(time.time())
+    provider = repo.upsert_provider(
+        enabled=True,
+        display_name="OneID",
+        issuer="https://idp.example.com",
+        client_id="client-id",
+        client_secret_enc=b"encrypted-secret",
+        scopes="openid profile email",
+        dashboard_origin="https://octop.example.com",
+    )
+    repo.create_login_state(
+        state="synthetic",
+        provider_id=provider.id,
+        nonce="",
+        code_verifier="",
+        redirect_after="/apps/app_1",
+        expires_at=now + 600,
+    )
+    repo.attach_login_code(
+        "synthetic",
+        login_code="attached-code",
+        user_id=1,
+        expires_at=now + 600,
+    )
+    assert repo.consume_login_code("attached-code") is None
+
+    # Even a direct SQL write (bypassing attach_login_code) cannot be used.
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE sso_login_states SET login_code = ?, user_id = ?, expires_at = ? "
+            "WHERE state = ?",
+            ("forged-code", 1, now + 600, "synthetic"),
+        )
+    assert repo.consume_login_code("forged-code") is None
+
+
 def test_provider_state_lookup_and_expiry_cleanup(db: SqlitePool) -> None:
     repo = SsoRepo(db)
     now = int(time.time())

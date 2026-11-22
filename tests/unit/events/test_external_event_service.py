@@ -277,3 +277,58 @@ def test_event_plane_ids_have_enough_entropy(
     assert len(subscription.subscription_id) >= 12
     assert len(result.event.event_id) >= 12
     assert len(deliveries[0].delivery_id) >= 12
+
+
+def test_internal_miniapp_sources_are_read_only_here(
+    repos: RepoBundle, service: ExternalEventService
+) -> None:
+    source = repos.external_source_repo.create(
+        owner_user_id=1,
+        name="MiniApp outbound",
+        kind="app_outbound",
+        config_json='{"app_id":"app_1"}',
+    )
+    subscription = repos.external_subscription_repo.create(
+        source_id=source.source_id,
+        target_type="app",
+        target_id="app_1",
+        mode="app.inbox",
+        created_by=1,
+    )
+
+    with pytest.raises(OctopError) as exc:
+        service.update_source(user_id=1, is_admin=False, source_id=source.source_id, enabled=False)
+    assert exc.value.code is ErrorCode.EXTERNAL_SOURCE_INVALID
+
+    with pytest.raises(OctopError) as exc:
+        service.delete_source(user_id=1, is_admin=False, source_id=source.source_id)
+    assert exc.value.code is ErrorCode.EXTERNAL_SOURCE_INVALID
+
+    with pytest.raises(OctopError) as exc:
+        service.create_subscription(
+            user_id=1,
+            is_admin=False,
+            source_id=source.source_id,
+            target_type="app",
+            target_id="app_1",
+            mode="app.inbox",
+        )
+    assert exc.value.code is ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID
+
+    with pytest.raises(OctopError) as exc:
+        service.update_subscription(
+            user_id=1,
+            is_admin=False,
+            subscription_id=subscription.subscription_id,
+            enabled=False,
+        )
+    assert exc.value.code is ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID
+
+    with pytest.raises(OctopError) as exc:
+        service.delete_subscription(
+            user_id=1, is_admin=False, subscription_id=subscription.subscription_id
+        )
+    assert exc.value.code is ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID
+
+    assert repos.external_source_repo.get(source.source_id) is not None
+    assert repos.external_subscription_repo.get(subscription.subscription_id) is not None

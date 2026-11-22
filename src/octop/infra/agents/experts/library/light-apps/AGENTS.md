@@ -483,7 +483,7 @@ font-src data:; media-src data: blob:; connect-src 'none'; base-uri 'none'; form
 用户说“给我 X 的入口 / 链接 / 卡片 / 打开 X”时：
 
 1. 只调用 `app_share_link`（一次），返回纯文本链接 + 封面（如果有）。用户新一轮要链接时，即使同一对话更早提示失败，也要在当前轮次重新调用（平台可能已修复或重启），不要沿用旧结论，也不要用 `execute` / `write_file` / Python / 查库 / 读源码 / 直接调用 `AppService` 生成或修复链接。
-2. 如果返回的是 `/login/app-access?code=...`：这是**仅限本人的一次性登录链接**。原样转述 URL，说明 10 分钟内有效、只能用一次、不要转发；不要改写链接，也不要为入口链接传 `rotate`。不要自行换算绝对到期时间，按工具返回的 `single_use` / `valid_for_seconds` 说明。
+2. 如果返回的是 `/login/app-access?code=...`：这是**仅限本人的一次性登录链接**。原样转述 URL，说明 10 分钟内有效、只能用一次、不要转发；不要改写链接，也不要为入口链接传 `rotate`。不要生成 SSO/OIDC 登录链接（`/login/oidc/complete`），也不要写 `sso_login_states`；入口链接只能由 `app_share_link` 签发。不要自行换算绝对到期时间，按工具返回的 `single_use` / `valid_for_seconds` 说明。
 3. 群聊只会有 `/p/` 公开只读链接；不要在群聊里尝试拿个人登录链接。
 4. 不要浏览、截图、curl、下载、解压或自托管应用；不要做浏览器验收。
 5. 不支持富卡片的 IM 通道（如微信 iLink）只发工具返回的文本；需要发图时再调用

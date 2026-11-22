@@ -12,8 +12,11 @@ from octop.infra.db.repos.app_access_codes import AppAccessCodeRepo
 from octop.infra.db.repos.app_bindings import LightAppBindingRepo
 from octop.infra.db.repos.app_events import AppEventRepo
 from octop.infra.db.repos.app_ingress import LightAppIngressRepo
+from octop.infra.db.repos.app_join_codes import AppJoinCodeRepo
+from octop.infra.db.repos.app_member_invites import AppMemberInviteRepo
 from octop.infra.db.repos.app_schedules import LightAppScheduleRepo
 from octop.infra.db.repos.app_services import LightAppServiceRepo
+from octop.infra.db.repos.app_sessions import AppSessionRepo
 from octop.infra.db.repos.app_setup_plans import AppSetupPlanRepo
 from octop.infra.db.repos.app_webhooks import LightAppWebhookRepo
 from octop.infra.db.repos.apps import LightAppRepo
@@ -97,6 +100,9 @@ class RepoBundle:
     light_app_board_repo: LightAppBoardRepo
     app_access_repo: AppAccessRequestRepo
     app_access_code_repo: AppAccessCodeRepo
+    app_member_invite_repo: AppMemberInviteRepo
+    app_join_code_repo: AppJoinCodeRepo
+    app_session_repo: AppSessionRepo
     app_binding_repo: LightAppBindingRepo
     app_service_repo: LightAppServiceRepo
     app_event_repo: AppEventRepo
@@ -156,6 +162,9 @@ class RepoBundle:
             light_app_board_repo=LightAppBoardRepo(db),
             app_access_repo=AppAccessRequestRepo(db),
             app_access_code_repo=AppAccessCodeRepo(db),
+            app_member_invite_repo=AppMemberInviteRepo(db),
+            app_join_code_repo=AppJoinCodeRepo(db),
+            app_session_repo=AppSessionRepo(db),
             app_binding_repo=LightAppBindingRepo(db),
             app_service_repo=LightAppServiceRepo(db),
             app_event_repo=AppEventRepo(db),
@@ -306,6 +315,18 @@ class SharedServices:
     @property
     def app_access_code_repo(self) -> AppAccessCodeRepo:
         return self.repos.app_access_code_repo
+
+    @property
+    def app_member_invite_repo(self) -> AppMemberInviteRepo:
+        return self.repos.app_member_invite_repo
+
+    @property
+    def app_join_code_repo(self) -> AppJoinCodeRepo:
+        return self.repos.app_join_code_repo
+
+    @property
+    def app_session_repo(self) -> AppSessionRepo:
+        return self.repos.app_session_repo
 
     @property
     def app_binding_repo(self) -> LightAppBindingRepo:

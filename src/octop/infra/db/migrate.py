@@ -1894,6 +1894,149 @@ def _ensure_light_app_table_rules(db: DatabasePool) -> None:
     _ensure_column(db, "light_app_tables", "rules_json", "TEXT NOT NULL DEFAULT '{}'")
 
 
+def _ensure_miniapp_identity_schema(db: DatabasePool, *, backfill: bool = False) -> None:
+    """Add v46 ``users.kind`` and MiniApp visibility/row-owner columns.
+
+    ADD COLUMN is not replay-safe on SQLite, so this helper is the idempotent
+    path for version rewinds and for databases whose recorded version skipped
+    the migration. ``backfill`` is only enabled when applying v46; the
+    end-of-run repair must not keep re-attributing intentionally ownerless
+    rows (for example future submission rows).
+    """
+    if _table_exists(db, "users"):
+        _ensure_column(db, "users", "kind", "TEXT NOT NULL DEFAULT 'member'")
+        with db.connect() as conn:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_users_kind ON users(kind)")
+    if _table_exists(db, "light_app_tables"):
+        _ensure_column(
+            db,
+            "light_app_tables",
+            "member_visible",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+    if not _table_exists(db, "light_app_rows"):
+        return
+    _ensure_column(db, "light_app_rows", "row_owner_user_id", "INTEGER")
+    if backfill:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE light_app_rows SET row_owner_user_id = created_by "
+                "WHERE row_owner_user_id IS NULL AND created_by IS NOT NULL"
+            )
+    with db.connect() as conn:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_rows_row_owner "
+            "ON light_app_rows(app_id, table_key, row_owner_user_id)"
+        )
+
+
+def _ensure_app_member_schema(db: DatabasePool) -> None:
+    """Add v47 collaborator lifecycle columns and member invite/join tables."""
+    if _table_exists(db, "agents"):
+        _ensure_column(
+            db,
+            "agents",
+            "external_sharing_policy",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )
+    if _table_exists(db, "light_app_collaborators"):
+        _ensure_column(
+            db,
+            "light_app_collaborators",
+            "status",
+            "TEXT NOT NULL DEFAULT 'active'",
+        )
+        _ensure_column(
+            db,
+            "light_app_collaborators",
+            "joined_via",
+            "TEXT NOT NULL DEFAULT 'share'",
+        )
+        _ensure_column(db, "light_app_collaborators", "invited_by", "INTEGER")
+        with db.connect() as conn:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_light_app_collaborators_status "
+                "ON light_app_collaborators(app_id, status)"
+            )
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS app_member_invites (
+              id            {pk},
+              invite_id     TEXT NOT NULL UNIQUE,
+              app_id        TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              token_hash    TEXT NOT NULL UNIQUE,
+              audience      TEXT NOT NULL,
+              permission    TEXT NOT NULL,
+              invitee_hint  TEXT NOT NULL DEFAULT '',
+              expires_at    INTEGER NOT NULL,
+              max_uses      INTEGER NOT NULL DEFAULT 1,
+              used_count    INTEGER NOT NULL DEFAULT 0,
+              host_status   TEXT NOT NULL DEFAULT 'not_required',
+              created_by    INTEGER NOT NULL,
+              revoked_at    INTEGER,
+              created_at    INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_member_invites_app "
+            "ON app_member_invites(app_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_member_invites_host "
+            "ON app_member_invites(host_status)"
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS app_join_codes (
+              id                 {pk},
+              join_code_id       TEXT NOT NULL UNIQUE,
+              code_hash          TEXT NOT NULL UNIQUE,
+              app_id             TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              audience           TEXT NOT NULL,
+              permission         TEXT NOT NULL,
+              expires_at         INTEGER NOT NULL,
+              max_uses           INTEGER NOT NULL DEFAULT 1,
+              used_count         INTEGER NOT NULL DEFAULT 0,
+              requires_approval  INTEGER NOT NULL DEFAULT 0,
+              revoked_at         INTEGER,
+              created_by         INTEGER NOT NULL,
+              created_at         INTEGER NOT NULL,
+              bound_channel_type TEXT NOT NULL DEFAULT '',
+              bound_account_key  TEXT NOT NULL DEFAULT '',
+              bound_sender_id    TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_join_codes_app "
+            "ON app_join_codes(app_id, created_at)"
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS app_sessions (
+              id                 {pk},
+              session_id         TEXT NOT NULL UNIQUE,
+              user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              scope              TEXT NOT NULL DEFAULT 'guest',
+              refresh_token_hash TEXT NOT NULL UNIQUE,
+              created_at         INTEGER NOT NULL,
+              expires_at         INTEGER NOT NULL,
+              revoked_at         INTEGER,
+              last_seen_at       INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_sessions_user ON app_sessions(user_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_sessions_expires ON app_sessions(expires_at)"
+        )
+
+
 def _ensure_app_access_request_owners(db: DatabasePool) -> None:
     """Split the v31 request owner and add the v35 pending unique indexes."""
     if not _table_exists(db, "app_access_requests"):
@@ -3495,6 +3638,26 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 46:
+            # ADD COLUMN is not replay-safe on SQLite; the helper also repairs
+            # databases whose recorded version skipped this migration.
+            _ensure_miniapp_identity_schema(db, backfill=True)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 47:
+            # ADD COLUMN is not replay-safe on SQLite; the helper is also the
+            # repair path for databases whose recorded version skipped the file.
+            _ensure_app_member_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -3545,6 +3708,8 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_light_app_table_visibility(db)
     _ensure_light_app_publications_schema(db)
     _ensure_miniapp_im_identity_schema(db)
+    _ensure_miniapp_identity_schema(db)
+    _ensure_app_member_schema(db)
     _ensure_notifications_schema(db)
     _ensure_miniapp_boards_schema(db)
     _ensure_team_board_schema(db)

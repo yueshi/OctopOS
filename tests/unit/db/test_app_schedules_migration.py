@@ -51,7 +51,7 @@ def test_v38_migrates_source_intervals(tmp_path: Path) -> None:
         migrate._discover = real_discover
 
     migrate.run_migrations(db)
-    assert _version(db) == 45
+    assert _version(db) == 47
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM light_app_schedules").fetchall()
     assert len(rows) == 1

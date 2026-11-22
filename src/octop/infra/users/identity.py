@@ -21,6 +21,7 @@ class User:
     display_name: str | None
     locale: str = "zh"
     permissions: list[str] = field(default_factory=list)
+    kind: str = "member"
 
     @property
     def label(self) -> str:
@@ -28,4 +29,4 @@ class User:
 
     @property
     def is_admin(self) -> bool:
-        return self.role == Role.ADMIN
+        return self.kind == "member" and self.role == Role.ADMIN

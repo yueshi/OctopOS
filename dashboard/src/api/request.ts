@@ -7,6 +7,43 @@ const AUTH_TOKEN_KEY = "auth_token";
 const AUTH_REMEMBER_PREF_KEY = "auth_remember_pref";
 /** MiniApp-scoped session marker; cleared whenever a normal token is set. */
 const APP_SCOPE_KEY = "octop_app_scope";
+/** Per-app scoped token, keyed by app id and held for this tab only. */
+const APP_TOKEN_PREFIX = "app_token:";
+/** Guest portal session (7d token + 30d rotating refresh token). */
+const GUEST_TOKEN_KEY = "guest_token";
+const GUEST_REFRESH_KEY = "guest_refresh_token";
+const GUEST_EXPIRES_KEY = "guest_token_expires_at";
+const GUEST_REFRESH_EXPIRES_KEY = "guest_refresh_expires_at";
+
+const APP_ROUTE_SEGMENTS = new Set([
+  "access-requests",
+  "boards",
+  "dataset",
+  "from-template",
+  "in-thread",
+  "invites",
+  "join",
+  "quick",
+  "restore",
+  "setup-plans",
+  "templates",
+]);
+
+export type RequestAuthKind = "platform" | "app" | "guest" | "public" | "none";
+
+export interface RequestAuth {
+  kind: RequestAuthKind;
+  token: string;
+  appId?: string;
+}
+
+export interface GuestSessionInput {
+  guestToken: string;
+  refreshToken?: string | null;
+  guestExpiresIn?: number;
+  refreshExpiresIn?: number;
+  remember?: boolean;
+}
 
 export interface AppScopeInfo {
   app_id: string;
@@ -129,6 +166,161 @@ export function getAuthToken(): string {
   );
 }
 
+function readTokenKey(key: string): string {
+  return localStorage.getItem(key) || sessionStorage.getItem(key) || "";
+}
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+/** Persist a guest session; ``remember`` chooses localStorage vs sessionStorage. */
+export function setGuestSession(input: GuestSessionInput): void {
+  clearGuestSession();
+  const store = input.remember === false ? sessionStorage : localStorage;
+  store.setItem(GUEST_TOKEN_KEY, input.guestToken);
+  if (input.refreshToken) {
+    store.setItem(GUEST_REFRESH_KEY, input.refreshToken);
+  }
+  store.setItem(
+    GUEST_EXPIRES_KEY,
+    String(nowSeconds() + (input.guestExpiresIn ?? 7 * 86400)),
+  );
+  store.setItem(
+    GUEST_REFRESH_EXPIRES_KEY,
+    String(nowSeconds() + (input.refreshExpiresIn ?? 30 * 86400)),
+  );
+}
+
+/** Read the guest token, dropping it locally once it has expired. */
+export function getGuestToken(): string {
+  const expiry = readTokenKey(GUEST_EXPIRES_KEY);
+  if (expiry && Number(expiry) <= nowSeconds()) return "";
+  return readTokenKey(GUEST_TOKEN_KEY);
+}
+
+/** Read the opaque refresh token (still useful after the 7-day token expires). */
+export function getGuestRefreshToken(): string {
+  const expiry = readTokenKey(GUEST_REFRESH_EXPIRES_KEY);
+  if (expiry && Number(expiry) <= nowSeconds()) return "";
+  return readTokenKey(GUEST_REFRESH_KEY);
+}
+
+export function hasGuestSession(): boolean {
+  return Boolean(getGuestToken() || getGuestRefreshToken());
+}
+
+/** Whether the guest session was stored with "remember me" (localStorage). */
+export function isGuestSessionRemembered(): boolean {
+  return (
+    localStorage.getItem(GUEST_TOKEN_KEY) != null ||
+    localStorage.getItem(GUEST_REFRESH_KEY) != null
+  );
+}
+
+export function clearGuestSession(): void {
+  for (const store of [localStorage, sessionStorage]) {
+    store.removeItem(GUEST_TOKEN_KEY);
+    store.removeItem(GUEST_REFRESH_KEY);
+    store.removeItem(GUEST_EXPIRES_KEY);
+    store.removeItem(GUEST_REFRESH_EXPIRES_KEY);
+  }
+}
+
+interface StoredAppToken {
+  token: string;
+  expires_at: number;
+}
+
+/** Keep a short-lived app token for one tab and one app id. */
+export function setAppToken(
+  appId: string,
+  token: string,
+  expiresIn = 7200,
+): void {
+  const value: StoredAppToken = {
+    token,
+    expires_at: nowSeconds() + expiresIn,
+  };
+  sessionStorage.setItem(APP_TOKEN_PREFIX + appId, JSON.stringify(value));
+}
+
+/** Read an app token; an expired or malformed value is discarded. */
+export function getAppToken(appId: string): string {
+  const raw = sessionStorage.getItem(APP_TOKEN_PREFIX + appId);
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredAppToken>;
+    if (
+      typeof parsed.token !== "string" ||
+      typeof parsed.expires_at !== "number" ||
+      parsed.expires_at <= nowSeconds()
+    ) {
+      sessionStorage.removeItem(APP_TOKEN_PREFIX + appId);
+      return "";
+    }
+    return parsed.token;
+  } catch {
+    sessionStorage.removeItem(APP_TOKEN_PREFIX + appId);
+    return "";
+  }
+}
+
+export function clearAppToken(appId: string): void {
+  sessionStorage.removeItem(APP_TOKEN_PREFIX + appId);
+}
+
+/** Drop every per-app token in this tab (guest logout / account deletion). */
+export function clearAllAppTokens(): void {
+  const keys: string[] = [];
+  for (let i = 0; i < sessionStorage.length; i += 1) {
+    const key = sessionStorage.key(i);
+    if (key?.startsWith(APP_TOKEN_PREFIX)) keys.push(key);
+  }
+  for (const key of keys) sessionStorage.removeItem(key);
+}
+
+function appResourceId(path: string): string | undefined {
+  const clean = path.split("?")[0];
+  const match = /^\/apps\/([^/]+)/.exec(clean);
+  if (!match) return undefined;
+  const segment = match[1];
+  if (APP_ROUTE_SEGMENTS.has(segment)) return undefined;
+  return segment;
+}
+
+/**
+ * Pick the narrowest credential for a request path.
+ *
+ * App routes prefer the per-app token, then the normal login (a platform
+ * member can call them until the app session is minted), then a guest token.
+ * Public invite / join redemption reuses a guest identity when present.
+ */
+export function resolveRequestAuth(path: string): RequestAuth {
+  const clean = path.split("?")[0];
+  if (clean.startsWith("/guest/")) {
+    return { kind: "guest", token: getGuestToken() };
+  }
+  if (/^\/apps\/(invites|join)\/(preview|redeem)$/.test(clean)) {
+    const auth = getAuthToken();
+    if (auth) return { kind: "platform", token: auth };
+    const guest = getGuestToken();
+    return { kind: "guest", token: guest };
+  }
+  const appId = appResourceId(clean);
+  if (appId) {
+    const appToken = getAppToken(appId);
+    if (appToken) return { kind: "app", token: appToken, appId };
+    const auth = getAuthToken();
+    if (auth) return { kind: "platform", token: auth, appId };
+    // Guest tokens are only valid on `/guest/*`; the runtime mints an
+    // app-scoped token first.
+    return { kind: "none", token: "", appId };
+  }
+  const auth = getAuthToken();
+  return auth ? { kind: "platform", token: auth } : { kind: "none", token: "" };
+}
+
 /** Remove JWT token from both storages. */
 export function clearAuthToken() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
@@ -137,6 +329,8 @@ export function clearAuthToken() {
   sessionStorage.removeItem(APP_SCOPE_KEY);
   localStorage.removeItem("octop:active-agent");
   setActiveAgentId(null);
+  clearGuestSession();
+  clearAllAppTokens();
 }
 
 /** Persist a sliding-renewed access token from an API response, if present. */
@@ -287,9 +481,9 @@ function buildHeaders(path: string, extra?: HeadersInit): HeadersInit {
 
   // Apply the global JWT first; the caller's `extra` (including a
   // wizard token) can still override it below.
-  const token = getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  const auth = resolveRequestAuth(path);
+  if (auth.token) {
+    headers.Authorization = `Bearer ${auth.token}`;
   }
 
   // Caller-supplied headers win — needed so the setup wizard can pass
@@ -325,9 +519,9 @@ function buildAuthHeaders(path: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Accept-Language": i18n.language?.startsWith("zh") ? "zh" : "en",
   };
-  const token = getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  const auth = resolveRequestAuth(path);
+  if (auth.token) {
+    headers.Authorization = `Bearer ${auth.token}`;
   }
   if (
     activeAgentId &&
@@ -390,6 +584,19 @@ async function throwIfUnauthorized(
 ): Promise<void> {
   if (response.status !== 401 || path.startsWith("/auth/")) {
     return;
+  }
+  const auth = resolveRequestAuth(path);
+  if (auth.kind === "app" || auth.kind === "guest") {
+    // A scoped session expiring is not a dead dashboard login. Let the app /
+    // guest portal refresh or ask for a new join link instead of clearing the
+    // platform token and bouncing to /login.
+    if (auth.kind === "app" && auth.appId) clearAppToken(auth.appId);
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `Request failed: ${response.status} ${response.statusText}${
+        text ? ` - ${text}` : ""
+      }`,
+    );
   }
   const code = await errorCodeOf(response);
   // Business 401s (peer login, etc.) are not a dead local session.

@@ -64,6 +64,15 @@ const MODE_LABEL: Record<ExternalTargetMode, string> = {
   "app.inbox": "externalEvents.mode.appInbox",
 };
 
+const MANAGED_SOURCE_KINDS: ReadonlySet<ExternalSourceKind> = new Set([
+  "app_ingress",
+  "app_outbound",
+]);
+
+function isManagedSource(kind: ExternalSourceKind): boolean {
+  return MANAGED_SOURCE_KINDS.has(kind);
+}
+
 const STATUS_COLOR: Record<string, string> = {
   pending: "default",
   delivering: "processing",
@@ -160,6 +169,9 @@ export default function ExternalEventsPage() {
   const selectedSource = useMemo(
     () => sources.find((item) => item.source_id === selected),
     [sources, selected],
+  );
+  const selectedManaged = Boolean(
+    selectedSource && isManagedSource(selectedSource.kind),
   );
 
   const copyText = useCallback(
@@ -464,7 +476,15 @@ export default function ExternalEventsPage() {
       dataIndex: "kind",
       width: 150,
       render: (value: ExternalSourceKind) => (
-        <Tag color={value === "webhook" ? "blue" : "purple"}>
+        <Tag
+          color={
+            isManagedSource(value)
+              ? "gold"
+              : value === "webhook"
+              ? "blue"
+              : "purple"
+          }
+        >
           {t(`externalEvents.kind.${value}`)}
         </Tag>
       ),
@@ -473,17 +493,24 @@ export default function ExternalEventsPage() {
       title: t("externalEvents.status"),
       dataIndex: "enabled",
       width: 110,
-      render: (value: boolean, row) => (
-        <Switch
-          checked={value}
-          onChange={(checked) => void patchSource(row, checked)}
-        />
-      ),
+      render: (value: boolean, row) =>
+        isManagedSource(row.kind) ? (
+          <Tooltip title={t("externalEvents.managedHint")}>
+            <Tag color="gold">{t("externalEvents.managed")}</Tag>
+          </Tooltip>
+        ) : (
+          <Switch
+            checked={value}
+            onChange={(checked) => void patchSource(row, checked)}
+          />
+        ),
     },
     {
       title: t("externalEvents.connection"),
       render: (_value, row) =>
-        row.kind === "webhook" ? (
+        isManagedSource(row.kind) ? (
+          <Text type="secondary">{t("externalEvents.managedHint")}</Text>
+        ) : row.kind === "webhook" ? (
           <Space size={4}>
             <Text code className={styles.mono}>
               {row.webhook_path}
@@ -527,37 +554,45 @@ export default function ExternalEventsPage() {
     {
       title: t("externalEvents.actions"),
       width: 260,
-      render: (_value, row) => (
-        <Space wrap size={4}>
-          {row.kind === "webhook" ? (
-            <Button
-              size="small"
-              icon={<KeyRound size={14} />}
-              onClick={() => void rotateSecret(row)}
+      render: (_value, row) =>
+        isManagedSource(row.kind) ? (
+          <Text type="secondary">{t("externalEvents.managed")}</Text>
+        ) : (
+          <Space wrap size={4}>
+            {row.kind === "webhook" ? (
+              <Button
+                size="small"
+                icon={<KeyRound size={14} />}
+                onClick={() => void rotateSecret(row)}
+              >
+                {t("externalEvents.rotateSecret")}
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                icon={<Play size={14} />}
+                onClick={() => void pollNow(row)}
+              >
+                {t("externalEvents.pollNow")}
+              </Button>
+            )}
+            <Popconfirm
+              title={t("externalEvents.deleteSourceConfirm")}
+              onConfirm={() => void removeSource(row)}
+              okText={t("common.delete")}
+              cancelText={t("common.cancel")}
             >
-              {t("externalEvents.rotateSecret")}
-            </Button>
-          ) : (
-            <Button
-              size="small"
-              icon={<Play size={14} />}
-              onClick={() => void pollNow(row)}
-            >
-              {t("externalEvents.pollNow")}
-            </Button>
-          )}
-          <Popconfirm
-            title={t("externalEvents.deleteSourceConfirm")}
-            onConfirm={() => void removeSource(row)}
-            okText={t("common.delete")}
-            cancelText={t("common.cancel")}
-          >
-            <Button size="small" danger type="text" icon={<Trash2 size={14} />}>
-              {t("common.delete")}
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+              <Button
+                size="small"
+                danger
+                type="text"
+                icon={<Trash2 size={14} />}
+              >
+                {t("common.delete")}
+              </Button>
+            </Popconfirm>
+          </Space>
+        ),
     },
   ];
 
@@ -589,28 +624,36 @@ export default function ExternalEventsPage() {
       title: t("externalEvents.status"),
       dataIndex: "enabled",
       width: 100,
-      render: (value: boolean, row) => (
-        <Switch
-          checked={value}
-          onChange={(checked) => void toggleSubscription(row, checked)}
-        />
-      ),
+      render: (value: boolean, row) =>
+        selectedManaged ? (
+          <Tooltip title={t("externalEvents.managedHint")}>
+            <Tag color="gold">{t("externalEvents.managed")}</Tag>
+          </Tooltip>
+        ) : (
+          <Switch
+            checked={value}
+            onChange={(checked) => void toggleSubscription(row, checked)}
+          />
+        ),
     },
     {
       title: t("externalEvents.actions"),
       width: 100,
-      render: (_value, row) => (
-        <Popconfirm
-          title={t("externalEvents.deleteSubscriptionConfirm")}
-          onConfirm={() => void removeSubscription(row)}
-          okText={t("common.delete")}
-          cancelText={t("common.cancel")}
-        >
-          <Button size="small" danger type="text" icon={<Trash2 size={14} />}>
-            {t("common.delete")}
-          </Button>
-        </Popconfirm>
-      ),
+      render: (_value, row) =>
+        selectedManaged ? (
+          <Text type="secondary">{t("externalEvents.managed")}</Text>
+        ) : (
+          <Popconfirm
+            title={t("externalEvents.deleteSubscriptionConfirm")}
+            onConfirm={() => void removeSubscription(row)}
+            okText={t("common.delete")}
+            cancelText={t("common.cancel")}
+          >
+            <Button size="small" danger type="text" icon={<Trash2 size={14} />}>
+              {t("common.delete")}
+            </Button>
+          </Popconfirm>
+        ),
     },
   ];
 
@@ -779,7 +822,7 @@ export default function ExternalEventsPage() {
                   <Button
                     type="dashed"
                     icon={<Plus size={14} />}
-                    disabled={!selectedSource}
+                    disabled={!selectedSource || selectedManaged}
                     onClick={() => setSubscriptionOpen(true)}
                   >
                     {t("externalEvents.createSubscription")}

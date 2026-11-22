@@ -11,8 +11,8 @@ import json
 import time
 from typing import Any
 
+from octop.infra.apps.access import Action
 from octop.infra.apps.service import AppRecord, AppService
-from octop.infra.db.repos.apps import PERMISSION_EDIT_DATA, PERMISSION_RANK
 from octop.infra.db.repos.external_deliveries import ExternalDeliveryRow
 from octop.infra.db.repos.external_sources import ExternalSourceRow
 from octop.infra.db.repos.external_subscriptions import ExternalSubscriptionRow
@@ -118,16 +118,7 @@ async def _subscription_summary(
     missing_columns: list[str] = []
     if source is not None:
         owner_id = source.owner_user_id
-        is_admin = service.is_admin(owner_id)
-        permission = service.permission_for(row, owner_id, is_admin=is_admin)
-        target_ok = (
-            is_admin
-            or row.owner_user_id == owner_id
-            or (
-                permission is not None
-                and PERMISSION_RANK.get(permission, 0) >= PERMISSION_RANK[PERMISSION_EDIT_DATA]
-            )
-        )
+        target_ok = service.authorize_actor(owner_id, row, Action.EDIT_DATA).allowed
         if not target_ok:
             issues.append(
                 {

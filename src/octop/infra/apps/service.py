@@ -34,6 +34,7 @@ import httpx
 from octop_harness.backends import BackendWorkspace
 from octop_harness.security.ssrf import validate_agent_fetch_url
 
+from octop.infra.apps import access as app_access
 from octop.infra.apps import aggregate as app_aggregate
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps import limits as app_limits
@@ -44,6 +45,7 @@ from octop.infra.apps.models import (
     MAX_APPS_PER_OWNER,
     MAX_COLLABORATORS,
     MAX_CSV_BYTES,
+    MAX_GUESTS,
     MAX_LABEL_LEN,
     MAX_ROW_READ,
     MAX_ROWS,
@@ -58,10 +60,10 @@ from octop.infra.apps.models import (
     redact_rows,
     render_csv,
     validate_app_id,
+    validate_collaborator_permission,
     validate_description,
     validate_html,
     validate_name,
-    validate_permission,
     validate_row,
     validate_table_key,
 )
@@ -147,9 +149,24 @@ from octop.infra.db.repos.external_subscriptions import ExternalSubscriptionRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo, UserRow
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.users.principals import Principal, principal_from_user_row
 from octop.infra.utils.ulid import new_short_id, new_ulid
 
 logger = logging.getLogger(__name__)
+
+# Access requests can ask for any collaborator role, including participate.
+_ACCESS_ROLE_RANK = {
+    "participate": 0,
+    "view": 1,
+    "edit_data": 2,
+    "edit_structure": 3,
+}
+_AGENT_ACCESS_ROLES = frozenset({"edit_data", "edit_structure"})
+
+
+def _access_rank(role: str | None) -> int:
+    return _ACCESS_ROLE_RANK.get(role or "", -1)
+
 
 APPS_DIR = "apps"
 FILE_HTML = "app.html"
@@ -316,6 +333,7 @@ class AppView:
     has_preview: bool = False
     capabilities: tuple[str, ...] = ()
     previous_html_at: int | None = None
+    agent_owner_user_id: int | None = None
 
     @property
     def has_html(self) -> bool:
@@ -352,6 +370,7 @@ class AppTableView:
     public_visible: bool
     row_scope: str = "app"
     rules: dict[str, Any] = field(default_factory=dict)
+    member_visible: bool = False
 
 
 @dataclass(frozen=True)
@@ -1017,6 +1036,29 @@ def _apply_pii(
     return schema, (redact_rows(schema, rows, redact_text=True) if redact_pii else rows)
 
 
+def _apply_pii_policy(
+    schema: Schema,
+    rows: list[dict[str, str]],
+    owners: list[int | None],
+    *,
+    pii_policy: str,
+    viewer_user_id: int | None,
+) -> tuple[Schema, list[dict[str, str]], list[bool]]:
+    """Apply a per-row PII policy and return a mask flag for every row."""
+    schema = _with_detected_pii(schema, rows)
+    if pii_policy == "visible":
+        return schema, rows, [False] * len(rows)
+    if pii_policy == "masked":
+        return schema, redact_rows(schema, rows, redact_text=True), [True] * len(rows)
+    out: list[dict[str, str]] = []
+    flags: list[bool] = []
+    for row, owner in zip(rows, owners, strict=True):
+        masked = viewer_user_id is None or owner != viewer_user_id
+        out.append(redact_rows(schema, [row], redact_text=True)[0] if masked else row)
+        flags.append(masked)
+    return schema, out, flags
+
+
 def _reject_unmarked_pii(
     schema: Schema,
     values: Mapping[str, object],
@@ -1137,6 +1179,90 @@ class AppService:
             raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
         return granted
 
+    def get_data_row(self, app_id: str, row_id: str) -> LightAppDataRow | None:
+        """Resolve one stored row for access checks before a mutating route."""
+        return self._app_repo.get_data_row(app_id, row_id)
+
+    def authorize_actor(
+        self,
+        user_id: int,
+        row: AppRecord,
+        action: app_access.Action,
+        *,
+        table_key: str | None = None,
+        row_record: LightAppDataRow | None = None,
+    ) -> app_access.Decision:
+        """Authorize a caller known only by user id (agent tools, webhooks)."""
+        user_row = self._user_repo.get(user_id)
+        if user_row is None or user_row.disabled:
+            return app_access.deny("user not active")
+        return self.authorize(
+            principal_from_user_row(user_row),
+            row,
+            action,
+            table_key=table_key,
+            row_record=row_record,
+        )
+
+    def access_role(
+        self,
+        row: AppRecord,
+        user_id: int,
+        *,
+        is_admin: bool,
+    ) -> str | None:
+        """Effective app role for the access kernel.
+
+        ``permission_for`` collapses owner/admin into ``edit_structure``; the
+        kernel needs to distinguish full management, so owner/admin become
+        ``owner`` and the agent-owner read fallback stays ``view``.
+        """
+        if is_admin or row.owner_user_id == user_id:
+            return app_access.ROLE_OWNER
+        granted = self._app_repo.permission_for(row.app_id, user_id)
+        if granted is not None:
+            return granted
+        if self.is_agent_owner(row.agent_id, user_id):
+            return app_access.ROLE_VIEW
+        return None
+
+    def authorize(
+        self,
+        principal: Principal,
+        row: AppRecord,
+        action: app_access.Action,
+        *,
+        table_key: str | None = None,
+        row_record: LightAppDataRow | None = None,
+    ) -> app_access.Decision:
+        """Resolve the caller's role and delegate to the single access kernel."""
+        user_id = principal.user_id
+        if user_id is None:
+            return app_access.deny("no principal user")
+        is_admin = (
+            principal.user is not None
+            and principal.user.kind == "member"
+            and self.is_admin(user_id)
+        )
+        role = self.access_role(row, user_id, is_admin=is_admin)
+        table = None
+        if table_key is not None:
+            table = next(
+                (item for item in self.list_tables(row) if item.table_key == table_key),
+                None,
+            )
+            if table is None:
+                return app_access.deny("table not found", role=role)
+        return app_access.authorize(
+            principal,
+            row,
+            action,
+            role=role,
+            table=table,
+            row=row_record,
+            is_admin=is_admin,
+        )
+
     def list_for_user(self, user_id: int, *, is_admin: bool) -> list[tuple[LightAppRow, str]]:
         # Admins list the same apps as everyone else: owned + explicitly
         # shared. Direct access to a known app id still bypasses ACL through
@@ -1188,6 +1314,7 @@ class AppService:
             updated_at=row.updated_at,
             capabilities=tuple(app_capabilities.describe(row.capabilities_json)),
             previous_html_at=row.previous_html_at,
+            agent_owner_user_id=agent.user_id if agent is not None else None,
         )
 
     def capabilities(self, row: AppRecord) -> frozenset[str]:
@@ -1463,10 +1590,15 @@ class AppService:
         """Return the request plus whether this call created a new row."""
         if self._access_repo is None:
             raise OctopError(ErrorCode.INTERNAL_ERROR, "access requests are not configured")
-        permission = validate_permission(needed)
+        permission = validate_collaborator_permission(needed)
         row = self._app_repo.get(app_id) if app_id else None
         if app_id and row is None:
             raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
+        if permission == "participate" and row is None:
+            raise OctopError(
+                ErrorCode.APP_SHARE_INVALID,
+                "participate requires an app",
+            )
         # The app is the source of truth for its agent; never trust a
         # caller-supplied pair that could share an unrelated expert on approval.
         if row is not None:
@@ -1484,7 +1616,7 @@ class AppService:
             granted = (
                 self.permission_for(row, user_id, is_admin=False) if row is not None else "view"
             )
-            if PERMISSION_RANK.get(granted or "", 0) >= PERMISSION_RANK[permission]:
+            if _access_rank(granted) >= _access_rank(permission):
                 raise OctopError(ErrorCode.APP_SHARE_INVALID, "access is already granted")
         account = self._user_repo.get(user_id)
         if account is None or account.disabled:
@@ -1608,9 +1740,10 @@ class AppService:
         if request.app_id and row is None:
             raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
 
-        # The two halves of a split-owner request: the expert owner can share
-        # the expert, the app owner can grant the app ACL. An admin can do both.
-        can_share_agent = is_admin or agent.user_id == actor_user_id
+        # view / participate only need the app owner; edit roles and anything
+        # that uses the agent keep the split-owner (app + agent) approval.
+        needs_agent = request.needed in _AGENT_ACCESS_ROLES
+        can_share_agent = needs_agent and (is_admin or agent.user_id == actor_user_id)
         can_grant_app = row is not None and (is_admin or row.owner_user_id == actor_user_id)
 
         if can_share_agent and not agent.is_shared:
@@ -1633,10 +1766,10 @@ class AppService:
                 ),
                 None,
             )
-            needed_rank = PERMISSION_RANK[request.needed]
-            if PERMISSION_RANK.get(current or "", 0) < needed_rank and can_grant_app:
+            needed_rank = _access_rank(request.needed)
+            if _access_rank(current) < needed_rank and can_grant_app:
                 granted = request.needed
-                if current and PERMISSION_RANK.get(current, 0) > PERMISSION_RANK.get(granted, 0):
+                if current and _access_rank(current) > _access_rank(granted):
                     granted = current
                 entries = [
                     (item.user_id, item.permission)
@@ -1644,7 +1777,14 @@ class AppService:
                     if item.user_id != request.requester_user_id
                 ]
                 entries.append((request.requester_user_id, granted))
-                collaborators = self.set_collaborators(row, entries)
+                self.set_collaborators(row, entries)
+                # An approved access request activates a pending membership.
+                self._app_repo.update_collaborator(
+                    row.app_id,
+                    request.requester_user_id,
+                    status="active",
+                )
+                collaborators = self._app_repo.list_collaborators(row.app_id)
                 current = next(
                     (
                         item.permission
@@ -1664,8 +1804,8 @@ class AppService:
                     },
                 )
             agent_accessible = self.is_agent_accessible(request.agent_id, request.requester_user_id)
-            app_allowed = PERMISSION_RANK.get(current or "", 0) >= needed_rank
-            if agent_accessible and app_allowed:
+            app_allowed = _access_rank(current) >= needed_rank
+            if app_allowed and (not needs_agent or agent_accessible):
                 cleaned = self._clean_collaborators(
                     row,
                     [(item.user_id, item.permission) for item in collaborators],
@@ -2310,6 +2450,7 @@ class AppService:
                 public_visible=main.public_visible if main is not None else True,
                 row_scope=main.row_scope if main is not None else "app",
                 rules=_rules_from_json(main.rules_json if main is not None else "{}"),
+                member_visible=main.member_visible if main is not None else False,
             )
         ]
         for item in registered:
@@ -2325,6 +2466,7 @@ class AppService:
                     public_visible=item.public_visible,
                     row_scope=item.row_scope,
                     rules=_rules_from_json(item.rules_json),
+                    member_visible=item.member_visible,
                 )
             )
         return views
@@ -2821,7 +2963,7 @@ class AppService:
                     scope == "user"
                     and not include_all_rows
                     and viewer_user_id is not None
-                    and target_row.created_by != viewer_user_id
+                    and app_access.row_owner_id(target_row) != viewer_user_id
                 ):
                     continue
                 label = (
@@ -2862,6 +3004,28 @@ class AppService:
             await self._after_write(ws, current.app_id)
         view = next(item for item in self.list_tables(current) if item.table_key == key)
         return view
+
+    async def set_table_member_visibility(
+        self,
+        row: AppRecord,
+        *,
+        table: str,
+        member_visible: bool,
+    ) -> AppTableView:
+        """Expose or hide one table from app members with participate permission."""
+        key = self._require_table(row, table)
+        async with _lock_for(row.app_id):
+            self._require_live(row.app_id)
+            current = self._app_repo.get(row.app_id) or row
+            self._ensure_main_table(current)
+            self._app_repo.set_table_member_visible(
+                current.app_id,
+                key,
+                member_visible=member_visible,
+            )
+            ws = await self._workspace(current.agent_id)
+            await self._after_write(ws, current.app_id)
+        return next(item for item in self.list_tables(current) if item.table_key == key)
 
     def is_table_public(self, row: AppRecord, table: str) -> bool:
         """Return whether *table* is exposed on the public link."""
@@ -3127,6 +3291,7 @@ class AppService:
         offset: int = 0,
         table: str = MAIN_TABLE_KEY,
         redact_pii: bool = False,
+        pii_policy: str | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], int]:
@@ -3136,6 +3301,7 @@ class AppService:
             offset=offset,
             table=table,
             redact_pii=redact_pii,
+            pii_policy=pii_policy,
             viewer_user_id=viewer_user_id,
             include_all_rows=include_all_rows,
         )
@@ -3149,10 +3315,11 @@ class AppService:
         offset: int = 0,
         table: str = MAIN_TABLE_KEY,
         redact_pii: bool = False,
+        pii_policy: str | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], list[dict[str, Any]], int]:
-        """Read a page plus per-row ``row_id``/``version`` metadata."""
+        """Read a page plus per-row ``row_id``/``version``/``pii_masked`` metadata."""
         key = self._require_table(row, table)
         safe_limit = max(1, min(int(limit), MAX_ROW_READ))
         safe_offset = max(0, int(offset))
@@ -3172,7 +3339,17 @@ class AppService:
                     created_by=owner_filter,
                 )
                 rows_page = _normalize_rows(schema, [item.values for item in data_page])
-                schema, rows_page = _apply_pii(schema, rows_page, redact_pii=redact_pii)
+                if pii_policy is not None:
+                    schema, rows_page, masked = _apply_pii_policy(
+                        schema,
+                        rows_page,
+                        [app_access.row_owner_id(item) for item in data_page],
+                        pii_policy=pii_policy,
+                        viewer_user_id=viewer_user_id,
+                    )
+                else:
+                    schema, rows_page = _apply_pii(schema, rows_page, redact_pii=redact_pii)
+                    masked = [redact_pii] * len(rows_page)
                 return (
                     schema,
                     rows_page,
@@ -3181,8 +3358,9 @@ class AppService:
                             "row_id": item.row_id,
                             "version": item.version,
                             "source": item.source,
+                            "pii_masked": flag,
                         }
-                        for item in data_page
+                        for item, flag in zip(data_page, masked, strict=True)
                     ],
                     total,
                 )
@@ -3205,11 +3383,24 @@ class AppService:
                 # Legacy app: only ``light_apps.row_count`` tracks the main CSV.
                 self._app_repo.set_row_count(current.app_id, total, touch=False)
             rows_page = rows[safe_offset : safe_offset + safe_limit]
-            schema, rows_page = _apply_pii(schema, rows_page, redact_pii=redact_pii)
+            if pii_policy is not None:
+                schema, rows_page, masked = _apply_pii_policy(
+                    schema,
+                    rows_page,
+                    [None] * len(rows_page),
+                    pii_policy=pii_policy,
+                    viewer_user_id=viewer_user_id,
+                )
+            else:
+                schema, rows_page = _apply_pii(schema, rows_page, redact_pii=redact_pii)
+                masked = [redact_pii] * len(rows_page)
             return (
                 schema,
                 rows_page,
-                [{"row_id": "", "version": 1, "source": "manual"} for _ in rows_page],
+                [
+                    {"row_id": "", "version": 1, "source": "manual", "pii_masked": flag}
+                    for flag in masked
+                ],
                 total,
             )
 
@@ -3222,6 +3413,7 @@ class AppService:
         limit: int = MAX_ROW_READ,
         offset: int = 0,
         redact_pii: bool = False,
+        pii_policy: str | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], int]:
@@ -3232,6 +3424,7 @@ class AppService:
             limit=limit,
             offset=offset,
             redact_pii=redact_pii,
+            pii_policy=pii_policy,
             viewer_user_id=viewer_user_id,
             include_all_rows=include_all_rows,
         )
@@ -3247,6 +3440,7 @@ class AppService:
         limit: int = MAX_ROW_READ,
         offset: int = 0,
         redact_pii: bool = False,
+        pii_policy: str | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
     ) -> tuple[Schema, list[dict[str, str]], list[dict[str, Any]], int]:
@@ -3267,6 +3461,7 @@ class AppService:
             current = self._app_repo.get(row.app_id) or row
             ws = await self._workspace(current.agent_id)
             schema = await self._read_schema(ws, current.app_id, key)
+            restrict_pii = redact_pii or (pii_policy is not None and pii_policy != "visible")
             for column in clean_filters:
                 found = schema.column(column)
                 if found is None:
@@ -3275,7 +3470,7 @@ class AppService:
                         f"unknown filter column: {column!r}",
                         table=key,
                     )
-                if redact_pii and found.pii:
+                if restrict_pii and found.pii:
                     raise _invalid(
                         ErrorCode.APP_FORBIDDEN,
                         f"cannot filter on a sensitive column: {column!r}",
@@ -3284,7 +3479,7 @@ class AppService:
             sort_spec = _parse_sort(schema, sort)
             if sort_spec is not None:
                 sort_column = schema.column(sort_spec[0])
-                if redact_pii and sort_column is not None and sort_column.pii:
+                if restrict_pii and sort_column is not None and sort_column.pii:
                     raise _invalid(
                         ErrorCode.APP_FORBIDDEN,
                         f"cannot sort by a sensitive column: {sort_spec[0]!r}",
@@ -3294,7 +3489,9 @@ class AppService:
             if current.storage_version >= 2:
                 data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
                 if owner_filter is not None:
-                    data_rows = [item for item in data_rows if item.created_by == owner_filter]
+                    data_rows = [
+                        item for item in data_rows if app_access.row_owner_id(item) == owner_filter
+                    ]
                 rows = _normalize_rows(schema, [item.values for item in data_rows])
                 meta = [
                     {
@@ -3304,6 +3501,7 @@ class AppService:
                     }
                     for item in data_rows
                 ]
+                owners: list[int | None] = [app_access.row_owner_id(item) for item in data_rows]
             else:
                 if owner_filter is not None:
                     raise OctopError(
@@ -3312,6 +3510,7 @@ class AppService:
                     )
                 rows = await self._read_rows_file(ws, current.app_id, schema, key)
                 meta = [{"row_id": "", "version": 1, "source": "manual"} for _ in rows]
+                owners = [None] * len(rows)
         if clean_filters:
             wanted = {col: val.strip().lower() for col, val in clean_filters.items()}
             keep = [
@@ -3321,6 +3520,7 @@ class AppService:
             ]
             rows = [rows[index] for index in keep]
             meta = [meta[index] for index in keep]
+            owners = [owners[index] for index in keep]
         if sort_spec is not None:
             sort_name, descending = sort_spec
             sort_column = schema.column(sort_name)
@@ -3332,13 +3532,28 @@ class AppService:
             )
             rows = [rows[index] for index in order]
             meta = [meta[index] for index in order]
+            owners = [owners[index] for index in order]
         end = safe_offset + safe_limit
-        schema, page = _apply_pii(
-            schema,
-            rows[safe_offset:end],
-            redact_pii=redact_pii,
-        )
-        return schema, page, meta[safe_offset:end], len(rows)
+        if pii_policy is not None:
+            schema, page, masked = _apply_pii_policy(
+                schema,
+                rows[safe_offset:end],
+                owners[safe_offset:end],
+                pii_policy=pii_policy,
+                viewer_user_id=viewer_user_id,
+            )
+        else:
+            schema, page = _apply_pii(
+                schema,
+                rows[safe_offset:end],
+                redact_pii=redact_pii,
+            )
+            masked = [redact_pii] * len(page)
+        page_meta = [
+            {**item, "pii_masked": flag}
+            for item, flag in zip(meta[safe_offset:end], masked, strict=True)
+        ]
+        return schema, page, page_meta, len(rows)
 
     async def append_row(
         self,
@@ -3351,6 +3566,7 @@ class AppService:
         source_id: str | None = None,
         source_key: str | None = None,
         created_by: int | None = None,
+        row_owner_user_id: int | None = None,
     ) -> tuple[int, dict[str, str]]:
         index, stored = await self.append_row_record(
             row,
@@ -3361,6 +3577,7 @@ class AppService:
             source_id=source_id,
             source_key=source_key,
             created_by=created_by,
+            row_owner_user_id=row_owner_user_id,
         )
         return index, stored.values
 
@@ -3375,6 +3592,7 @@ class AppService:
         source_id: str | None = None,
         source_key: str | None = None,
         created_by: int | None = None,
+        row_owner_user_id: int | None = None,
     ) -> tuple[int, LightAppDataRow]:
         key = self._require_table(row, table)
         scope = self.table_row_scope(row, key)
@@ -3418,6 +3636,7 @@ class AppService:
                     source_key=source_key,
                     client_request_id=client_request_id,
                     created_by=created_by,
+                    row_owner_user_id=row_owner_user_id,
                 )
                 self._emit_row_event(current, key, "on_create", stored.row_id, stored.values)
                 await self._after_write(ws, current.app_id)
@@ -3448,6 +3667,9 @@ class AppService:
                 version=1,
                 source=source,
                 created_by=created_by,
+                row_owner_user_id=(
+                    row_owner_user_id if row_owner_user_id is not None else created_by
+                ),
                 created_at=ts,
                 updated_at=ts,
             )
@@ -4859,6 +5081,7 @@ class AppService:
         source: str = "import",
         client_request_id_prefix: str | None = None,
         created_by: int | None = None,
+        row_owner_user_id: int | None = None,
         actor_user_id: int | None = None,
         record_history: bool = True,
     ) -> ImportResult:
@@ -4885,6 +5108,7 @@ class AppService:
             # Imports do not have a per-row actor here; attribute them to the
             # owner so user-scoped rows never become invisible orphans.
             owner_id = row.owner_user_id
+        owner_override = row_owner_user_id if row_owner_user_id is not None else owner_id
         clean = [dict(record) for record in records]
         if len(clean) > MAX_ROWS:
             raise _invalid(
@@ -5075,6 +5299,7 @@ class AppService:
                         imported_rows,
                         source=source,
                         created_by=owner_id,
+                        row_owner_user_id=owner_override,
                         history_actor=history_actor,
                     )
                 elif upsert_key:
@@ -5102,6 +5327,7 @@ class AppService:
                                 source=source,
                                 client_request_id=client_request_id,
                                 created_by=owner_id,
+                                row_owner_user_id=owner_override,
                             )
                             continue
                         source_key = "|".join(key_values)
@@ -5120,6 +5346,7 @@ class AppService:
                                 source_id=source,
                                 source_key=source_key,
                                 created_by=owner_id,
+                                row_owner_user_id=owner_override,
                             )
                         else:
                             self._check_transition(current, key, existing_row.values, item)
@@ -5151,6 +5378,7 @@ class AppService:
                             source=source,
                             client_request_id=client_request_id,
                             created_by=owner_id,
+                            row_owner_user_id=owner_override,
                         )
                 else:
                     self._app_repo.append_data_rows(
@@ -5158,6 +5386,7 @@ class AppService:
                         key,
                         imported_rows,
                         created_by=owner_id,
+                        row_owner_user_id=owner_override,
                     )
                 await self._after_write(ws, current.app_id)
                 return ImportResult(
@@ -5283,7 +5512,7 @@ class AppService:
             key = existing_row.table_key or key
             schema = await self._read_schema(ws, current.app_id, key)
             owner_filter = self._row_owner_filter(current, key, viewer_user_id, include_all_rows)
-            if owner_filter is not None and existing_row.created_by != owner_filter:
+            if owner_filter is not None and app_access.row_owner_id(existing_row) != owner_filter:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
             normalized = validate_row(schema, values)
             await self._validate_references(current, schema, normalized)
@@ -5344,7 +5573,7 @@ class AppService:
             owner_filter = self._row_owner_filter(
                 current, existing_row.table_key, viewer_user_id, include_all_rows
             )
-            if owner_filter is not None and existing_row.created_by != owner_filter:
+            if owner_filter is not None and app_access.row_owner_id(existing_row) != owner_filter:
                 raise _invalid(ErrorCode.APP_ROW_NOT_FOUND, f"row not found: {row_id}")
             inbound = await self._inbound_references(current, existing_row.table_key, {row_id})
             if inbound:
@@ -5388,7 +5617,9 @@ class AppService:
         if current.storage_version >= 2:
             data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
             if owner_filter is not None:
-                data_rows = [item for item in data_rows if item.created_by == owner_filter]
+                data_rows = [
+                    item for item in data_rows if app_access.row_owner_id(item) == owner_filter
+                ]
             rows = _normalize_rows(schema, [item.values for item in data_rows])
         else:
             if owner_filter is not None:
@@ -5439,7 +5670,9 @@ class AppService:
         if current.storage_version >= 2:
             data_rows = self._app_repo.list_all_data_rows(current.app_id, key)
             if owner_filter is not None:
-                data_rows = [item for item in data_rows if item.created_by == owner_filter]
+                data_rows = [
+                    item for item in data_rows if app_access.row_owner_id(item) == owner_filter
+                ]
             rows = _normalize_rows(schema, [item.values for item in data_rows])
         else:
             if owner_filter is not None:
@@ -5510,7 +5743,7 @@ class AppService:
         elif not include_all_rows and table_view.row_scope == "user":
             live = self._app_repo.get_data_row(current.app_id, row_id)
             if live is not None:
-                if live.created_by != viewer_user_id:
+                if app_access.row_owner_id(live) != viewer_user_id:
                     return []
             elif viewer_user_id is None or not any(
                 entry.actor == f"user:{viewer_user_id}" for entry in entries
@@ -8777,7 +9010,7 @@ class AppService:
         seen: set[int] = set()
         for username, permission in shares:
             name = username.strip()
-            account = self._user_repo.get_by_username(name) if name else None
+            account = self._user_repo.get_member_by_username(name) if name else None
             if account is None or account.disabled:
                 raise _invalid(
                     ErrorCode.APP_SHARE_INVALID,
@@ -8790,7 +9023,22 @@ class AppService:
                 )
             seen.add(account.id)
             entries.append((account.id, permission))
-        self.set_collaborators(row, entries)
+        cleaned = self._clean_collaborators(row, entries)
+        # Guests are managed by the member APIs / join flow, not by the legacy
+        # platform share dialog. Keep them across a full member replacement.
+        guest_entries: list[tuple[int, str]] = []
+        for collaborator in self._app_repo.list_collaborators(row.app_id):
+            account = self._user_repo.get(collaborator.user_id)
+            if account is not None and account.kind == "guest":
+                guest_entries.append((collaborator.user_id, collaborator.permission))
+        if len(guest_entries) > MAX_GUESTS:
+            raise _invalid(
+                ErrorCode.APP_LIMIT_EXCEEDED,
+                f"at most {MAX_GUESTS} guest members",
+            )
+        combined = guest_entries + cleaned
+        self._app_repo.set_collaborators(row.app_id, combined)
+        self._app_repo.touch(row.app_id)
         return self.list_share_views(row)
 
     def _clean_collaborators(
@@ -8798,13 +9046,10 @@ class AppService:
         row: AppRecord,
         entries: list[tuple[int, str]],
     ) -> list[tuple[int, str]]:
-        if len(entries) > MAX_COLLABORATORS:
-            raise _invalid(
-                ErrorCode.APP_SHARE_INVALID,
-                f"at most {MAX_COLLABORATORS} collaborators",
-            )
         cleaned: list[tuple[int, str]] = []
         seen: set[int] = set()
+        members = 0
+        guests = 0
         for user_id, permission in entries:
             if user_id == row.owner_user_id:
                 raise _invalid(
@@ -8816,8 +9061,34 @@ class AppService:
                     ErrorCode.APP_SHARE_INVALID,
                     "each collaborator can appear only once",
                 )
+            account = self._user_repo.get(user_id)
+            if account is None or account.disabled:
+                raise _invalid(
+                    ErrorCode.APP_SHARE_INVALID,
+                    f"unknown or disabled user: {user_id}",
+                )
+            if account.kind == "guest":
+                if permission != "participate":
+                    raise _invalid(
+                        ErrorCode.APP_SHARE_INVALID,
+                        "guests can only hold participate permission",
+                    )
+                guests += 1
+            else:
+                permission = validate_collaborator_permission(permission)
+                members += 1
+            if members > MAX_COLLABORATORS:
+                raise _invalid(
+                    ErrorCode.APP_LIMIT_EXCEEDED,
+                    f"at most {MAX_COLLABORATORS} members",
+                )
+            if guests > MAX_GUESTS:
+                raise _invalid(
+                    ErrorCode.APP_LIMIT_EXCEEDED,
+                    f"at most {MAX_GUESTS} guest members",
+                )
             seen.add(user_id)
-            cleaned.append((user_id, validate_permission(permission)))
+            cleaned.append((user_id, permission))
         return cleaned
 
     def set_collaborators(

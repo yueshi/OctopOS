@@ -97,19 +97,22 @@ class BuiltinDatasetService:
         limit: int,
         offset: int,
         redact_pii: bool,
+        pii_policy: str | None = None,
         viewer_user_id: int | None = None,
         include_all_rows: bool = False,
-    ) -> tuple[Schema, list[dict[str, str]], int]:
-        schema, rows, _meta, total = await self._service.read_rows_detailed(
+    ) -> tuple[Schema, list[dict[str, str]], int, list[str]]:
+        schema, rows, meta, total = await self._service.read_rows_detailed(
             row,
             table=table,
             limit=limit,
             offset=offset,
             redact_pii=redact_pii,
+            pii_policy=pii_policy,
             viewer_user_id=viewer_user_id,
             include_all_rows=include_all_rows,
         )
-        return schema, rows, total
+        masked = [item["row_id"] for item in meta if item.get("pii_masked") and item["row_id"]]
+        return schema, rows, total, masked
 
 
 __all__ = [

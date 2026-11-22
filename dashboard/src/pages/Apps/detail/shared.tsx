@@ -16,6 +16,7 @@ export function permissionLabel(
       : t("apps.editStructure");
   }
   if (permission === "edit_data") return t("apps.editData");
+  if (permission === "participate") return t("apps.memberParticipate");
   return t("apps.viewOnly");
 }
 

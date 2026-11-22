@@ -260,6 +260,7 @@ class LdapAuthService:
             role=role_id,
             display_name=identity.display_name,
             permissions=list(permissions),
+            kind="member",
         )
         self._user_manager.register_cached_user(user)
         self._services.audit_repo.write(
@@ -291,6 +292,8 @@ class LdapAuthService:
         return normalized
 
     def _cached_or_row(self, row: Any) -> User:
+        if row.kind != "member":
+            raise OctopError(ErrorCode.USER_DISABLED, "guest accounts cannot sign in")
         cached = self._user_manager.get(row.username)
         if cached is not None:
             # The display name is directory-owned and changes over time, so the
@@ -307,6 +310,7 @@ class LdapAuthService:
             display_name=row.display_name,
             locale=normalize_locale(row.locale),
             permissions=list(row.permissions),
+            kind=str(row.kind or "member"),
         )
         self._user_manager.register_cached_user(user)
         return user

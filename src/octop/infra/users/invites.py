@@ -223,6 +223,7 @@ class InviteService:
             display_name=name,
             locale=loc,
             permissions=perm_list,
+            kind="member",
         )
         register_user(user)
         self._services.audit_repo.write(

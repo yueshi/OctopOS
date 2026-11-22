@@ -103,7 +103,7 @@ class UserManager:
 
     async def boot(self) -> None:
         async with self._lock:
-            for row in self._services.user_repo.list(include_disabled=False):
+            for row in self._services.user_repo.list(include_disabled=False, kind="member"):
                 user = User(
                     id=row.id,
                     username=row.username,
@@ -111,6 +111,7 @@ class UserManager:
                     display_name=row.display_name,
                     locale=normalize_locale(row.locale),
                     permissions=list(row.permissions),
+                    kind=str(row.kind or "member"),
                 )
                 self._users[row.username] = user
 
@@ -181,13 +182,20 @@ class UserManager:
                 display_name=display_name,
                 locale=loc,
                 permissions=keys,
+                kind="member",
             )
             self._users[username] = user
             self._services.audit_repo.write(actor=username, action="user.create", target=username)
             return user
 
     def register_cached_user(self, user: User) -> None:
-        """Adopt a user row created outside ``create`` (e.g. invite redeem)."""
+        """Adopt a member row created outside ``create`` (e.g. invite redeem).
+
+        Guests never enter the platform cache; they are resolved on demand by
+        ``PrincipalDirectory`` from the user repo.
+        """
+        if user.kind != "member":
+            return
         self._users[user.username] = user
 
     async def create_from_invite(
@@ -218,7 +226,7 @@ class UserManager:
 
     def get_by_id(self, user_id: int) -> User | None:
         for u in self._users.values():
-            if u.id == user_id:
+            if u.id == user_id and u.kind == "member":
                 return u
         return None
 
@@ -226,15 +234,30 @@ class UserManager:
         """Return the raw UserRow (includes disabled flag) for admin read operations."""
         return self._services.user_repo.get(user_id)
 
+    def _member_row(self, username: str) -> Any:
+        """Resolve a platform member by username; guests are not user-management targets."""
+        row = self._services.user_repo.get_by_username(username)
+        if row is None or row.kind != "member":
+            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        return row
+
     def list(self) -> list[User]:
         return sorted(self._users.values(), key=lambda u: u.username)
 
-    def list_all(self, *, include_disabled: bool = True) -> builtins.list[Any]:
-        """Return all UserRow objects (for admin listing, includes disabled users)."""
-        return self._services.user_repo.list(include_disabled=include_disabled)
+    def list_all(
+        self,
+        *,
+        include_disabled: bool = True,
+        kind: str = "member",
+    ) -> builtins.list[Any]:
+        """Return user rows for admin listing; guests are excluded by default."""
+        return self._services.user_repo.list(include_disabled=include_disabled, kind=kind)
 
     def count(self) -> int:
-        return self._services.user_repo.count()
+        return self._services.user_repo.count(kind="member")
+
+    def count_by_kind(self, kind: str) -> int:
+        return self._services.user_repo.count(kind=kind)
 
     # ----- auth -----
 
@@ -298,6 +321,7 @@ class UserManager:
                             role=sso_role_id,
                             display_name=display_name,
                             permissions=list(sso_permissions),
+                            kind="member",
                         )
                         self._users[username] = user
                         self._services.audit_repo.write(
@@ -306,6 +330,8 @@ class UserManager:
                         return user
 
             assert row is not None  # The retry loop either returns, raises, or finds this identity.
+            if row.kind != "member":
+                raise OctopError(ErrorCode.USER_DISABLED, "guest accounts cannot sign in")
             if row.disabled:
                 raise OctopError(ErrorCode.USER_DISABLED, "user is disabled")
             if email is not None:
@@ -325,6 +351,7 @@ class UserManager:
                     display_name=row.display_name,
                     locale=normalize_locale(row.locale),
                     permissions=list(row.permissions),
+                    kind=str(row.kind or "member"),
                 )
                 self._users[row.username] = user
                 return user
@@ -342,6 +369,8 @@ class UserManager:
             row = self._services.user_repo.get(user_id)
             if row is None:
                 raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+            if row.kind != "member":
+                raise OctopError(ErrorCode.USER_DISABLED, "guest accounts cannot sign in")
             if row.disabled:
                 raise OctopError(ErrorCode.USER_DISABLED, "user is disabled")
             owner = self._services.user_repo.get_by_sso(provider_id, subject)
@@ -382,6 +411,7 @@ class UserManager:
                     display_name=row.display_name,
                     locale=normalize_locale(row.locale),
                     permissions=list(row.permissions),
+                    kind=str(row.kind or "member"),
                 )
                 self._users[row.username] = cached
             return cached
@@ -414,6 +444,8 @@ class UserManager:
         return self._services.user_repo.list_sso_identities(user_id)
 
     def _cached_or_row_user(self, row: Any) -> User:
+        if row.kind != "member":
+            raise OctopError(ErrorCode.USER_DISABLED, "guest accounts cannot sign in")
         cached = self._users.get(row.username)
         if cached is not None:
             return cached
@@ -424,6 +456,7 @@ class UserManager:
             display_name=row.display_name,
             locale=normalize_locale(row.locale),
             permissions=list(row.permissions),
+            kind=str(row.kind or "member"),
         )
         self._users[row.username] = user
         return user
@@ -464,6 +497,8 @@ class UserManager:
         now = int(time.time())
         if row.disabled:
             return None
+        if row.kind != "member":
+            return None
         if not row.password_hash:
             return None
         locked_until = int(row.login_locked_until or 0)
@@ -503,6 +538,7 @@ class UserManager:
                 display_name=row.display_name,
                 locale=normalize_locale(row.locale),
                 permissions=list(row.permissions),
+                kind=str(row.kind or "member"),
             )
             self._users[row.username] = user
         self._services.audit_repo.write(actor=row.username, action="auth.login")
@@ -510,7 +546,7 @@ class UserManager:
 
     async def change_password(self, username: str, old: str, new: str) -> None:
         row = self._services.user_repo.get_by_username(username)
-        if row is None:
+        if row is None or row.kind != "member":
             raise OctopError(ErrorCode.AUTH_FAILED, "current password incorrect")
         if not row.password_hash:
             # Accounts provisioned from a directory (or SSO) never hold a local
@@ -530,9 +566,7 @@ class UserManager:
 
     async def reset_password(self, username: str, new: str) -> None:
         """Admin-driven reset (no old-password check)."""
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         validate_password_policy(new)
         self._services.user_repo.set_password_hash(row.id, hash_password(new))
         self._services.user_repo.clear_login_lockout(row.id)
@@ -541,9 +575,7 @@ class UserManager:
         )
 
     async def set_permissions(self, username: str, permissions: builtins.list[str]) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         try:
             keys = validate_permission_keys(permissions)
         except ValueError as exc:
@@ -577,9 +609,7 @@ class UserManager:
             normalize_workspace_root_dir,
         )
 
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         updates: dict[str, str | None] = {}
         root_arg: Any = UNSET
         quota_arg: Any = UNSET
@@ -628,9 +658,7 @@ class UserManager:
         await self.set_resource_policy(username, max_agents=max_agents)
 
     async def set_role(self, username: str, role: Role | str) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         role_id = str(role)
         self._services.user_repo.set_role(row.id, role_id)
         async with self._lock:
@@ -645,9 +673,7 @@ class UserManager:
         )
 
     async def set_display_name(self, username: str, display_name: str | None) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         self._services.user_repo.set_display_name(row.id, display_name)
         async with self._lock:
             current = self._users.get(username)
@@ -655,9 +681,7 @@ class UserManager:
                 current.display_name = display_name
 
     async def set_email(self, username: str, email: str | None) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         normalized = parse_optional_email(email)
         if normalized is not None:
             owner = self._services.user_repo.get_by_email(normalized)
@@ -682,9 +706,7 @@ class UserManager:
         )
 
     async def set_locale(self, username: str, locale: str) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         loc = normalize_locale(locale)
         self._services.user_repo.set_locale(row.id, loc)
         async with self._lock:
@@ -703,9 +725,7 @@ class UserManager:
         username: str,
         items: builtins.list[dict[str, str]],
     ) -> builtins.list[RemoteBrowserBookmark]:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         bookmarks = validate_remote_browser_bookmarks(items)
         merged = merge_preferences_json(row.preferences_json, bookmarks)
         self._services.user_repo.set_preferences_json(row.id, merged)
@@ -718,9 +738,7 @@ class UserManager:
         preferred_model: str | None | object = ...,
         model_reasoning: dict[str, ModelReasoningPreference] | None = None,
     ) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         merged = merge_model_preferences_json(
             row.preferences_json,
             preferred_model=preferred_model,
@@ -729,18 +747,14 @@ class UserManager:
         self._services.user_repo.set_preferences_json(row.id, merged)
 
     async def disable(self, username: str) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         async with self._lock:
             self._users.pop(username, None)
         self._services.user_repo.set_disabled(row.id, True)
         self._services.audit_repo.write(actor=ACTOR_ADMIN, action="user.disable", target=username)
 
     async def enable(self, username: str) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         self._services.user_repo.set_disabled(row.id, False)
         user = User(
             id=row.id,
@@ -749,15 +763,14 @@ class UserManager:
             display_name=row.display_name,
             locale=normalize_locale(row.locale),
             permissions=list(row.permissions),
+            kind=str(row.kind or "member"),
         )
         async with self._lock:
             self._users[username] = user
         self._services.audit_repo.write(actor=ACTOR_ADMIN, action="user.enable", target=username)
 
     async def unlock_login(self, username: str) -> None:
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         self._services.user_repo.clear_login_lockout(row.id)
         self._services.audit_repo.write(
             actor=ACTOR_ADMIN, action="user.unlock_login", target=username
@@ -773,9 +786,7 @@ class UserManager:
         ``agent_manager`` unloads a running harness before the workspace
         is removed. Without it (CLI), only the on-disk store is cleaned.
         """
-        row = self._services.user_repo.get_by_username(username)
-        if row is None:
-            raise OctopError(ErrorCode.NOT_FOUND, "user not found")
+        row = self._member_row(username)
         owned = self._services.agent_repo.list_by_user(row.id)
         owned_ids = {agent.agent_id for agent in owned}
         if agent_manager is not None:

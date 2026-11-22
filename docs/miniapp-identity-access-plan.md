@@ -4,7 +4,8 @@
 > Date: 2026-11-21  
 > Branch: `feature/miniapp-capabilities`  
 > Scope: MiniApp 用户管理、Octop 用户接入、IM 渠道接入  
-> Companion deck: [`docs/slides/miniapp-identity-access-plan.html`](./slides/miniapp-identity-access-plan.html)
+> Companion deck: [`docs/slides/miniapp-identity-access-plan.html`](./slides/miniapp-identity-access-plan.html)  
+> Implementation plan: [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)
 
 ---
 
@@ -738,6 +739,8 @@ DM 需求 → 解析 sender（account_key + sender_id）
 ---
 
 ## 12. 实施路线图
+
+> 任务级拆分、文件清单、DDL、API 契约与测试矩阵见 [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)。
 
 ### P0：身份基座 + 授权内核（不改 UI）
 

@@ -24,6 +24,7 @@ from octop.api.deps import current_user, get_server
 from octop.api.routers.chat.sse import format_sse
 from octop.config import DEFAULT_MAX_UPLOAD_MB, upload_mb_to_bytes
 from octop.infra.apps import capabilities as app_capabilities
+from octop.infra.apps.access import Action, Decision, can_view_pii
 from octop.infra.apps.assistant import AppAssistant
 from octop.infra.apps.dataset import BuiltinDatasetService
 from octop.infra.apps.game_sessions import create_game_token
@@ -62,10 +63,14 @@ from octop.infra.apps.wiring import (
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
+from octop.infra.users.principals import principal_of
 from octop.infra.utils.locale import Locale, resolve_request_locale
 from octop.infra.utils.ulid import new_short_id
 
 router = APIRouter(prefix="/apps")
+
+# Every route below must declare its access action in
+# ``app_route_actions.APP_ROUTE_ACTIONS``; the registry test fails otherwise.
 
 SharePermission = Literal["view", "edit_data", "edit_structure"]
 
@@ -127,6 +132,10 @@ class AppSummary(BaseModel):
     description: str
     agent_id: str = Field(description="Agent that owns the app workspace.")
     agent_name: str = ""
+    agent_owner_user_id: int | None = Field(
+        default=None,
+        description="Owner of the hosting agent; may approve external participants.",
+    )
     owner_user_id: int
     owner_username: str = ""
     permission: str = Field(description="Caller's permission: view, edit_data or edit_structure.")
@@ -172,6 +181,10 @@ class AppTableOut(BaseModel):
     public_visible: bool = Field(
         default=True,
         description="Whether the table is exposed by the app's public read-only link.",
+    )
+    member_visible: bool = Field(
+        default=False,
+        description="Whether app members with participate permission may see this table.",
     )
     row_scope: str = Field(
         default="app",
@@ -246,6 +259,10 @@ class DatasetQueryOut(BaseModel):
     limit: int
     offset: int
     pii_columns: list[str]
+    masked_pii_rows: list[str] = Field(
+        default_factory=list,
+        description="Row ids whose sensitive values are masked for this caller.",
+    )
 
 
 class BindingOut(BaseModel):
@@ -520,6 +537,13 @@ class TableVisibilityBody(BaseModel):
     public_visible: bool = Field(
         description="Expose this table on the app's public read-only link."
     )
+    member_visible: bool | None = Field(
+        default=None,
+        description=(
+            "Whether app members with participate permission may see this table. "
+            "Leave unset to keep the current value."
+        ),
+    )
     row_scope: Literal["app", "user"] | None = Field(
         default=None,
         description=(
@@ -625,6 +649,10 @@ class RowMeta(BaseModel):
         default="manual",
         description="How the row got here: manual, import, migration, connector, agent.",
     )
+    pii_masked: bool = Field(
+        default=False,
+        description="True when this row's sensitive values are masked for the caller.",
+    )
 
 
 class AppRowsResponse(BaseModel):
@@ -641,6 +669,10 @@ class AppRowsResponse(BaseModel):
     pii_columns: list[str] = Field(
         default_factory=list,
         description="Sensitive columns whose values are masked for this caller.",
+    )
+    masked_pii_rows: list[str] = Field(
+        default_factory=list,
+        description="Row ids whose sensitive values are masked for this caller.",
     )
     refs: dict[str, dict[str, str]] = Field(
         default_factory=dict,
@@ -887,6 +919,7 @@ async def _table_out(service: AppService, row: AppRecord, table: AppTableView) -
         data_version=table.data_version,
         is_main=table.is_main,
         public_visible=table.public_visible,
+        member_visible=table.member_visible,
         row_scope=table.row_scope,
         rules=table.rules,
         columns=columns,
@@ -895,6 +928,14 @@ async def _table_out(service: AppService, row: AppRecord, table: AppTableView) -
 
 async def _table_outs(service: AppService, row: AppRecord) -> list[AppTableOut]:
     return [await _table_out(service, row, table) for table in service.list_tables(row)]
+
+
+def _visible_tables(service: AppService, row: AppRecord, role: str | None) -> list[AppTableView]:
+    """Tables a principal may see; hidden tables never reach the client."""
+    tables = service.list_tables(row)
+    if role == "participate":
+        return [table for table in tables if table.member_visible]
+    return tables
 
 
 async def _app_detail(service: AppService, row: AppRecord) -> AppDetail:
@@ -909,60 +950,87 @@ async def _app_detail(service: AppService, row: AppRecord) -> AppDetail:
     )
 
 
-def _row_access(
+_AUDIT_NEEDED: dict[Action, str] = {
+    Action.CREATE_ROW: "edit_data",
+    Action.UPDATE_ROW: "edit_data",
+    Action.DELETE_ROW: "edit_data",
+    Action.MANAGE_ASSETS: "edit_data",
+    Action.RUN_SOURCE: "edit_data",
+    Action.UPLOAD_IMPORT: "edit_data",
+    Action.RUN_GAME: "edit_data",
+}
+_AUDIT_ACTIONS = frozenset(
+    {
+        Action.CREATE_ROW,
+        Action.UPDATE_ROW,
+        Action.DELETE_ROW,
+        Action.MANAGE_STRUCTURE,
+        Action.MANAGE_APP_SETTINGS,
+        Action.MANAGE_ASSETS,
+        Action.MANAGE_MEMBERS,
+        Action.MANAGE_SHARES,
+        Action.MANAGE_BINDINGS,
+        Action.MANAGE_INGRESS,
+        Action.MANAGE_SCHEDULE,
+        Action.EXPORT_DATASET,
+        Action.RUN_SOURCE,
+        Action.PUBLISH,
+        Action.DELETE_APP,
+    }
+)
+
+
+def _authorize(
     server: OctopServer,
     user: User,
     app_id: str,
-    needed: str,
-) -> tuple[AppService, AppRecord, str]:
+    action: Action,
+    *,
+    table_key: str | None = None,
+    row_id: str | None = None,
+) -> tuple[AppService, AppRecord, Decision]:
+    """Authorize one app action through the shared access kernel."""
     service = _service(server)
     row = service.get(app_id)
-    permission = service.require(row, user.id, needed, is_admin=user.is_admin)
-    return service, row, permission
-
-
-def _write_access(
-    server: OctopServer,
-    user: User,
-    app_id: str,
-    needed: str,
-) -> tuple[AppService, AppRecord, str]:
-    """Resolve a write target and audit an admin acting on someone else's app."""
-    service, row, permission = _row_access(server, user, app_id, needed)
-    if user.is_admin and row.owner_user_id != user.id:
+    row_record = service.get_data_row(app_id, row_id) if row_id else None
+    if row_record is None and action in {Action.UPDATE_ROW, Action.DELETE_ROW}:
+        raise OctopError.localized(ErrorCode.APP_ROW_NOT_FOUND)
+    if table_key is None and row_record is not None:
+        table_key = row_record.table_key
+    decision = service.authorize(
+        principal_of(user),
+        row,
+        action,
+        table_key=table_key,
+        row_record=row_record,
+    )
+    if not decision.allowed:
+        if decision.reason == "table hidden":
+            code = ErrorCode.APP_TABLE_NOT_FOUND
+        elif decision.reason in {"table not found", "table required"}:
+            code = ErrorCode.APP_SCHEMA_INVALID
+        elif (
+            action in {Action.UPDATE_ROW, Action.DELETE_ROW}
+            and row_record is not None
+            and service.table_row_scope(row, row_record.table_key) == "user"
+            and decision.reason == "action denied"
+        ):
+            # A user-scoped row owned by someone else is indistinguishable
+            # from a missing row; do not confirm its existence.
+            code = ErrorCode.APP_ROW_NOT_FOUND
+        else:
+            code = ErrorCode.APP_FORBIDDEN
+        raise OctopError.localized(code)
+    if user.is_admin and row.owner_user_id != user.id and action in _AUDIT_ACTIONS:
         service.audit_admin_override(
             user_id=user.id,
             agent_id=row.agent_id,
             app_id=row.app_id,
-            needed=needed,
+            needed=_AUDIT_NEEDED.get(action, "edit_structure"),
             app_owner_id=row.owner_user_id,
             via="http",
         )
-    return service, row, permission
-
-
-def _manage_access(
-    server: OctopServer,
-    user: User,
-    app_id: str,
-) -> tuple[AppService, AppRecord, str]:
-    """Owner/admin only: read-only owner check for management views."""
-    service, row, permission = _row_access(server, user, app_id, "edit_structure")
-    if not (user.is_admin or row.owner_user_id == user.id):
-        raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
-    return service, row, permission
-
-
-def _manage_write_access(
-    server: OctopServer,
-    user: User,
-    app_id: str,
-) -> tuple[AppService, AppRecord, str]:
-    """Owner/admin only management write, with admin override auditing."""
-    service, row, permission = _write_access(server, user, app_id, "edit_structure")
-    if not (user.is_admin or row.owner_user_id == user.id):
-        raise OctopError.localized(ErrorCode.APP_FORBIDDEN)
-    return service, row, permission
+    return service, row, decision
 
 
 def _schedule_write_access(
@@ -977,12 +1045,10 @@ def _schedule_write_access(
     owner/admin management action like ``publication.publish``. Source sync
     stays on ``edit_structure``, matching the data-source binding it mirrors.
     """
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     view = service.get_schedule(row, schedule_id)
     if view.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
-        service, row, _permission = _manage_write_access(server, user, app_id)
-    else:
-        service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+        service, row, _decision = _authorize(server, user, app_id, Action.PUBLISH)
     return service, row, view
 
 
@@ -1902,10 +1968,7 @@ async def create_app_game_session(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> GameSessionOut:
-    service = _service(server)
-    row = service.get(app_id)
-    # Results are written into the app, so a game session needs write access.
-    service.require(row, user.id, "edit_data", is_admin=user.is_admin)
+    service, row, _decision = _authorize(server, user, app_id, Action.RUN_GAME)
     service.require_capability(row, app_capabilities.CAP_GAME_LAUNCH)
     if server.services is None:
         raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
@@ -2051,17 +2114,18 @@ async def get_app(
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
     METRICS.inc("light_app_open_total")
-    service, row, permission = _row_access(server, user, app_id, "view")
-    schema = await service.read_schema(row)
-    base = _summary(service, row, permission)
+    service, row, decision = _authorize(server, user, app_id, Action.VIEW_APP)
+    tables = _visible_tables(service, row, decision.role)
+    schema = await service.read_schema(row, tables[0].table_key if tables else MAIN_TABLE_KEY)
+    base = _summary(service, row, decision.role or "view")
     return AppDetail(
         # The detail view checks the workspace directly: the cached size is a
         # hint for list views, the file itself is the truth.
         **base.model_dump(exclude={"has_html", "has_preview"}),
-        columns=_columns(schema),
+        columns=_columns(schema) if tables else [],
         has_html=await service.has_html(row),
         has_preview=await service.has_preview(row),
-        tables=await _table_outs(service, row),
+        tables=[await _table_out(service, row, table) for table in tables],
     )
 
 
@@ -2079,8 +2143,9 @@ async def list_app_tables(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppTablesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
-    return AppTablesResponse(tables=await _table_outs(service, row))
+    service, row, decision = _authorize(server, user, app_id, Action.VIEW_APP)
+    tables = _visible_tables(service, row, decision.role)
+    return AppTablesResponse(tables=[await _table_out(service, row, table) for table in tables])
 
 
 @router.get(
@@ -2098,7 +2163,7 @@ async def get_app_data_version(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDataVersionOut:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return AppDataVersionOut(
         tables=[
             AppTableVersionOut(
@@ -2106,7 +2171,7 @@ async def get_app_data_version(
                 data_version=table.data_version,
                 row_count=table.row_count,
             )
-            for table in service.list_tables(row)
+            for table in _visible_tables(service, row, decision.role)
         ]
     )
 
@@ -2156,7 +2221,7 @@ async def get_app_dataset(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DatasetOut:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     descriptor = await BuiltinDatasetService(service).describe(row)
     return DatasetOut(**asdict(descriptor))
 
@@ -2176,15 +2241,16 @@ async def query_app_dataset(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DatasetQueryOut:
-    service, row, permission = _row_access(server, user, app_id, "view")
-    schema, rows, total = await BuiltinDatasetService(service).query(
+    service, row, decision = _authorize(server, user, app_id, Action.VIEW_ROW, table_key=body.table)
+    schema, rows, total, masked_pii_rows = await BuiltinDatasetService(service).query(
         row,
         table=body.table,
         limit=body.limit,
         offset=body.offset,
-        redact_pii=permission == "view",
+        redact_pii=decision.pii_policy != "visible",
+        pii_policy=decision.pii_policy,
         viewer_user_id=user.id,
-        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        include_all_rows=decision.row_scope == "all",
     )
     columns = [
         DatasetColumnOut(
@@ -2204,6 +2270,7 @@ async def query_app_dataset(
         limit=body.limit,
         offset=body.offset,
         pii_columns=[column.name for column in columns if column.pii],
+        masked_pii_rows=masked_pii_rows,
     )
 
 
@@ -2222,7 +2289,7 @@ async def export_app_dataset(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _manage_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.EXPORT_DATASET)
     content = await service.export_dataset(row)
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -2255,7 +2322,7 @@ async def list_app_bindings(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> BindingsResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return BindingsResponse(
         bindings=[BindingOut(**asdict(item)) for item in service.list_bindings(row)]
     )
@@ -2274,7 +2341,7 @@ async def save_app_binding(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> BindingOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_BINDINGS)
     view = service.save_binding(
         row,
         binding_id=binding_id,
@@ -2310,7 +2377,7 @@ async def delete_app_binding(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteBindingResponse:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_BINDINGS)
     if not service.delete_binding(row, binding_id):
         raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
     _audit(
@@ -2354,7 +2421,7 @@ async def list_app_services(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppServicesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return AppServicesResponse(services=[_service_out(view) for view in service.list_services(row)])
 
 
@@ -2375,7 +2442,7 @@ async def save_app_service(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppServiceOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_BINDINGS)
     view = service.save_service(
         row,
         name=name,
@@ -2420,7 +2487,7 @@ async def delete_app_service(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteBindingResponse:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_BINDINGS)
     if not service.delete_service(row, name):
         raise OctopError.localized(ErrorCode.APP_NOT_FOUND)
     _audit(
@@ -2450,7 +2517,7 @@ async def call_app_service(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> ServiceCallOut:
-    _service_check, row, _permission = _row_access(server, user, app_id, "view")
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_CALL)
     result = await _service_with_runner(server).call_service(
         row,
         name=name,
@@ -2480,7 +2547,7 @@ async def list_app_events(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppEventsResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     events, latest = service.list_events(row, since=since, limit=limit)
     return AppEventsResponse(
         events=[
@@ -2511,7 +2578,7 @@ async def ack_app_events(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AckEventsOut:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return AckEventsOut(acknowledged=service.ack_events(row, body.event_ids))
 
 
@@ -2529,7 +2596,7 @@ async def list_app_webhooks(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> list[WebhookOut]:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return [WebhookOut(**view.__dict__) for view in _webhooks(server, service).list_for_app(row)]
 
 
@@ -2550,7 +2617,7 @@ async def create_app_webhook(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> WebhookCreatedOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     view, secret = await _webhooks(server, service).create(
         row,
         name=body.name,
@@ -2582,7 +2649,7 @@ async def update_app_webhook(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> WebhookUpdatedOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     view, secret = await _webhooks(server, service).update(
         row,
         webhook_id,
@@ -2614,7 +2681,7 @@ async def delete_app_webhook(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteWebhookOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     deleted = _webhooks(server, service).delete(row, webhook_id)
     if deleted:
         _audit(
@@ -2643,7 +2710,7 @@ async def emit_app_event(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> EmitEventOut:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.EMIT_EVENT)
     event_service = (
         server.app_runtime.external_event_service if server.app_runtime is not None else None
     )
@@ -2682,7 +2749,7 @@ async def list_app_ingress(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> list[IngressOut]:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return [_ingress_out(server, view) for view in _ingress(server, service).list(row)]
 
 
@@ -2703,7 +2770,7 @@ async def create_app_ingress(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> IngressCreatedOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     view, secret = await _ingress(server, service).create(
         row,
         name=body.name,
@@ -2740,7 +2807,7 @@ async def update_app_ingress(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> IngressOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     view = await _ingress(server, service).update(
         row,
         ingress_id,
@@ -2773,7 +2840,7 @@ async def delete_app_ingress(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteWebhookOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     deleted = _ingress(server, service).delete(row, ingress_id)
     if deleted:
         _audit(
@@ -2798,7 +2865,7 @@ async def rotate_app_ingress_secret(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> IngressSecretOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     ingress = _ingress(server, service)
     secret = await ingress.rotate_secret(row, ingress_id)
     view = next(item for item in ingress.list(row) if item.ingress_id == ingress_id)
@@ -2831,7 +2898,7 @@ async def test_app_ingress(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> TestIngressOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_INGRESS)
     event_service = (
         server.app_runtime.external_event_service if server.app_runtime is not None else None
     )
@@ -2880,7 +2947,7 @@ async def fetch_app_service_image(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> ServiceImageOut:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.SERVICE_CALL)
     asset = await service.fetch_service_image(row, name=name, url=body.url)
     return ServiceImageOut(asset=asset)
 
@@ -2890,7 +2957,8 @@ async def fetch_app_service_image(
     response_model=AppTableOut,
     summary="Set table visibility and row scope",
     description=(
-        "Expose or hide one table on the app's public read-only link, and/or set "
+        "Expose or hide one table on the app's public read-only link, choose "
+        "whether members with participate permission can see it, and/or set "
         "its row scope: ``app`` (every collaborator sees all rows) or ``user`` "
         "(each user sees only their own rows; the public link hides the table). "
         "Requires owner or admin."
@@ -2903,9 +2971,15 @@ async def set_app_table_visibility(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppTableOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_APP_SETTINGS)
     if body.row_scope is not None:
         await service.set_table_row_scope(row, table=table_key, row_scope=body.row_scope)
+    if body.member_visible is not None:
+        await service.set_table_member_visibility(
+            row,
+            table=table_key,
+            member_visible=body.member_visible,
+        )
     view = await service.set_table_visibility(
         row,
         table=table_key,
@@ -2919,6 +2993,7 @@ async def set_app_table_visibility(
         payload={
             "table": table_key,
             "public_visible": body.public_visible,
+            "member_visible": body.member_visible,
             "row_scope": body.row_scope,
         },
     )
@@ -2939,7 +3014,7 @@ async def get_app_html(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     html = await service.read_html(row, validate=True)
     # The HTML is agent-generated. Render it in the dashboard's sandboxed
     # iframe; a direct visit must not run its scripts on the API origin, so
@@ -2973,7 +3048,7 @@ async def report_security_event(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    _service_row, row, _permission = _row_access(server, user, app_id, "view")
+    _service_row, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
     async with csp_violation_slot(f"{row.app_id}:{user.id}"):
@@ -3014,7 +3089,7 @@ async def list_app_files(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppFilesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     files = await service.list_files(row)
     return AppFilesResponse(
         files=[AppFileOut(name=item.name, path=item.path, size=item.size) for item in files],
@@ -3041,7 +3116,7 @@ async def list_app_assets(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AssetListResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     names = await service.list_assets(row)
     return AssetListResponse(assets=[AssetOut(name=name) for name in names])
 
@@ -3063,7 +3138,7 @@ async def upload_app_asset(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AssetOut:
-    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_ASSETS)
     data = await read_upload_capped(
         file,
         max_bytes=MAX_ASSET_BYTES,
@@ -3087,7 +3162,7 @@ async def get_app_asset(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     mime, data = await service.read_asset(row, name)
     return Response(
         content=data,
@@ -3128,7 +3203,7 @@ async def get_app_preview(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     svg = await service.read_preview(row)
     if svg is None:
         raise OctopError(ErrorCode.APP_NOT_FOUND, "app has no preview image")
@@ -3173,9 +3248,9 @@ async def get_app_rows(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppRowsResponse:
-    service, row, permission = _row_access(server, user, app_id, "view")
-    redact_pii = permission == "view"
-    include_all_rows = user.is_admin or row.owner_user_id == user.id
+    service, row, decision = _authorize(server, user, app_id, Action.VIEW_ROW, table_key=table)
+    redact_pii = decision.pii_policy != "visible"
+    include_all_rows = decision.row_scope == "all"
     filters = _parse_row_filters(filter_)
     if filters or sort:
         schema, rows, row_meta, total = await service.query_rows_detailed(
@@ -3185,7 +3260,7 @@ async def get_app_rows(
             table=table,
             filters=filters,
             sort=sort,
-            redact_pii=redact_pii,
+            pii_policy=decision.pii_policy,
             viewer_user_id=user.id,
             include_all_rows=include_all_rows,
         )
@@ -3195,7 +3270,7 @@ async def get_app_rows(
             limit=limit,
             offset=offset,
             table=table,
-            redact_pii=redact_pii,
+            pii_policy=decision.pii_policy,
             viewer_user_id=user.id,
             include_all_rows=include_all_rows,
         )
@@ -3211,6 +3286,10 @@ async def get_app_rows(
         if expand_refs
         else {}
     )
+    masked_pii_rows = [
+        meta["row_id"] for meta in row_meta if meta.get("pii_masked") and meta.get("row_id")
+    ]
+    pii_masked = any(meta.get("pii_masked") for meta in row_meta)
     return AppRowsResponse(
         columns=_columns(schema),
         rows=rows,
@@ -3219,7 +3298,10 @@ async def get_app_rows(
         limit=limit,
         offset=offset,
         table=table,
-        pii_columns=[column.name for column in schema.columns if column.pii] if redact_pii else [],
+        pii_columns=(
+            [column.name for column in schema.columns if column.pii] if pii_masked else []
+        ),
+        masked_pii_rows=masked_pii_rows,
         refs=refs,
     )
 
@@ -3236,7 +3318,9 @@ async def append_app_row(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppendRowResponse:
-    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    service, row, _decision = _authorize(
+        server, user, app_id, Action.CREATE_ROW, table_key=body.table
+    )
     index, stored = await service.append_row_record(
         row,
         body.row,
@@ -3272,14 +3356,14 @@ async def update_app_row(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> UpdateRowResponse:
-    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    service, row, decision = _authorize(server, user, app_id, Action.UPDATE_ROW, row_id=row_id)
     result = await service.update_row(
         row,
         row_id,
         body.row,
         expected_version=body.expected_version,
         viewer_user_id=user.id,
-        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        include_all_rows=decision.row_scope == "all",
         actor_user_id=user.id,
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
@@ -3305,13 +3389,13 @@ async def delete_app_row(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteRowResponse:
-    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    service, row, decision = _authorize(server, user, app_id, Action.DELETE_ROW, row_id=row_id)
     deleted = await service.delete_row(
         row,
         row_id,
         expected_version=expected_version,
         viewer_user_id=user.id,
-        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        include_all_rows=decision.row_scope == "all",
         actor_user_id=user.id,
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
@@ -3338,15 +3422,16 @@ async def get_app_row_history(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> RowHistoryResponse:
-    service, row, permission = _row_access(server, user, app_id, "view")
+    service, row, decision = _authorize(server, user, app_id, Action.VIEW_HISTORY, row_id=row_id)
+    row_record = service.get_data_row(app_id, row_id)
     entries = await service.row_history(
         row,
         row_id,
         limit=limit,
         offset=offset,
-        redact_pii=permission == "view",
+        redact_pii=not can_view_pii(principal_of(user), decision, row_record),
         viewer_user_id=user.id,
-        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        include_all_rows=decision.row_scope == "all",
     )
     return RowHistoryResponse(
         entries=[RowHistoryEntry(**entry) for entry in entries],
@@ -3380,7 +3465,7 @@ async def aggregate_app_rows(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AggregateResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, decision = _authorize(server, user, app_id, Action.AGGREGATE, table_key=table)
     result = await service.aggregate_rows(
         row,
         table=table,
@@ -3390,7 +3475,7 @@ async def aggregate_app_rows(
         filters=_parse_row_filters(filter_),
         limit=limit,
         viewer_user_id=user.id,
-        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        include_all_rows=decision.row_scope == "all",
     )
     return AggregateResponse(**result)
 
@@ -3409,14 +3494,14 @@ async def export_app_table(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, permission = _row_access(server, user, app_id, "view")
-    redact_pii = permission == "view"
+    service, row, decision = _authorize(server, user, app_id, Action.EXPORT, table_key=table)
+    redact_pii = decision.pii_policy != "visible"
     filename, content = await service.export_rows(
         row,
         table=table,
         redact_pii=redact_pii,
         viewer_user_id=user.id,
-        include_all_rows=user.is_admin or row.owner_user_id == user.id,
+        include_all_rows=decision.row_scope == "all",
     )
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -3452,7 +3537,7 @@ async def set_app_table_rules(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppTableOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_APP_SETTINGS)
     view = await service.set_table_rules(row, table=table_key, rules=body.rules)
     _audit(
         server,
@@ -3479,7 +3564,7 @@ async def backup_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _row_access(server, user, app_id, "edit_structure")
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     filename, content = await service.backup_archive(row)
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -3516,7 +3601,7 @@ async def alter_app_schema(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, permission = _write_access(server, user, app_id, "edit_structure")
+    service, row, decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     await service.alter_schema(
         row,
         table=table,
@@ -3527,7 +3612,7 @@ async def alter_app_schema(
     )
     updated = service.get(app_id)
     schema = await service.read_schema(updated, table)
-    base = _summary(service, updated, permission)
+    base = _summary(service, updated, decision.role or "view")
     return AppDetail(
         **base.model_dump(exclude={"has_html", "has_preview"}),
         columns=_columns(schema),
@@ -3549,10 +3634,10 @@ async def update_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, permission = _write_access(server, user, app_id, "edit_structure")
+    service, row, decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     row = await service.update_metadata(row, name=body.name, description=body.description)
     schema = await service.read_schema(row)
-    base = _summary(service, row, permission)
+    base = _summary(service, row, decision.role or "view")
     return AppDetail(
         **base.model_dump(exclude={"has_html", "has_preview"}),
         columns=_columns(schema),
@@ -3578,7 +3663,7 @@ async def update_app_capabilities(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_APP_SETTINGS)
     row = service.set_capabilities(row, body.capabilities)
     _audit(
         server,
@@ -3604,7 +3689,7 @@ async def restore_app_html(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     restored = await service.restore_html(row)
     _audit(
         server,
@@ -3626,7 +3711,7 @@ async def delete_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> DeleteAppResponse:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.DELETE_APP)
     await service.delete(row)
     return DeleteAppResponse(deleted=row.app_id)
 
@@ -3642,7 +3727,7 @@ async def list_app_shares(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SharesResponse:
-    service, row, _permission = _manage_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_SHARES)
     return SharesResponse(
         shares=[ShareOut(**asdict(view)) for view in service.list_share_views(row)]
     )
@@ -3660,7 +3745,7 @@ async def set_app_shares(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SharesResponse:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_SHARES)
     views = service.set_shares(row, [(share.username, share.permission) for share in body.shares])
     _audit(
         server,
@@ -3713,7 +3798,7 @@ async def get_app_publication(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     publication = service.get_publication(row)
     active = (
         publication is not None
@@ -3745,7 +3830,7 @@ async def create_app_publication(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.PUBLISH)
     token, expires_at = await service.publish(
         row,
         user_id=user.id,
@@ -3785,7 +3870,7 @@ async def publish_app_publication(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.PUBLISH)
     token, expires_at = await service.publish(row, user_id=user.id, rotate=False)
     _audit(
         server,
@@ -3815,7 +3900,7 @@ async def revoke_app_publication(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> PublicationOut:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.PUBLISH)
     service.revoke_publication(row)
     _audit(
         server,
@@ -3849,7 +3934,7 @@ async def transfer_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AppDetail:
-    service, row, _permission = _manage_write_access(server, user, app_id)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_MEMBERS)
     moved = await service.transfer(row, target_agent_id=body.agent_id, actor_user_id=user.id)
     schema = await service.read_schema(moved)
     base = _summary(service, moved, "edit_structure")
@@ -3966,7 +4051,7 @@ async def get_app_assistant_history(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> AssistantHistoryResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.AI)
     turns = _assistant(server, service).history(row, user.id)
     return AssistantHistoryResponse(
         messages=[
@@ -4000,7 +4085,7 @@ async def ask_app_assistant(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> StreamingResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.AI)
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
     METRICS.inc("light_app_assistant_total")
@@ -4066,7 +4151,7 @@ async def generate_app_text(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> GenerateResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.AI)
     service.require_capability(row, app_capabilities.CAP_AI_GENERATE)
     prompt = body.prompt.strip()
     if not prompt:
@@ -4225,7 +4310,7 @@ async def upload_app_import_file(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> UploadImportResponse:
-    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    service, row, _decision = _authorize(server, user, app_id, Action.UPLOAD_IMPORT)
     max_bytes = (
         int(server.services.config.max_upload_bytes) if server.services is not None else None
     )
@@ -4258,7 +4343,8 @@ async def import_app_table(
         if body.mode == IMPORT_MODE_REPLACE or body.kind == "workspace_file"
         else "edit_data"
     )
-    service, row, _permission = _write_access(server, user, app_id, needed)
+    action = Action.MANAGE_STRUCTURE if needed == "edit_structure" else Action.CREATE_ROW
+    service, row, _decision = _authorize(server, user, app_id, action, table_key=table_key)
     if body.paths and body.path:
         raise OctopError(ErrorCode.APP_ROW_INVALID, "use either path or paths, not both")
     if not body.paths and not body.path:
@@ -4450,7 +4536,7 @@ async def list_app_schedules(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SchedulesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return SchedulesResponse(
         schedules=[_schedule_out(view) for view in service.list_schedules(row)]
     )
@@ -4473,10 +4559,12 @@ async def save_app_schedule(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> ScheduleOut:
-    if body.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION:
-        service, row, _permission = _manage_write_access(server, user, app_id)
-    else:
-        service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+    action = (
+        Action.PUBLISH
+        if body.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION
+        else Action.MANAGE_STRUCTURE
+    )
+    service, row, _decision = _authorize(server, user, app_id, action)
     view = service.save_schedule(
         row,
         action=body.action,
@@ -4572,7 +4660,7 @@ async def list_app_sources(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SourcesResponse:
-    service, row, _permission = _row_access(server, user, app_id, "view")
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
     return SourcesResponse(sources=[_source_out(view) for view in service.list_sources(row)])
 
 
@@ -4593,7 +4681,7 @@ async def save_app_source(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SourceOut:
-    service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     if body.kind == "external":
         # Bind-time validation (defense in depth: the runner re-checks
         # read-only on every call).
@@ -4635,7 +4723,7 @@ async def delete_app_source(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _permission = _write_access(server, user, app_id, "edit_structure")
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     service.delete_source(row, source_id)
     return Response(status_code=204)
 
@@ -4652,7 +4740,7 @@ async def run_app_source(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SourceRunResponse:
-    service, row, _permission = _write_access(server, user, app_id, "edit_data")
+    service, row, _decision = _authorize(server, user, app_id, Action.RUN_SOURCE)
     view = service.get_source(row, source_id)
     if view.kind == "external":
         service = _service_with_runner(server)
@@ -4684,7 +4772,7 @@ async def list_app_source_tools(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> SourceToolsResponse:
-    _row_access(server, user, app_id, "edit_structure")
+    _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
     runner = _tool_runner(server)
     return SourceToolsResponse(
         tools=[

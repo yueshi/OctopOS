@@ -12,6 +12,7 @@ import pytest
 from deepagents.backends import FilesystemBackend
 from octop_harness.backends import BackendWorkspace
 
+from octop.infra.apps.access import Action
 from octop.infra.apps.models import PII_MASK, parse_schema_payload
 from octop.infra.apps.service import (
     _APP_LOCKS,
@@ -37,6 +38,8 @@ from octop.infra.db.repos.connectors import ConnectorRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo
 from octop.infra.errors import ErrorCode, OctopError
+from octop.infra.users.identity import User
+from octop.infra.users.principals import principal_of
 from octop.infra.utils.ulid import new_ulid
 
 COLUMNS: list[dict[str, object]] = [
@@ -358,6 +361,7 @@ async def test_file_stats_track_the_workspace_files(world: World) -> None:
     assert view.has_html is True
     assert view.html_bytes == row.html_bytes
     assert view.data_bytes == row.data_bytes
+    assert view.agent_owner_user_id == world.alice_id
 
 
 async def test_list_files_reports_the_app_workspace_files(world: World) -> None:
@@ -508,6 +512,52 @@ async def test_access_request_approval_shares_agent_and_grants_permission(
     assert world.audit_repo.query(action="miniapp.access_approved", limit=10)
 
 
+async def test_access_request_view_is_single_owner_and_does_not_share_agent(
+    world: World,
+) -> None:
+    app_id = await _create(world)
+    request = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="view",
+    )
+
+    approved = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        approve=True,
+    )
+
+    assert approved.status == "approved"
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
+    row = world.service.get(app_id)
+    assert world.service.permission_for(row, world.bob_id, is_admin=False) == "view"
+
+
+async def test_access_request_can_ask_for_participate(world: World) -> None:
+    app_id = await _create(world)
+    request = world.service.request_access(
+        app_id=app_id,
+        agent_id=world.agent_id,
+        user_id=world.bob_id,
+        needed="participate",
+    )
+
+    approved = world.service.resolve_access_request(
+        request_id=request.request_id,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        approve=True,
+    )
+
+    assert approved.status == "approved"
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
+    row = world.service.get(app_id)
+    assert world.service.permission_for(row, world.bob_id, is_admin=False) == "participate"
+
+
 async def test_access_request_derives_the_agent_from_the_app(world: World) -> None:
     app_id = await _create(world)
 
@@ -625,9 +675,11 @@ async def test_access_request_split_owners_agent_owner_grants_first(
         is_admin=False,
         approve=True,
     )
+    # view / participate are app-owner decisions; the expert owner cannot
+    # grant the app ACL and the agent stays unshared.
     assert partial.status == "pending"
-    assert world.agent_repo.get(world.agent_id).is_shared == 1
-    assert world.service.is_agent_accessible(world.agent_id, carol_id)
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
+    assert not world.service.is_agent_accessible(world.agent_id, carol_id)
     row = world.service.get(app.app_id)
     assert world.service.permission_for(row, carol_id, is_admin=False) is None
 
@@ -638,6 +690,7 @@ async def test_access_request_split_owners_agent_owner_grants_first(
         approve=True,
     )
     assert done.status == "approved"
+    assert world.agent_repo.get(world.agent_id).is_shared == 0
     assert world.service.permission_for(row, carol_id, is_admin=False) == "view"
 
 
@@ -960,6 +1013,16 @@ async def test_set_shares_resolves_and_validates_accounts(world: World) -> None:
         world.service.set_shares(row, [("nobody", "view")])
     _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
 
+    world.user_repo.create(
+        username="guest_1",
+        password_hash=None,
+        role="user",
+        kind="guest",
+    )
+    with pytest.raises(OctopError) as exc:
+        world.service.set_shares(row, [("guest_1", "view")])
+    _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
+
     with pytest.raises(OctopError) as exc:
         world.service.set_shares(row, [("bob", "view"), ("bob", "edit_data")])
     _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
@@ -972,6 +1035,79 @@ async def test_set_shares_resolves_and_validates_accounts(world: World) -> None:
     with pytest.raises(OctopError) as exc:
         world.service.set_shares(row, [("bob", "view")])
     _assert_code(exc, ErrorCode.APP_SHARE_INVALID)
+
+
+async def test_set_shares_preserves_guest_collaborators(world: World) -> None:
+    app_id = await _create(world)
+    guest_id = world.user_repo.create(
+        username="guest_share",
+        password_hash=None,
+        role="user",
+        kind="guest",
+    )
+    world.repo.set_collaborators(app_id, [(guest_id, "participate")])
+
+    world.service.set_shares(world.service.get(app_id), [("bob", "view")])
+
+    collaborators = {
+        item.user_id: item.permission for item in world.repo.list_collaborators(app_id)
+    }
+    assert collaborators[guest_id] == "participate"
+    assert collaborators[world.bob_id] == "view"
+
+
+async def test_service_authorize_member_visible_and_row_owner(world: World) -> None:
+    app_id = await _create(world)
+    guest_id = world.user_repo.create(
+        username="guest_authz",
+        password_hash=None,
+        role="user",
+        kind="guest",
+    )
+    world.repo.set_collaborators(app_id, [(guest_id, "participate")])
+    guest = principal_of(
+        User(
+            id=guest_id,
+            username="guest_authz",
+            role="user",
+            display_name=None,
+            kind="guest",
+        )
+    )
+    app = world.service.get(app_id)
+
+    hidden = world.service.authorize(guest, app, Action.VIEW_ROW, table_key="main")
+    assert hidden.allowed is False
+    assert hidden.reason == "table hidden"
+
+    with world.db.transaction() as conn:
+        conn.execute(
+            "UPDATE light_app_tables SET member_visible = 1 "
+            "WHERE app_id = ? AND table_key = 'main'",
+            (app_id,),
+        )
+    visible = world.service.authorize(guest, app, Action.VIEW_ROW, table_key="main")
+    assert visible.allowed is True
+    assert visible.pii_policy == "mask_unless_own"
+
+    world.repo.append_data_rows(app_id, "main", [{"title": "mine"}], created_by=guest_id)
+    world.repo.append_data_rows(app_id, "main", [{"title": "other"}], created_by=world.bob_id)
+    rows = world.repo.list_all_data_rows(app_id, "main")
+    mine = next(row for row in rows if row.values["title"] == "mine")
+    other = next(row for row in rows if row.values["title"] == "other")
+
+    assert (
+        world.service.authorize(
+            guest, app, Action.UPDATE_ROW, table_key="main", row_record=mine
+        ).allowed
+        is True
+    )
+    assert (
+        world.service.authorize(
+            guest, app, Action.UPDATE_ROW, table_key="main", row_record=other
+        ).allowed
+        is False
+    )
 
 
 async def test_create_registers_the_main_table(world: World) -> None:

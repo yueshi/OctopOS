@@ -289,9 +289,12 @@ BASELINE_PERMISSIONS: set[str] = {
 def user_has_permission(user: PermissionUser, key: str) -> bool:
     """Return True if ``user`` may access the module ``key``.
 
-    Unknown keys are denied. ``admin`` bypasses everything.
+    Unknown keys are denied. ``admin`` bypasses everything. Guests never hold
+    platform permissions, even if a row was misconfigured.
     """
     if key not in PERMISSIONS:
+        return False
+    if getattr(user, "kind", "member") == "guest":
         return False
     if user.is_admin:
         return True
@@ -314,6 +317,8 @@ def validate_permission_keys(keys: list[str]) -> list[str]:
 
 def effective_permissions(user: PermissionUser) -> list[str]:
     """Permissions to expose on ``/auth/me`` / login (admin gets the full catalog)."""
+    if getattr(user, "kind", "member") == "guest":
+        return []
     if user.is_admin:
         return sorted(ALL_PERMISSION_KEYS)
     return list(user.permissions or [])

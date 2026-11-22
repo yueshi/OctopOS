@@ -76,15 +76,23 @@ class LightAppCollaboratorRow:
     permission: str
     created_at: int
     updated_at: int
+    status: str = "active"
+    joined_via: str = "share"
+    invited_by: int | None = None
 
     @classmethod
     def from_row(cls, r: DbRow) -> LightAppCollaboratorRow:
+        keys = set(r.keys())
+        invited = r["invited_by"] if "invited_by" in keys else None
         return cls(
             app_id=str(r["app_id"]),
             user_id=int(r["user_id"]),
             permission=str(r["permission"]),
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
+            status=str(r["status"]) if "status" in keys else "active",
+            joined_via=str(r["joined_via"]) if "joined_via" in keys else "share",
+            invited_by=int(invited) if invited is not None else None,
         )
 
 
@@ -105,9 +113,11 @@ class LightAppTableRow:
     rules_json: str
     created_at: int
     updated_at: int
+    member_visible: bool = False
 
     @classmethod
     def from_row(cls, r: DbRow) -> LightAppTableRow:
+        keys = set(r.keys())
         return cls(
             app_id=str(r["app_id"]),
             table_key=str(r["table_key"]),
@@ -122,6 +132,9 @@ class LightAppTableRow:
             rules_json=str(r["rules_json"] or "{}"),
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
+            member_visible=bool(int(r["member_visible"] or 0))
+            if "member_visible" in keys
+            else False,
         )
 
 
@@ -169,6 +182,7 @@ class LightAppDataRow:
     created_by: int | None
     created_at: int
     updated_at: int
+    row_owner_user_id: int | None = None
 
     @classmethod
     def from_row(cls, r: DbRow) -> LightAppDataRow:
@@ -178,6 +192,8 @@ class LightAppDataRow:
         except ValueError:
             parsed = {}
         values = {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+        keys = set(r.keys())
+        owner = r["row_owner_user_id"] if "row_owner_user_id" in keys else None
         return cls(
             row_id=str(r["row_id"]),
             app_id=str(r["app_id"]),
@@ -188,6 +204,7 @@ class LightAppDataRow:
             created_by=int(r["created_by"]) if r["created_by"] is not None else None,
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
+            row_owner_user_id=int(owner) if owner is not None else None,
         )
 
 
@@ -387,7 +404,7 @@ class LightAppRepo:
             rows = conn.execute(
                 "SELECT a.* FROM light_apps a "
                 "JOIN light_app_collaborators c ON c.app_id = a.app_id "
-                "WHERE c.user_id = ? AND a.owner_user_id <> ? "
+                "WHERE c.user_id = ? AND c.status = 'active' AND a.owner_user_id <> ? "
                 "ORDER BY a.updated_at DESC",
                 (user_id, user_id),
             ).fetchall()
@@ -437,12 +454,14 @@ class LightAppRepo:
         source_key: str | None = None,
         client_request_id: str | None = None,
         created_by: int | None = None,
+        row_owner_user_id: int | None = None,
         row_id: str | None = None,
     ) -> tuple[int, LightAppDataRow]:
         """Insert one row, or return the existing row for an idempotent retry."""
         ts = now_ts()
         payload = json.dumps(values, ensure_ascii=False)
         rid = row_id or f"row_{new_short_id(12)}"
+        owner = row_owner_user_id if row_owner_user_id is not None else created_by
         with self._db.transaction() as conn:
             if client_request_id is not None:
                 existing = conn.execute(
@@ -483,8 +502,9 @@ class LightAppRepo:
             conn.execute(
                 "INSERT INTO light_app_rows("
                 "row_id, app_id, table_key, values_json, version, source, source_id, "
-                "source_key, client_request_id, created_by, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+                "source_key, client_request_id, created_by, row_owner_user_id, "
+                "created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rid,
                     app_id,
@@ -495,6 +515,7 @@ class LightAppRepo:
                     source_key,
                     client_request_id,
                     created_by,
+                    owner,
                     ts,
                     ts,
                 ),
@@ -519,6 +540,7 @@ class LightAppRepo:
         *,
         source: str = "manual",
         created_by: int | None = None,
+        row_owner_user_id: int | None = None,
         row_ids: Sequence[str] | None = None,
     ) -> int:
         """Bulk-insert rows and update the table stats once.
@@ -530,6 +552,7 @@ class LightAppRepo:
         if row_ids is not None and len(row_ids) != len(rows):
             raise ValueError("row_ids must be parallel to rows")
         ts = now_ts()
+        owner = row_owner_user_id if row_owner_user_id is not None else created_by
         payloads = [json.dumps(values, ensure_ascii=False) for values in rows]
         total_bytes = sum(len(payload.encode("utf-8")) for payload in payloads)
         with self._db.transaction() as conn:
@@ -537,8 +560,8 @@ class LightAppRepo:
                 conn.execute(
                     "INSERT INTO light_app_rows("
                     "row_id, app_id, table_key, values_json, version, source, "
-                    "created_by, created_at, updated_at"
-                    ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                    "created_by, row_owner_user_id, created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
                     (
                         row_ids[index] if row_ids is not None else f"row_{new_short_id(12)}",
                         app_id,
@@ -546,6 +569,7 @@ class LightAppRepo:
                         payload,
                         source,
                         created_by,
+                        owner,
                         ts,
                         ts,
                     ),
@@ -571,7 +595,7 @@ class LightAppRepo:
         where = "app_id = ? AND table_key = ?"
         params: list[object] = [app_id, table_key]
         if created_by is not None:
-            where += " AND created_by = ?"
+            where += " AND COALESCE(row_owner_user_id, created_by) = ?"
             params.append(created_by)
         with self._db.connect() as conn:
             rows = conn.execute(
@@ -798,6 +822,7 @@ class LightAppRepo:
         *,
         source: str = "manual",
         created_by: int | None = None,
+        row_owner_user_id: int | None = None,
         history_actor: str | None = None,
     ) -> int:
         """Replace every row of one table in a single transaction.
@@ -807,6 +832,7 @@ class LightAppRepo:
         recorded individually: their ids/created_at/source are in the table.
         """
         ts = now_ts()
+        owner = row_owner_user_id if row_owner_user_id is not None else created_by
         payloads = [json.dumps(values, ensure_ascii=False) for values in rows]
         total_bytes = sum(len(payload.encode("utf-8")) for payload in payloads)
         with self._db.transaction() as conn:
@@ -825,8 +851,8 @@ class LightAppRepo:
                 conn.execute(
                     "INSERT INTO light_app_rows("
                     "row_id, app_id, table_key, values_json, version, source, "
-                    "created_by, created_at, updated_at"
-                    ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+                    "created_by, row_owner_user_id, created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
                     (
                         f"row_{new_short_id(12)}",
                         app_id,
@@ -834,6 +860,7 @@ class LightAppRepo:
                         payload,
                         source,
                         created_by,
+                        owner,
                         ts,
                         ts,
                     ),
@@ -898,7 +925,7 @@ class LightAppRepo:
         sql = "SELECT COUNT(*) AS c FROM light_app_rows WHERE app_id = ? AND table_key = ?"
         params: list[object] = [app_id, table_key]
         if created_by is not None:
-            sql += " AND created_by = ?"
+            sql += " AND COALESCE(row_owner_user_id, created_by) = ?"
             params.append(created_by)
         with self._db.connect() as conn:
             row = conn.execute(sql, tuple(params)).fetchone()
@@ -1152,32 +1179,118 @@ class LightAppRepo:
             ).fetchall()
         return map_rows(rows, LightAppCollaboratorRow)
 
+    def get_collaborator(self, app_id: str, user_id: int) -> LightAppCollaboratorRow | None:
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM light_app_collaborators WHERE app_id = ? AND user_id = ?",
+                (app_id, user_id),
+            ).fetchone()
+        return LightAppCollaboratorRow.from_row(row) if row else None
+
     def permission_for(self, app_id: str, user_id: int) -> str | None:
         with self._db.connect() as conn:
             r = conn.execute(
-                "SELECT permission FROM light_app_collaborators WHERE app_id = ? AND user_id = ?",
+                "SELECT permission FROM light_app_collaborators "
+                "WHERE app_id = ? AND user_id = ? AND status = 'active'",
                 (app_id, user_id),
             ).fetchone()
         return str(r["permission"]) if r else None
+
+    def upsert_collaborator(
+        self,
+        app_id: str,
+        user_id: int,
+        permission: str,
+        *,
+        status: str = "active",
+        joined_via: str = "share",
+        invited_by: int | None = None,
+    ) -> LightAppCollaboratorRow:
+        ts = now_ts()
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO light_app_collaborators("
+                "app_id, user_id, permission, status, joined_via, invited_by, "
+                "created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(app_id, user_id) DO UPDATE SET "
+                "permission = excluded.permission, status = excluded.status, "
+                "joined_via = excluded.joined_via, invited_by = excluded.invited_by, "
+                "updated_at = excluded.updated_at",
+                (
+                    app_id,
+                    user_id,
+                    permission,
+                    status,
+                    joined_via,
+                    invited_by,
+                    ts,
+                    ts,
+                ),
+            )
+        row = self.get_collaborator(app_id, user_id)
+        if row is None:
+            raise RuntimeError(f"collaborator upsert failed: {app_id}/{user_id}")
+        return row
+
+    def update_collaborator(
+        self,
+        app_id: str,
+        user_id: int,
+        *,
+        permission: str | None = None,
+        status: str | None = None,
+    ) -> LightAppCollaboratorRow | None:
+        assignments: list[str] = []
+        params: list[object] = []
+        if permission is not None:
+            assignments.append("permission = ?")
+            params.append(permission)
+        if status is not None:
+            assignments.append("status = ?")
+            params.append(status)
+        if not assignments:
+            return self.get_collaborator(app_id, user_id)
+        assignments.append("updated_at = ?")
+        params.append(now_ts())
+        with self._db.transaction() as conn:
+            conn.execute(
+                f"UPDATE light_app_collaborators SET {', '.join(assignments)} "
+                "WHERE app_id = ? AND user_id = ?",
+                (*params, app_id, user_id),
+            )
+        return self.get_collaborator(app_id, user_id)
 
     def set_collaborators(
         self,
         app_id: str,
         entries: list[tuple[int, str]],
     ) -> None:
-        """Replace the collaborator list for one app."""
+        """Replace collaborators, preserving lifecycle fields of kept users."""
         ts = now_ts()
+        existing = {row.user_id: row for row in self.list_collaborators(app_id)}
         with self._db.transaction() as conn:
             conn.execute(
                 "DELETE FROM light_app_collaborators WHERE app_id = ?",
                 (app_id,),
             )
             for user_id, permission in entries:
+                old = existing.get(user_id)
                 conn.execute(
                     "INSERT INTO light_app_collaborators("
-                    "app_id, user_id, permission, created_at, updated_at"
-                    ") VALUES (?, ?, ?, ?, ?)",
-                    (app_id, user_id, permission, ts, ts),
+                    "app_id, user_id, permission, status, joined_via, invited_by, "
+                    "created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        app_id,
+                        user_id,
+                        permission,
+                        old.status if old is not None else "active",
+                        old.joined_via if old is not None else "share",
+                        old.invited_by if old is not None else None,
+                        old.created_at if old is not None else ts,
+                        ts,
+                    ),
                 )
 
     # ----- tables -----
@@ -1243,6 +1356,20 @@ class LightAppRepo:
                 "UPDATE light_app_tables SET public_visible = ?, updated_at = ? "
                 "WHERE app_id = ? AND table_key = ?",
                 (int(public_visible), now_ts(), app_id, table_key),
+            )
+
+    def set_table_member_visible(
+        self,
+        app_id: str,
+        table_key: str,
+        *,
+        member_visible: bool,
+    ) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE light_app_tables SET member_visible = ?, updated_at = ? "
+                "WHERE app_id = ? AND table_key = ?",
+                (int(member_visible), now_ts(), app_id, table_key),
             )
 
     def set_table_row_scope(self, app_id: str, table_key: str, *, row_scope: str) -> None:

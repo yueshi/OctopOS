@@ -31,7 +31,7 @@ class CreateAccessRequestBody(BaseModel):
         default=None,
         description="MiniApp the caller wants to use; omit for expert-only access.",
     )
-    needed: Literal["view", "edit_data", "edit_structure"] = Field(
+    needed: Literal["participate", "view", "edit_data", "edit_structure"] = Field(
         default="edit_data",
         description="Permission the caller needs.",
     )

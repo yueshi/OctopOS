@@ -120,6 +120,9 @@ def _local_row(server: Any, identifier: str) -> Any:
 def _directory_may_own(row: Any) -> bool:
     """Whether an unresolved local login may legitimately belong to the directory.
 
+    Guest rows are never platform logins; never forward their identifiers to
+    an external directory.
+
     ``False`` as soon as the identifier has a local password of its own: the
     submitted secret then belongs to *this* system, and forwarding it would hand a
     local credential to another server and spend one attempt against the
@@ -131,6 +134,8 @@ def _directory_may_own(row: Any) -> bool:
     """
     if row is None:
         return True
+    if getattr(row, "kind", "member") != "member":
+        return False
     return not row.password_hash
 
 

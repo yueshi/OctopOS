@@ -12,6 +12,7 @@ from pydantic import Field
 
 from octop.infra.agents.tool_scope import current_tool_context, current_tool_scope
 from octop.infra.apps import capabilities as app_capabilities
+from octop.infra.apps.access import Action, Decision
 from octop.infra.apps.integration_ops import (
     integration_health,
     integration_inventory,
@@ -27,7 +28,7 @@ from octop.infra.apps.service import (
     app_path,
 )
 from octop.infra.apps.wiring import build_ingress_service, build_webhook_service
-from octop.infra.db.repos.apps import PERMISSION_RANK, LightAppRow
+from octop.infra.db.repos.apps import LightAppRow
 from octop.infra.db.services import RepoBundle
 
 APP_DELETE_TOOL_NAME = "app_delete"
@@ -264,14 +265,47 @@ def _access_error(
     return AppAccessError(message, code=code, data=data)
 
 
-def _get_for_actor(
+_GENERIC_ACTIONS = {
+    "view": Action.VIEW_APP,
+    "edit_data": Action.EDIT_DATA,
+    "edit_structure": Action.MANAGE_STRUCTURE,
+}
+_OWNER_ONLY_TOOL_ACTIONS = frozenset(
+    {
+        Action.MANAGE_APP_SETTINGS,
+        Action.MANAGE_MEMBERS,
+        Action.MANAGE_SHARES,
+        Action.MANAGE_BINDINGS,
+        Action.MANAGE_SCHEDULE,
+        Action.EXPORT_DATASET,
+        Action.PUBLISH,
+        Action.DELETE_APP,
+    }
+)
+_TOOL_AUDIT_NEEDED = {
+    Action.CREATE_ROW: "edit_data",
+    Action.UPDATE_ROW: "edit_data",
+    Action.DELETE_ROW: "edit_data",
+    Action.EDIT_DATA: "edit_data",
+    Action.MANAGE_ASSETS: "edit_data",
+    Action.RUN_SOURCE: "edit_data",
+    Action.UPLOAD_IMPORT: "edit_data",
+    Action.RUN_GAME: "edit_data",
+}
+
+
+def _resolve_for_actor(
     service: AppService,
     app_id: str,
     agent_id: str,
     user_id: int,
     needed: str,
-) -> LightAppRow:
-    """Resolve an app for the acting user, using the app ACL.
+    *,
+    action: Action | None = None,
+    table_key: str | None = None,
+    row_id: str | None = None,
+) -> tuple[LightAppRow, Decision]:
+    """Resolve an app and authorize one tool action.
 
     The agent is only the executor: what the user may do with an app comes
     from the app's own collaborator list, so a shared agent's members can use
@@ -293,8 +327,23 @@ def _get_for_actor(
     row = service.get(app_id)
     if row is None:
         raise ValueError(f"MiniApp not found: {app_id}")
-    granted = service.permission_for(row, user_id, is_admin=is_admin)
-    if granted is None or PERMISSION_RANK.get(granted, 0) < PERMISSION_RANK[needed]:
+    row_record = service.get_data_row(app_id, row_id) if row_id else None
+    if table_key is None and row_record is not None:
+        table_key = row_record.table_key
+    decision = service.authorize_actor(
+        user_id,
+        row,
+        action or _GENERIC_ACTIONS[needed],
+        table_key=table_key,
+        row_record=row_record,
+    )
+    if not decision.allowed:
+        if decision.reason in {"table not found", "table hidden"}:
+            # Hidden and unknown tables look the same to a caller; do not
+            # confirm that a table exists.
+            raise ValueError(f"unknown table: {table_key!r}")
+        if (action or _GENERIC_ACTIONS[needed]) in _OWNER_ONLY_TOOL_ACTIONS:
+            raise ValueError("only the app owner or an admin can manage this MiniApp")
         raise _access_error(
             service,
             agent_id=agent_id,
@@ -304,34 +353,48 @@ def _get_for_actor(
             code="APP_PERMISSION_DENIED",
             message=(
                 f"this user has no '{needed}' permission on MiniApp {app_id} "
-                f"(granted: {granted or 'none'})"
+                f"(granted: {decision.role or 'none'})"
             ),
         )
     if (
         is_admin
-        and needed in {"edit_data", "edit_structure"}
+        and decision.reason == "ok"
         and (row.owner_user_id != user_id or not service.is_agent_owner(agent_id, user_id))
     ):
-        service.audit_admin_override(
-            user_id=user_id,
-            agent_id=agent_id,
-            app_id=row.app_id,
-            needed=needed,
-            app_owner_id=row.owner_user_id,
-        )
+        maybe_needed = _TOOL_AUDIT_NEEDED.get(action or _GENERIC_ACTIONS[needed])
+        if maybe_needed is not None:
+            service.audit_admin_override(
+                user_id=user_id,
+                agent_id=agent_id,
+                app_id=row.app_id,
+                needed=maybe_needed,
+                app_owner_id=row.owner_user_id,
+            )
+    return row, decision
+
+
+def _get_for_actor(
+    service: AppService,
+    app_id: str,
+    agent_id: str,
+    user_id: int,
+    needed: str,
+    *,
+    action: Action | None = None,
+    table_key: str | None = None,
+    row_id: str | None = None,
+) -> LightAppRow:
+    row, _decision = _resolve_for_actor(
+        service,
+        app_id,
+        agent_id,
+        user_id,
+        needed,
+        action=action,
+        table_key=table_key,
+        row_id=row_id,
+    )
     return row
-
-
-def _require_manager(service: AppService, row: LightAppRow, user_id: int) -> None:
-    """Owner/admin only: publishing, sharing, capability and deletion actions."""
-    if not (service.is_admin(user_id) or row.owner_user_id == user_id):
-        raise ValueError("only the app owner or an admin can manage this MiniApp")
-
-
-def _may_see_pii(service: AppService, row: LightAppRow, user_id: int) -> bool:
-    """Editors and owners see sensitive columns; viewers do not."""
-    permission = service.permission_for(row, user_id, is_admin=service.is_admin(user_id))
-    return PERMISSION_RANK.get(permission or "", 0) >= PERMISSION_RANK["edit_data"]
 
 
 def _summary(row: LightAppRow) -> dict[str, Any]:
@@ -543,7 +606,7 @@ def _resolve_app_by_name(
         options = ", ".join(f"{item.name} ({item.app_id})" for item in matches[:5])
         raise ValueError(f"more than one MiniApp matches {name!r}: {options}")
     row = matches[0]
-    service.require(row, user_id, "view", is_admin=is_admin)
+    _get_for_actor(service, row.app_id, agent_id, user_id, "view", action=Action.VIEW_APP)
     return row
 
 
@@ -639,7 +702,8 @@ async def _channel_link_payload(
 
     if not is_manager:
         raise ValueError("only the app owner or an admin can manage public links")
-    service.require(row, user_id, "edit_structure", is_admin=service.is_admin(user_id))
+    if not service.authorize_actor(user_id, row, Action.PUBLISH).allowed:
+        raise ValueError("only the app owner or an admin can manage public links")
     payload = await _share_link_payload(
         service,
         row,
@@ -958,8 +1022,9 @@ def build_app_tools(
         """Declare a read-only external service; the owner must still grant external.fetch."""
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_BINDINGS
+            )
             view = service.save_service(
                 row,
                 name=name,
@@ -1028,8 +1093,9 @@ def build_app_tools(
         """Remove a declared external service and its cache."""
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_BINDINGS
+            )
             if not service.delete_service(row, name):
                 raise ValueError(f"unknown service: {name!r}")
             return _ok({"app_id": row.app_id, "deleted": name.strip().lower()})
@@ -1297,8 +1363,14 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_structure",
+                action=Action.MANAGE_APP_SETTINGS,
+            )
             view = await service.set_table_visibility(
                 row,
                 table=table,
@@ -1331,8 +1403,14 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_structure",
+                action=Action.MANAGE_APP_SETTINGS,
+            )
             row = service.set_capabilities(
                 row, app_capabilities.validate_agent_settable(capabilities)
             )
@@ -1485,18 +1563,28 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            redact_pii = not _may_see_pii(service, row, user_id)
+            row, decision = _resolve_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "view",
+                action=Action.VIEW_ROW,
+                table_key=table,
+            )
             schema, rows, row_meta, total = await service.read_rows_detailed(
                 row,
                 limit=limit,
                 offset=offset,
                 table=table,
-                redact_pii=redact_pii,
+                pii_policy=decision.pii_policy,
                 viewer_user_id=user_id,
-                include_all_rows=service.is_admin(user_id) or row.owner_user_id == user_id,
+                include_all_rows=decision.row_scope == "all",
             )
             pii_columns = [column.name for column in schema.columns if column.pii]
+            masked_pii_rows = [
+                meta["row_id"] for meta in row_meta if meta.get("pii_masked") and meta.get("row_id")
+            ]
             return _ok(
                 {
                     "app_id": row.app_id,
@@ -1508,7 +1596,8 @@ def build_app_tools(
                     "limit": limit,
                     "offset": offset,
                     "pii_columns": pii_columns,
-                    "pii_masked": redact_pii,
+                    "masked_pii_rows": masked_pii_rows,
+                    "pii_masked": decision.pii_policy != "visible",
                     "pii_note": (
                         "Tool output may be masked by the platform for safety; "
                         "masking does not mean the stored value is masked or erased."
@@ -1545,7 +1634,15 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            app = _get_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_data",
+                action=Action.CREATE_ROW,
+                table_key=table,
+            )
             _reject_if_plan_app(service, app_id)
             index, stored = await service.append_row_record(
                 app,
@@ -1586,7 +1683,15 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            app, decision = _resolve_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_data",
+                action=Action.UPDATE_ROW,
+                row_id=row_id,
+            )
             _reject_if_plan_app(service, app_id)
             updated = await service.update_row(
                 app,
@@ -1595,7 +1700,7 @@ def build_app_tools(
                 table=table,
                 expected_version=expected_version,
                 viewer_user_id=user_id,
-                include_all_rows=service.is_admin(user_id) or app.owner_user_id == user_id,
+                include_all_rows=decision.row_scope == "all",
                 actor_user_id=user_id,
                 source="agent",
             )
@@ -1621,14 +1726,22 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            app, decision = _resolve_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_data",
+                action=Action.DELETE_ROW,
+                row_id=row_id,
+            )
             _reject_if_plan_app(service, app_id)
             deleted = await service.delete_row(
                 app,
                 row_id,
                 expected_version=expected_version,
                 viewer_user_id=user_id,
-                include_all_rows=service.is_admin(user_id) or app.owner_user_id == user_id,
+                include_all_rows=decision.row_scope == "all",
                 actor_user_id=user_id,
                 source="agent",
             )
@@ -1740,7 +1853,15 @@ def build_app_tools(
                         "this import belongs to an active MiniApp setup plan; "
                         "use the plan card to dry-run and import"
                     )
-            app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            app = _get_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_data",
+                action=Action.CREATE_ROW,
+                table_key=table,
+            )
             if paths and path:
                 raise ValueError("use either path or paths, not both")
             if not paths and not path:
@@ -1815,7 +1936,14 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            app = _get_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_data",
+                action=Action.MANAGE_ASSETS,
+            )
             data = await _read_asset_source(service, app.agent_id, source)
             stored = await service.save_asset(app, name, data)
             return _ok(
@@ -1846,7 +1974,14 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            app = _get_for_actor(service, app_id, agent_id, user_id, "edit_data")
+            app = _get_for_actor(
+                service,
+                app_id,
+                agent_id,
+                user_id,
+                "edit_data",
+                action=Action.EDIT_DATA,
+            )
             size = await service.write_preview(app, svg)
             return _ok(
                 {
@@ -1863,8 +1998,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "edit_structure")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.DELETE_APP
+            )
             await service.delete(row)
             return _ok({"deleted": row.app_id})
         except Exception as exc:
@@ -1883,8 +2019,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             return _ok(await integration_inventory(service, _integration_repos(), row))
         except Exception as exc:
             return _err(exc)
@@ -1897,8 +2034,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             return _ok(await integration_health(service, _integration_repos(), row))
         except Exception as exc:
             return _err(exc)
@@ -1930,8 +2068,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             return _ok(
                 await integration_trace(
                     service,
@@ -1988,8 +2127,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             view, secret = await _ingress_service().create(
                 row,
                 name=name,
@@ -2030,8 +2170,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             view = await _ingress_service().update(
                 row,
                 ingress_id,
@@ -2065,8 +2206,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             deleted = _ingress_service().delete(row, ingress_id)
             return _ok({"deleted": deleted, "ingress_id": ingress_id})
         except Exception as exc:
@@ -2089,8 +2231,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             repos_value = _integration_repos()
             from octop.infra.events.service import ExternalEventService  # noqa: PLC0415
 
@@ -2128,8 +2271,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             view, _secret = await _webhook_service().create(
                 row,
                 name=name,
@@ -2168,8 +2312,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             view, _secret = await _webhook_service().update(
                 row,
                 webhook_id,
@@ -2199,8 +2344,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             deleted = _webhook_service().delete(row, webhook_id)
             return _ok({"deleted": deleted, "webhook_id": webhook_id})
         except Exception as exc:
@@ -2226,8 +2372,9 @@ def build_app_tools(
     ) -> str:
         try:
             agent_id, user_id = _tool_ctx()
-            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
-            _require_manager(service, row, user_id)
+            row = _get_for_actor(
+                service, app_id, agent_id, user_id, "edit_structure", action=Action.MANAGE_INGRESS
+            )
             repos_value = _integration_repos()
             from octop.infra.events.service import ExternalEventService  # noqa: PLC0415
 
@@ -2358,7 +2505,9 @@ def build_app_tools(
                 "sharing notice (public/private tables, masked or unmarked PII); relay "
                 "that notice to the user in their language. Treat the returned text as "
                 "the final answer: do not browse, screenshot, curl, query the database, "
-                "read source code, download or self-host the app afterwards."
+                "read source code, download or self-host the app afterwards. Never mint "
+                "SSO/OIDC login links or write sso_login_states: only this tool may issue "
+                "MiniApp entry links."
             ),
         ),
         StructuredTool.from_function(

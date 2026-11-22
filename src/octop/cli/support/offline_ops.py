@@ -75,7 +75,9 @@ def _require_username(services: Any, username: str) -> int:
 
 def list_users_offline(*, home: Path | None = None) -> list[dict[str, Any]]:
     with open_cli_services(home) as svc:
-        return [_user_row_to_dict(r) for r in svc.user_repo.list(include_disabled=True)]
+        return [
+            _user_row_to_dict(r) for r in svc.user_repo.list(include_disabled=True, kind="member")
+        ]
 
 
 def create_user_offline(
@@ -321,7 +323,7 @@ def admin_overview_offline(*, home: Path | None = None) -> dict[str, Any]:
     with open_cli_services(home) as svc:
         users = [
             {"username": r.username, "role": r.role, "agents": []}
-            for r in svc.user_repo.list(include_disabled=True)
+            for r in svc.user_repo.list(include_disabled=True, kind="member")
         ]
         agents = [
             {

@@ -1,6 +1,10 @@
 import { request, requestBlob, requestStream, requestUpload } from "../request";
 
-export type AppPermission = "view" | "edit_data" | "edit_structure";
+export type AppPermission =
+  | "participate"
+  | "view"
+  | "edit_data"
+  | "edit_structure";
 
 export interface AppColumn {
   name: string;
@@ -19,6 +23,8 @@ export interface AppSummary {
   description: string;
   agent_id: string;
   agent_name: string;
+  /** Owner of the hosting agent; may approve external participants. */
+  agent_owner_user_id?: number | null;
   owner_user_id: number;
   owner_username: string;
   permission: AppPermission;
@@ -34,7 +40,11 @@ export interface AppSummary {
   updated_at: number;
 }
 
-export type AppAccessPermission = "view" | "edit_data" | "edit_structure";
+export type AppAccessPermission =
+  | "participate"
+  | "view"
+  | "edit_data"
+  | "edit_structure";
 
 export interface AppAccessRequest {
   request_id: string;
@@ -57,6 +67,130 @@ export interface AppAccessRequestInput {
   note?: string;
 }
 
+export type AppMemberPermission = AppAccessPermission;
+export type AppMemberKind = "member" | "guest";
+export type AppMemberStatus = "active" | "pending" | "removed";
+
+export interface AppMember {
+  user_id: number;
+  username: string;
+  display_name: string;
+  kind: AppMemberKind;
+  permission: AppMemberPermission;
+  status: AppMemberStatus;
+  joined_via: string;
+  invited_by: number | null;
+  created_at: number;
+  last_active_at: number;
+}
+
+export interface AppInvite {
+  invite_id: string;
+  invite_url: string;
+  audience: "guest" | "member";
+  permission: AppMemberPermission;
+  expires_at: number;
+  max_uses: number;
+  used_count: number;
+  host_status: "not_required" | "pending" | "approved" | "rejected";
+  revoked_at: number | null;
+}
+
+export interface AppJoinCode {
+  join_code_id: string;
+  code: string | null;
+  audience: "guest" | "member";
+  permission: AppMemberPermission;
+  expires_at: number;
+  max_uses: number;
+  used_count: number;
+  requires_approval: boolean;
+  revoked_at: number | null;
+}
+
+export interface AppInvitePreview {
+  app_id: string;
+  app_name: string;
+  audience: "guest" | "member";
+  permission: AppMemberPermission;
+  host_status: string;
+}
+
+export interface AppJoinCodePreview {
+  app_id: string;
+  app_name: string;
+  audience: "guest" | "member";
+  role: AppMemberPermission;
+  requires_approval: boolean;
+  host_approval_required: boolean;
+}
+
+export interface AppRedemption {
+  app_id: string;
+  user_id: number;
+  role: AppMemberPermission;
+  status: AppMemberStatus;
+  display_name: string;
+  guest_token: string | null;
+  refresh_token: string | null;
+  app_token: string | null;
+  expires_in: number;
+  guest_expires_in: number | null;
+  refresh_expires_in: number | null;
+}
+
+export interface AppSessionToken {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  scope: string;
+  app_id: string;
+  role: string;
+}
+
+export interface GuestTokenPair {
+  guest_token: string;
+  refresh_token: string;
+  guest_expires_in: number;
+  refresh_expires_in: number;
+}
+
+export interface GuestApp {
+  app_id: string;
+  name: string;
+  role: AppMemberPermission;
+  last_opened_at: number;
+}
+
+export interface ExternalSharingPolicy {
+  allow_external_participants: boolean;
+  max_guests_per_app: number;
+  require_host_approval: boolean;
+  can_manage: boolean;
+}
+
+export interface ExternalSharingPatch {
+  allow_external_participants?: boolean;
+  max_guests_per_app?: number;
+  require_host_approval?: boolean;
+}
+
+export interface CreateInviteInput {
+  audience: "guest" | "member";
+  permission?: AppMemberPermission;
+  invitee_hint?: string;
+  ttl_seconds?: number;
+  max_uses?: number;
+}
+
+export interface CreateJoinCodeInput {
+  audience: "guest" | "member";
+  permission?: AppMemberPermission;
+  ttl_seconds?: number;
+  max_uses?: number;
+  requires_approval?: boolean;
+}
+
 export interface AppTable {
   table_key: string;
   label: string;
@@ -64,6 +198,7 @@ export interface AppTable {
   data_version?: number;
   is_main: boolean;
   public_visible: boolean;
+  member_visible?: boolean;
   row_scope?: "app" | "user";
   rules?: Record<string, unknown>;
   columns: AppColumn[];
@@ -304,6 +439,7 @@ export interface AppRowMeta {
   row_id: string;
   version: number;
   source?: string;
+  pii_masked?: boolean;
 }
 
 export interface AppRowsResponse {
@@ -315,6 +451,7 @@ export interface AppRowsResponse {
   offset: number;
   table: string;
   pii_columns: string[];
+  masked_pii_rows?: string[];
   refs?: Record<string, Record<string, string>>;
 }
 
@@ -993,6 +1130,23 @@ export const appsApi = {
       },
     ),
 
+  setTableMemberVisible: (
+    appId: string,
+    tableKey: string,
+    publicVisible: boolean,
+    memberVisible: boolean,
+  ) =>
+    request<AppTable>(
+      `/apps/${encodeId(appId)}/tables/${encodeURIComponent(tableKey)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          public_visible: publicVisible,
+          member_visible: memberVisible,
+        }),
+      },
+    ),
+
   rows: (
     appId: string,
     limit = 200,
@@ -1210,6 +1364,155 @@ export const appsApi = {
 
   shares: (appId: string) =>
     request<{ shares: AppShare[] }>(`/apps/${encodeId(appId)}/shares`),
+
+  members: (appId: string) =>
+    request<{ members: AppMember[] }>(`/apps/${encodeId(appId)}/members`),
+
+  addMember: (
+    appId: string,
+    body: {
+      username?: string;
+      user_id?: number;
+      permission: AppMemberPermission;
+    },
+  ) =>
+    request<AppMember>(`/apps/${encodeId(appId)}/members`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  addGuest: (appId: string, displayName: string) =>
+    request<AppMember>(`/apps/${encodeId(appId)}/guests`, {
+      method: "POST",
+      body: JSON.stringify({
+        display_name: displayName,
+        permission: "participate",
+      }),
+    }),
+
+  updateMember: (
+    appId: string,
+    userId: number,
+    body: { permission?: AppMemberPermission; status?: AppMemberStatus },
+  ) =>
+    request<AppMember>(`/apps/${encodeId(appId)}/members/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  removeMember: (appId: string, userId: number) =>
+    request<void>(`/apps/${encodeId(appId)}/members/${userId}`, {
+      method: "DELETE",
+    }),
+
+  invites: (appId: string) =>
+    request<{ invites: AppInvite[] }>(`/apps/${encodeId(appId)}/invites`),
+
+  createInvite: (appId: string, body: CreateInviteInput) =>
+    request<AppInvite>(`/apps/${encodeId(appId)}/invites`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  revokeInvite: (appId: string, inviteId: string) =>
+    request<void>(
+      `/apps/${encodeId(appId)}/invites/${encodeURIComponent(inviteId)}`,
+      { method: "DELETE" },
+    ),
+
+  updateInviteHost: (
+    appId: string,
+    inviteId: string,
+    hostStatus: "approved" | "rejected",
+  ) =>
+    request<AppInvite>(
+      `/apps/${encodeId(appId)}/invites/${encodeURIComponent(inviteId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ host_status: hostStatus }),
+      },
+    ),
+
+  joinCodes: (appId: string) =>
+    request<{ join_codes: AppJoinCode[] }>(
+      `/apps/${encodeId(appId)}/join-codes`,
+    ),
+
+  createJoinCode: (appId: string, body: CreateJoinCodeInput) =>
+    request<AppJoinCode>(`/apps/${encodeId(appId)}/join-codes`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  revokeJoinCode: (appId: string, joinCodeId: string) =>
+    request<void>(
+      `/apps/${encodeId(appId)}/join-codes/${encodeURIComponent(joinCodeId)}`,
+      { method: "DELETE" },
+    ),
+
+  previewInvite: (token: string) =>
+    request<AppInvitePreview>("/apps/invites/preview", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  redeemInvite: (token: string, displayName = "") =>
+    request<AppRedemption>("/apps/invites/redeem", {
+      method: "POST",
+      body: JSON.stringify({ token, display_name: displayName }),
+    }),
+
+  previewJoinCode: (code: string) =>
+    request<AppJoinCodePreview>("/apps/join/preview", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  redeemJoinCode: (code: string, displayName = "") =>
+    request<AppRedemption>("/apps/join/redeem", {
+      method: "POST",
+      body: JSON.stringify({ code, display_name: displayName }),
+    }),
+
+  appSession: (appId: string) =>
+    request<AppSessionToken>(`/apps/${encodeId(appId)}/session`, {
+      method: "POST",
+    }),
+
+  guestAppSession: (appId: string) =>
+    request<AppSessionToken>(`/guest/apps/${encodeId(appId)}/session`, {
+      method: "POST",
+    }),
+
+  refreshGuestSession: (refreshToken: string) =>
+    request<GuestTokenPair>("/guest/session/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    }),
+
+  revokeGuestSession: () =>
+    request<void>("/guest/sessions/current", { method: "DELETE" }),
+
+  guestApps: () => request<{ apps: GuestApp[] }>("/guest/apps"),
+
+  leaveGuestApp: (appId: string) =>
+    request<void>(`/guest/memberships/${encodeId(appId)}`, {
+      method: "DELETE",
+    }),
+
+  deleteGuestAccount: () =>
+    request<void>("/guest/account", { method: "DELETE" }),
+
+  externalSharing: (agentId: string) =>
+    request<ExternalSharingPolicy>(
+      `/agents/${encodeURIComponent(agentId)}/external-sharing`,
+    ),
+
+  updateExternalSharing: (agentId: string, body: ExternalSharingPatch) =>
+    request<ExternalSharingPolicy>(
+      `/agents/${encodeURIComponent(agentId)}/external-sharing`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
 
   assistantHistory: (appId: string) =>
     request<{ messages: AppAssistantMessage[] }>(

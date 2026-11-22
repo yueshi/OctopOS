@@ -29,7 +29,12 @@ from octop.infra.events.security import REPLAY_WINDOW_SECONDS, verify_signature
 SOURCE_KIND_WEBHOOK = "webhook"
 SOURCE_KIND_CONNECTOR_POLL = "connector_poll"
 SOURCE_KIND_APP_INGRESS = "app_ingress"
+SOURCE_KIND_APP_OUTBOUND = "app_outbound"
 SOURCE_KINDS = (SOURCE_KIND_WEBHOOK, SOURCE_KIND_CONNECTOR_POLL)
+# Sources owned by a MiniApp's integration section. They are visible here so
+# owners can inspect events/deliveries, but mutations must go through the app
+# APIs: deleting or disabling the source would silently break the integration.
+INTERNAL_SOURCE_KINDS = frozenset({SOURCE_KIND_APP_INGRESS, SOURCE_KIND_APP_OUTBOUND})
 """Kinds a user may create through the global External Events API.
 
 ``app_ingress`` is created by :class:`AppIngressService` only; it is not a
@@ -73,6 +78,16 @@ class IngestResult:
 
 def _invalid(code: ErrorCode, message: str) -> OctopError:
     return OctopError(code, message)
+
+
+def _reject_internal_source(
+    source: ExternalSourceRow, *, code: ErrorCode = ErrorCode.EXTERNAL_SOURCE_INVALID
+) -> None:
+    if source.kind in INTERNAL_SOURCE_KINDS:
+        raise _invalid(
+            code,
+            "source is managed by a MiniApp integration; use the app's integration section",
+        )
 
 
 def _text(value: object, *, limit: int) -> str:
@@ -188,6 +203,7 @@ class ExternalEventService:
         config: dict[str, Any] | None = None,
     ) -> ExternalSourceRow:
         source = self._source_for(user_id, is_admin, source_id)
+        _reject_internal_source(source)
         clean_name = None if name is None else _text(name, limit=MAX_NAME_CHARS)
         if clean_name is not None and not clean_name:
             raise _invalid(ErrorCode.EXTERNAL_SOURCE_INVALID, "source name is required")
@@ -217,7 +233,8 @@ class ExternalEventService:
         return updated
 
     def delete_source(self, *, user_id: int, is_admin: bool, source_id: str) -> None:
-        self._source_for(user_id, is_admin, source_id)
+        source = self._source_for(user_id, is_admin, source_id)
+        _reject_internal_source(source)
         if not self._repos.external_source_repo.delete(source_id):
             raise _invalid(ErrorCode.EXTERNAL_SOURCE_NOT_FOUND, "source not found")
 
@@ -303,6 +320,7 @@ class ExternalEventService:
         max_per_minute: int = 0,
     ) -> ExternalSubscriptionRow:
         source = self._source_for(user_id, is_admin, source_id)
+        _reject_internal_source(source, code=ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID)
         self._validate_target(
             source=source,
             target_type=target_type,
@@ -351,6 +369,7 @@ class ExternalEventService:
         source = self._repos.external_source_repo.get(row.source_id)
         if source is None:
             raise _invalid(ErrorCode.EXTERNAL_SOURCE_NOT_FOUND, "source not found")
+        _reject_internal_source(source, code=ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID)
         effective_target = target_id if target_id is not None else row.target_id
         effective_mode = mode if mode is not None else row.mode
         effective_mapping = mapping if mapping is not None else _json_dict(row.mapping_json)
@@ -391,7 +410,10 @@ class ExternalEventService:
         return updated
 
     def delete_subscription(self, *, user_id: int, is_admin: bool, subscription_id: str) -> None:
-        self._subscription_for(user_id, is_admin, subscription_id)
+        row = self._subscription_for(user_id, is_admin, subscription_id)
+        source = self._repos.external_source_repo.get(row.source_id)
+        if source is not None:
+            _reject_internal_source(source, code=ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID)
         if not self._repos.external_subscription_repo.delete(subscription_id):
             raise _invalid(ErrorCode.EXTERNAL_SUBSCRIPTION_INVALID, "subscription not found")
 

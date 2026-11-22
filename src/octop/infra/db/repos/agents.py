@@ -76,6 +76,7 @@ class AgentRow:
     mcp_servers: str | None = None
     kind: str = "expert"
     autonomy_enabled: int = 0
+    external_sharing_policy: str = "{}"
 
     @classmethod
     def from_row(cls, r: DbRow) -> AgentRow:
@@ -123,6 +124,7 @@ class AgentRow:
             mcp_servers=_opt_str(r, "mcp_servers"),
             kind=kind,
             autonomy_enabled=autonomy_enabled,
+            external_sharing_policy=_opt_str(r, "external_sharing_policy") or "{}",
         )
 
 
@@ -250,6 +252,13 @@ class AgentRepo:
             conn.execute(
                 "UPDATE agents SET is_shared = ?, updated_at = ? WHERE agent_id = ?",
                 (bool_int(shared), now_ts(), agent_id),
+            )
+
+    def set_external_sharing_policy(self, agent_id: str, policy_json: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE agents SET external_sharing_policy = ?, updated_at = ? WHERE agent_id = ?",
+                (policy_json, now_ts(), agent_id),
             )
 
     def list_shared(self, *, exclude_user_id: int | None = None) -> list[AgentRow]:
