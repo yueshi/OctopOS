@@ -59,6 +59,10 @@ ACTION_TIMEOUTS: dict[str, float] = {
 }
 
 
+class _LeaseLostError(RuntimeError):
+    """Raised internally when another instance took the schedule's DB lease."""
+
+
 class AppSourceScheduler:
     def __init__(
         self,
@@ -114,86 +118,155 @@ class AppSourceScheduler:
 
     async def tick(self, *, now: int | None = None) -> int:
         """Run every due schedule once; returns how many jobs ran."""
-        now = int(self._clock()) if now is None else now
-        if now - self._last_housekeeping >= HOUSEKEEPING_SECONDS:
-            self._last_housekeeping = now
+        initial = int(self._clock()) if now is None else int(now)
+        if initial - self._last_housekeeping >= HOUSEKEEPING_SECONDS:
+            self._last_housekeeping = initial
             try:
                 self._service.trim_row_history()
             except Exception:
                 logger.warning("light app row-history trim failed", exc_info=True)
-        due = self._schedule_repo.list_due(now)
+        due = self._schedule_repo.list_due(initial)
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 
         METRICS.set("light_app_schedule_backlog", len(due))
         ran = 0
         for item in due:
+            # A tick can run for minutes. Re-read the clock before every claim:
+            # reusing the tick's start time would hand later jobs a lease that
+            # is already expired by the time the previous action finishes.
+            run_at = max(initial, int(self._clock()))
             lease = self._schedule_repo.claim(
                 item.schedule_id,
-                now=now,
+                now=run_at,
                 lease_seconds=LEASE_SECONDS,
             )
             if lease is None:
                 continue  # claimed elsewhere, disabled, or already leased
             ran += 1
-            await self._run(item, lease=lease, run_at=now)
+            await self._run(item, lease=lease, run_at=run_at)
         return ran
+
+    async def _execute_schedule(self, item: LightAppScheduleRow) -> None:
+        row = self._service.get(item.app_id)
+        await self._service.execute_schedule(row, item.action, item.target)
 
     async def _run(self, item: LightAppScheduleRow, *, lease: int, run_at: int) -> None:
         current = {"lease": lease}
         stop = asyncio.Event()
+        lease_lost = asyncio.Event()
+
+        def renew() -> None:
+            # Keep the lease monotonic even when a test (or a clock jump) passes
+            # an explicit ``now`` far ahead of the wall clock.
+            heartbeat_now = max(
+                int(self._clock()),
+                current["lease"] - LEASE_SECONDS + 1,
+            )
+            try:
+                renewed = self._schedule_repo.heartbeat(
+                    item.schedule_id,
+                    lease_until=current["lease"],
+                    now=heartbeat_now,
+                    lease_seconds=LEASE_SECONDS,
+                )
+            except Exception:
+                # A transient DB error must not stop renewals: the lease is
+                # still ours, and the next heartbeat interval retries.
+                logger.warning(
+                    "light app schedule %s heartbeat failed",
+                    item.schedule_id,
+                    exc_info=True,
+                )
+                return
+            if renewed is None:
+                logger.warning(
+                    "light app schedule %s lost its lease while running",
+                    item.schedule_id,
+                )
+                lease_lost.set()
+                return
+            current["lease"] = renewed
 
         async def heartbeat() -> None:
-            while True:
+            # Renew immediately: a long tick may already have advanced the
+            # clock past the lease claimed for this item.
+            renew()
+            while not lease_lost.is_set():
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=HEARTBEAT_SECONDS)
                     return
                 except TimeoutError:
-                    try:
-                        renewed = self._schedule_repo.heartbeat(
-                            item.schedule_id,
-                            lease_until=current["lease"],
-                            now=int(time.time()),
-                            lease_seconds=LEASE_SECONDS,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "light app schedule %s heartbeat failed",
-                            item.schedule_id,
-                            exc_info=True,
-                        )
-                        return
-                    if renewed is None:
-                        logger.warning(
-                            "light app schedule %s lost its lease while running",
-                            item.schedule_id,
-                        )
-                        return
-                    current["lease"] = renewed
+                    renew()
 
         beat = asyncio.create_task(heartbeat(), name=f"schedule-lease-{item.schedule_id}")
+        lost_wait = asyncio.create_task(lease_lost.wait(), name=f"schedule-lost-{item.schedule_id}")
+        action = asyncio.create_task(
+            self._execute_schedule(item), name=f"schedule-action-{item.schedule_id}"
+        )
         error: Exception | None = None
         timeout = self._action_timeouts.get(item.action, DEFAULT_ACTION_TIMEOUT_SECONDS)
         try:
-            row = self._service.get(item.app_id)
-            await asyncio.wait_for(
-                self._service.execute_schedule(row, item.action, item.target),
+            done, _pending = await asyncio.wait(
+                {action, lost_wait},
                 timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
             )
+            if action in done:
+                # ``Task.exception()`` raises CancelledError when the action
+                # was cancelled for its own reasons; treat that as a failed
+                # run instead of letting it escape as scheduler shutdown.
+                if action.cancelled():
+                    error = RuntimeError("schedule action was cancelled")
+                else:
+                    exc = action.exception()
+                    if exc is not None and not isinstance(exc, Exception):
+                        raise exc
+                    error = exc
+            elif lost_wait in done:
+                action.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await action
+                error = _LeaseLostError(f"schedule {item.schedule_id} lost its lease while running")
+            else:
+                action.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await action
+                error = TimeoutError(f"schedule action timed out after {timeout:g}s")
         except asyncio.CancelledError:
+            action.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await action
             stop.set()
-            self._schedule_repo.release(item.schedule_id, lease_until=current["lease"])
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await beat
+            lost_wait.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lost_wait
+            self._schedule_repo.release(item.schedule_id, lease_until=current["lease"])
             raise
-        except TimeoutError:
-            error = TimeoutError(f"schedule action timed out after {timeout:g}s")
-        except Exception as exc:
-            error = exc
         finally:
             stop.set()
+            beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await beat
+            lost_wait.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await lost_wait
+
+        if lease_lost.is_set():
+            # Another instance owns the row now; do not finish or release it.
+            from octop.infra.metrics import METRICS  # noqa: PLC0415
+
+            METRICS.inc("light_app_schedule_lease_lost_total")
+            logger.warning(
+                "light app schedule %s (%s/%s) aborted after lease loss",
+                item.schedule_id,
+                item.app_id,
+                item.action,
+            )
+            return
+
         finished_at = max(run_at, int(self._clock()))
         from octop.infra.metrics import METRICS  # noqa: PLC0415
 

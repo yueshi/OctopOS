@@ -37,6 +37,10 @@ export interface BridgeParams {
   system?: string;
   gameId?: string;
   text?: string;
+  taskType?: string;
+  taskId?: string;
+  input?: Record<string, unknown>;
+  idempotencyKey?: string;
 }
 
 /** One row of a batch update sent by the page. */
@@ -106,6 +110,9 @@ export const KNOWN_METHODS: ReadonlySet<string> = new Set([
   "updateMany",
   "remove",
   "generate",
+  "runTask",
+  "getTask",
+  "cancelTask",
   "composeMessage",
   "launchGame",
   "openExternal",

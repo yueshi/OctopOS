@@ -24,6 +24,7 @@ CAP_EXTERNAL_OPEN = "external.open"
 CAP_CHAT_COMPOSE = "chat.compose"
 CAP_EVENTS_READ = "events.read"
 CAP_AI_GENERATE = "ai.generate"
+CAP_AI_TASK = "ai.agent_task"
 CAP_GAME_LAUNCH = "game.launch"
 CAP_EXTERNAL_FETCH = "external.fetch"
 CAP_EVENTS_EMIT = "events.emit"
@@ -37,6 +38,7 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     CAP_CHAT_COMPOSE,
     CAP_EVENTS_READ,
     CAP_AI_GENERATE,
+    CAP_AI_TASK,
     CAP_GAME_LAUNCH,
     CAP_EXTERNAL_FETCH,
     CAP_EVENTS_EMIT,
@@ -155,6 +157,7 @@ __all__ = [
     "AGENT_SETTABLE_CAPABILITIES",
     "ALL_CAPABILITIES",
     "CAP_AI_GENERATE",
+    "CAP_AI_TASK",
     "CAP_ASSET_READ",
     "CAP_CHAT_COMPOSE",
     "CAP_DATA_READ",

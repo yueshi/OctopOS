@@ -76,6 +76,10 @@ APP_TOOL_RISKS: dict[str, str] = {
     "app_integration_delete_webhook": RISK_SENSITIVE,
     "app_integration_test_webhook": RISK_SENSITIVE,
     "app_delete": RISK_SENSITIVE,
+    "app_run_task": RISK_WRITE,
+    "app_get_task": RISK_READ,
+    "app_list_tasks": RISK_READ,
+    "app_cancel_task": RISK_WRITE,
 }
 
 APP_TOOL_CATEGORIES: dict[str, str] = {
@@ -117,6 +121,10 @@ APP_TOOL_CATEGORIES: dict[str, str] = {
     "app_integration_delete_webhook": GROUP_INTEGRATION,
     "app_integration_test_webhook": GROUP_INTEGRATION,
     "app_delete": GROUP_LIFECYCLE,
+    "app_run_task": GROUP_DATA,
+    "app_get_task": GROUP_DATA,
+    "app_list_tasks": GROUP_DATA,
+    "app_cancel_task": GROUP_DATA,
 }
 
 # Tools that require a human decision. Kept explicit rather than derived from

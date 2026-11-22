@@ -34,6 +34,11 @@ interface Props {
   active?: boolean;
   /** True when the hosting window is the focused one (fast data polling). */
   foreground?: boolean;
+  /**
+   * Bump to re-fetch the app HTML, e.g. after the agent rewrites it. Changing
+   * this remounts the inner document even when the HTML is unchanged.
+   */
+  reloadToken?: number;
   /** Fill the chat composer (never sends automatically). */
   onComposeMessage?: (text: string) => void | Promise<void>;
   /**
@@ -61,6 +66,7 @@ export default function MiniAppFrame({
   capabilities,
   active = true,
   foreground = true,
+  reloadToken = 0,
   onComposeMessage,
   onOpenExternal,
 }: Props) {
@@ -85,6 +91,9 @@ export default function MiniAppFrame({
     setLoading(true);
     setError("");
     setEscaped(false);
+    // Drop the current document so a refresh always starts from a clean frame,
+    // even when the HTML bytes did not change.
+    setHtml("");
     appsApi
       .getHtml(appId)
       .then((text) => {
@@ -110,7 +119,7 @@ export default function MiniAppFrame({
     return () => {
       alive = false;
     };
-  }, [appId, t]);
+  }, [appId, reloadToken, t]);
 
   // A game ran in the side dock: remount the app so it re-reads its rows.
   useEffect(() => {
@@ -264,6 +273,21 @@ export default function MiniAppFrame({
               prompt: String(params.prompt ?? ""),
               system: String(params.system ?? ""),
             });
+          }
+          if (method === "runTask") {
+            return await appsApi.createTask(appId, {
+              task_type: String(params.taskType ?? ""),
+              table: params.table || "main",
+              row_id: String(params.rowId ?? ""),
+              input: params.input ?? {},
+              idempotency_key: String(params.idempotencyKey ?? ""),
+            });
+          }
+          if (method === "getTask") {
+            return await appsApi.getTask(appId, String(params.taskId ?? ""));
+          }
+          if (method === "cancelTask") {
+            return await appsApi.cancelTask(appId, String(params.taskId ?? ""));
           }
           if (method === "composeMessage") {
             const text = String(params.text ?? "").trim();

@@ -101,7 +101,13 @@ APP_ROUTE_ACTIONS: dict[str, Action | None] = {
     "revoke_app_publication": Action.PUBLISH,
     "transfer_app": Action.MANAGE_MEMBERS,
     "delete_app": Action.DELETE_APP,
-    "backup_app": Action.MANAGE_STRUCTURE,
+    "backup_app": Action.MANAGE_APP_SETTINGS,
+    # AI tasks.
+    "list_app_task_types": Action.VIEW_APP,
+    "create_app_task": Action.AI,
+    "list_app_tasks": Action.VIEW_APP,
+    "get_app_task": Action.VIEW_APP,
+    "cancel_app_task": Action.VIEW_APP,
     # Assistant / generation / games.
     "get_app_assistant_history": Action.AI,
     "ask_app_assistant": Action.AI,

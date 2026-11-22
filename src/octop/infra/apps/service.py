@@ -8350,14 +8350,7 @@ class AppService:
                 "publish the app before scheduling a snapshot refresh",
             )
         if existing is None:
-            existing = next(
-                (
-                    item
-                    for item in self._schedule_repo.list_for_app(row.app_id)
-                    if item.action == SCHEDULE_ACTION_SNAPSHOT_PUBLICATION
-                ),
-                None,
-            )
+            existing = self._schedule_repo.get_snapshot_for_app(row.app_id)
         if existing is not None:
             updated = self._schedule_repo.update(
                 existing.schedule_id,
@@ -8369,13 +8362,11 @@ class AppService:
             return self._schedule_view(updated)
         if not self._has_schedule_capacity(row.app_id):
             raise OctopError.localized(ErrorCode.APP_LIMIT_EXCEEDED)
-        item = self._schedule_repo.create(
+        item = self._schedule_repo.create_snapshot(
             app_id=row.app_id,
-            action=SCHEDULE_ACTION_SNAPSHOT_PUBLICATION,
             interval_seconds=interval,
             created_by=created_by,
             enabled=enabled,
-            target={},
         )
         return self._schedule_view(item)
 

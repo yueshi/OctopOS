@@ -14,6 +14,7 @@ export const CAP = {
   CHAT_COMPOSE: "chat.compose",
   EVENTS_READ: "events.read",
   AI_GENERATE: "ai.generate",
+  AI_TASK: "ai.agent_task",
   GAME_LAUNCH: "game.launch",
   EXTERNAL_FETCH: "external.fetch",
   EVENTS_EMIT: "events.emit",
@@ -21,6 +22,22 @@ export const CAP = {
 } as const;
 
 export const ALL_CAPABILITIES: readonly string[] = Object.values(CAP);
+
+/**
+ * Capabilities an older payload without a manifest keeps. Frozen at the R1
+ * set: a capability added later must be opt-in, never inherited by legacy
+ * apps just because the bridge knows its name.
+ */
+export const LEGACY_CAPABILITIES: readonly string[] = [
+  CAP.DATA_READ,
+  CAP.DATA_WRITE,
+  CAP.ASSET_READ,
+  CAP.EXTERNAL_OPEN,
+  CAP.CHAT_COMPOSE,
+  CAP.EVENTS_READ,
+  CAP.AI_GENERATE,
+  CAP.GAME_LAUNCH,
+];
 
 /**
  * System-app capabilities. Deliberately kept out of ``CAP`` /
@@ -46,6 +63,9 @@ const METHOD_CAPABILITY: Record<string, string> = {
   updateMany: CAP.DATA_WRITE,
   remove: CAP.DATA_WRITE,
   generate: CAP.AI_GENERATE,
+  runTask: CAP.AI_TASK,
+  getTask: CAP.AI_TASK,
+  cancelTask: CAP.AI_TASK,
   launchGame: CAP.GAME_LAUNCH,
   asset: CAP.ASSET_READ,
   openExternal: CAP.EXTERNAL_OPEN,
@@ -64,7 +84,7 @@ const METHOD_CAPABILITY: Record<string, string> = {
 export function effectiveCapabilities(
   capabilities?: readonly string[],
 ): readonly string[] {
-  return capabilities ?? ALL_CAPABILITIES;
+  return capabilities ?? LEGACY_CAPABILITIES;
 }
 
 /**

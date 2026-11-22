@@ -11,6 +11,7 @@ from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos._base import (
     DbRow,
     insert_returning_id,
+    is_unique_violation,
     map_rows,
     now_ts,
 )
@@ -103,6 +104,17 @@ class LightAppScheduleRepo:
             ).fetchone()
         return int(row["n"] if row else 0)
 
+    def get_snapshot_for_app(self, app_id: str) -> LightAppScheduleRow | None:
+        """Return the app's single snapshot-refresh job, if any."""
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM light_app_schedules "
+                "WHERE app_id = ? AND action = 'snapshot_publication' "
+                "ORDER BY id LIMIT 1",
+                (app_id,),
+            ).fetchone()
+        return LightAppScheduleRow.from_row(row) if row else None
+
     def list_due(self, now: int, *, limit: int = 100) -> list[LightAppScheduleRow]:
         """Enabled schedules whose next run is due and lease is free/expired."""
         with self._db.connect() as conn:
@@ -159,6 +171,42 @@ class LightAppScheduleRepo:
         if row is None:
             raise RuntimeError(f"schedule insert failed: {app_id}/{schedule_id}")
         return row
+
+    def create_snapshot(
+        self,
+        *,
+        app_id: str,
+        interval_seconds: int,
+        created_by: int,
+        enabled: bool = True,
+    ) -> LightAppScheduleRow:
+        """Create the app's snapshot job, or reuse the one a peer created.
+
+        The partial unique index on ``(app_id) WHERE action =
+        'snapshot_publication'`` is the actual invariant; two dashboards may
+        still race between the service's read and this insert.
+        """
+        try:
+            return self.create(
+                app_id=app_id,
+                action="snapshot_publication",
+                interval_seconds=interval_seconds,
+                created_by=created_by,
+                enabled=enabled,
+                target={},
+            )
+        except Exception as exc:
+            if not is_unique_violation(exc):
+                raise
+            existing = self.get_snapshot_for_app(app_id)
+            if existing is None:
+                raise
+            updated = self.update(
+                existing.schedule_id,
+                interval_seconds=interval_seconds,
+                enabled=enabled,
+            )
+            return updated or existing
 
     def upsert_source(
         self,

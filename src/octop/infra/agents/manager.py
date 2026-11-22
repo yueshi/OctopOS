@@ -3940,6 +3940,7 @@ class AgentManager:
         app_tools: list[Any] = []
         light_app_tools_enabled = False
         if not team_host:
+            from octop.infra.apps.tasks import AppTaskService  # noqa: PLC0415
             from octop.infra.apps.tool_policy import filter_app_tools  # noqa: PLC0415
             from octop.infra.apps.tools import build_app_tools  # noqa: PLC0415
             from octop.infra.apps.wiring import build_app_service  # noqa: PLC0415
@@ -3947,11 +3948,22 @@ class AgentManager:
             public_base_url = self._config.public_base_url
             if not public_base_url and self._config.tls.enabled and self._config.tls.domains:
                 public_base_url = f"https://{self._config.tls.domains[0]}"
+            app_service = build_app_service(repos=self._repos, workspaces=self)
+            task_service = AppTaskService(
+                app_service=app_service,
+                app_repo=self._repos.light_app_repo,
+                task_repo=self._repos.app_task_repo,
+                agents=self,
+                usage_repo=self._repos.usage_repo,
+                policy_repo=self._repos.user_policy_repo,
+                audit_repo=self._repos.audit_repo,
+            )
             app_tools = filter_app_tools(
                 build_app_tools(
-                    build_app_service(repos=self._repos, workspaces=self),
+                    app_service,
                     public_base_url=public_base_url,
                     repos=self._repos,
+                    task_service=task_service,
                 ),
                 cfg,
             )

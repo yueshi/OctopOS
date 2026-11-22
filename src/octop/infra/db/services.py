@@ -18,6 +18,7 @@ from octop.infra.db.repos.app_schedules import LightAppScheduleRepo
 from octop.infra.db.repos.app_services import LightAppServiceRepo
 from octop.infra.db.repos.app_sessions import AppSessionRepo
 from octop.infra.db.repos.app_setup_plans import AppSetupPlanRepo
+from octop.infra.db.repos.app_tasks import AppTaskRepo
 from octop.infra.db.repos.app_webhooks import LightAppWebhookRepo
 from octop.infra.db.repos.apps import LightAppRepo
 from octop.infra.db.repos.audit import AuditRepo
@@ -112,6 +113,7 @@ class RepoBundle:
     app_webhook_repo: LightAppWebhookRepo
     app_schedule_repo: LightAppScheduleRepo
     app_setup_plan_repo: AppSetupPlanRepo
+    app_task_repo: AppTaskRepo
     voice_provider_repo: VoiceProviderRepo
     care_push_repo: CarePushRepo
     proactive_care_config_repo: ProactiveCareConfigRepo
@@ -175,6 +177,7 @@ class RepoBundle:
             app_webhook_repo=LightAppWebhookRepo(db),
             app_schedule_repo=LightAppScheduleRepo(db),
             app_setup_plan_repo=AppSetupPlanRepo(db),
+            app_task_repo=AppTaskRepo(db),
             voice_provider_repo=VoiceProviderRepo(db),
             care_push_repo=CarePushRepo(db),
             proactive_care_config_repo=ProactiveCareConfigRepo(db),
@@ -354,6 +357,10 @@ class SharedServices:
     @property
     def app_setup_plan_repo(self) -> AppSetupPlanRepo:
         return self.repos.app_setup_plan_repo
+
+    @property
+    def app_task_repo(self) -> AppTaskRepo:
+        return self.repos.app_task_repo
 
     @property
     def voice_provider_repo(self) -> VoiceProviderRepo:

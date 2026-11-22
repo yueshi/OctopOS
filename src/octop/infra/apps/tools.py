@@ -30,6 +30,7 @@ from octop.infra.apps.service import (
     AppTableView,
     app_path,
 )
+from octop.infra.apps.tasks import AppTaskService
 from octop.infra.apps.wiring import build_ingress_service, build_webhook_service
 from octop.infra.db.repos.apps import LightAppRow
 from octop.infra.db.services import RepoBundle
@@ -75,6 +76,10 @@ APP_TOOL_NAMES: tuple[str, ...] = (
     "app_integration_delete_webhook",
     "app_integration_test_webhook",
     APP_DELETE_TOOL_NAME,
+    "app_run_task",
+    "app_get_task",
+    "app_list_tasks",
+    "app_cancel_task",
 )
 """Names of the built-in light-app tools, in the order they are registered."""
 
@@ -256,6 +261,22 @@ def _setup_plan_payload(plan: Any, *, include_report: bool = False) -> dict[str,
 
 def _ok(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _task_payload(task: Any) -> dict[str, Any]:
+    return {
+        "task_id": task.task_id,
+        "app_id": task.app_id,
+        "table": task.table_key,
+        "row_id": task.row_id,
+        "task_type": task.task_type,
+        "status": task.status,
+        "result": task.result,
+        "error": task.error,
+        "created_at": task.created_at,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
 
 
 class AppAccessError(ValueError):
@@ -826,6 +847,7 @@ def build_app_tools(
     *,
     public_base_url: str = "",
     repos: RepoBundle | None = None,
+    task_service: AppTaskService | None = None,
 ) -> list[StructuredTool]:
     """Return built-in light-app tools (wired via ``HarnessAgentConfig.tools``)."""
 
@@ -2111,6 +2133,112 @@ def build_app_tools(
         except Exception as exc:
             return _err(exc)
 
+    async def app_run_task(
+        app_id: Annotated[str, Field(description="App id returned by app_create/app_list.")],
+        task_type: Annotated[
+            str,
+            Field(
+                description=(
+                    "Registered task type: summarize_row (Tier 1) or table_digest "
+                    "(Tier 2, bounded read-only tools)."
+                )
+            ),
+        ],
+        row_id: Annotated[str, Field(description="Row id returned by app_read_data.")],
+        write_column: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional non-PII string column that receives the summary. "
+                    "Omit to keep the result on the task only."
+                )
+            ),
+        ] = None,
+        idempotency_key: Annotated[
+            str | None,
+            Field(description="Optional idempotency key; retries return the same task."),
+        ] = None,
+    ) -> str:
+        """Queue one named AI task for a MiniApp row."""
+        if task_service is None:
+            return _ok({"error": "AI task runtime is not available"})
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            task = await task_service.create(
+                row,
+                user_id=user_id,
+                task_type=task_type,
+                row_id=row_id,
+                input={"write_column": write_column} if write_column else {},
+                idempotency_key=idempotency_key or "",
+            )
+            return _ok(
+                {
+                    "task": _task_payload(task),
+                    "text": (
+                        f"Queued {task.task_type} task {task.task_id}. "
+                        "Use app_get_task to read its status and result."
+                    ),
+                }
+            )
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_get_task(
+        app_id: Annotated[str, Field(description="App id returned by app_create/app_list.")],
+        task_id: Annotated[str, Field(description="Task id returned by app_run_task.")],
+    ) -> str:
+        """Read one AI task's status, result, and error."""
+        if task_service is None:
+            return _ok({"error": "AI task runtime is not available"})
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            task = task_service.get(row, task_id, user_id=user_id)
+            return _ok(_task_payload(task))
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_list_tasks(
+        app_id: Annotated[str, Field(description="App id returned by app_create/app_list.")],
+        status: Annotated[
+            str | None,
+            Field(description="Optional status filter: queued/running/succeeded/failed/cancelled."),
+        ] = None,
+        limit: Annotated[int, Field(description="Maximum tasks to return (1-100).")] = 20,
+    ) -> str:
+        """List recent AI tasks for one app, newest first."""
+        if task_service is None:
+            return _ok({"error": "AI task runtime is not available"})
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            tasks = task_service.list(
+                row,
+                user_id=user_id,
+                status=status,
+                limit=max(1, min(int(limit), 100)),
+            )
+            return _ok({"tasks": [_task_payload(task) for task in tasks]})
+        except Exception as exc:
+            return _err(exc)
+
+    async def app_cancel_task(
+        app_id: Annotated[str, Field(description="App id returned by app_create/app_list.")],
+        task_id: Annotated[str, Field(description="Task id returned by app_run_task.")],
+    ) -> str:
+        """Cancel a queued AI task, or flag a running one for the runner."""
+        if task_service is None:
+            return _ok({"error": "AI task runtime is not available"})
+        try:
+            agent_id, user_id = _tool_ctx()
+            row = _get_for_actor(service, app_id, agent_id, user_id, "view")
+            task = task_service.cancel(row, task_id, user_id=user_id)
+            return _ok({"task": _task_payload(task)})
+        except Exception as exc:
+            return _err(exc)
+
     def _integration_repos() -> RepoBundle:
         if repos is None:
             raise ValueError("integration data is unavailable for this agent")
@@ -2506,7 +2634,7 @@ def build_app_tools(
         except Exception as exc:
             return _err(exc)
 
-    return [
+    tools: list[StructuredTool] = [
         StructuredTool.from_function(
             coroutine=app_inspect_file,
             name="app_inspect_file",
@@ -2855,3 +2983,33 @@ def build_app_tools(
             ),
         ),
     ]
+    if task_service is not None:
+        tools.extend(
+            [
+                StructuredTool.from_function(
+                    coroutine=app_run_task,
+                    name="app_run_task",
+                    description=(
+                        "Queue a named AI task for one MiniApp row. The app must "
+                        "enable the ai.agent_task capability. Use app_get_task to "
+                        "read the result; this tool only enqueues."
+                    ),
+                ),
+                StructuredTool.from_function(
+                    coroutine=app_get_task,
+                    name="app_get_task",
+                    description="Read one AI task's status, result, and error.",
+                ),
+                StructuredTool.from_function(
+                    coroutine=app_list_tasks,
+                    name="app_list_tasks",
+                    description="List recent AI tasks for one app, newest first.",
+                ),
+                StructuredTool.from_function(
+                    coroutine=app_cancel_task,
+                    name="app_cancel_task",
+                    description=("Cancel a queued AI task, or flag a running task for the runner."),
+                ),
+            ]
+        )
+    return tools

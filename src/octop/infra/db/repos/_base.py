@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, TypeVar
+
+try:
+    from psycopg import errors as pg_errors
+except ImportError:  # pragma: no cover - optional PostgreSQL driver
+    pg_errors = None  # type: ignore[assignment]
 
 R_co = TypeVar("R_co", covariant=True)
 
@@ -25,6 +31,13 @@ def now_ts() -> int:
 
 def bool_int(value: bool) -> int:
     return 1 if value else 0
+
+
+def is_unique_violation(exc: BaseException) -> bool:
+    """True when *exc* is a unique-constraint failure on SQLite or PostgreSQL."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return "unique" in str(exc).lower()
+    return pg_errors is not None and isinstance(exc, pg_errors.UniqueViolation)
 
 
 def map_rows[R_co](rows: Sequence[DbRow], cls: type[_FromRow[R_co]]) -> list[R_co]:

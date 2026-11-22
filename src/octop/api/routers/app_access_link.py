@@ -24,6 +24,7 @@ from octop.infra.users.principals import principal_from_user_row
 
 router = APIRouter(prefix="/app-access")
 
+
 class AppAccessCodeBody(BaseModel):
     code: str = Field(min_length=1, max_length=512, description="One-time access code.")
 

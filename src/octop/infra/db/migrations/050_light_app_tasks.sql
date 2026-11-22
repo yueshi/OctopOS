@@ -1,0 +1,39 @@
+-- Schema v50: MiniApp AI task runtime.
+-- One row per page/API-initiated AI task. The row is the task state machine;
+-- the runner leases a queued row before calling the executor.
+
+CREATE TABLE IF NOT EXISTS light_app_tasks (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id           TEXT NOT NULL UNIQUE,
+  app_id            TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+  table_key         TEXT NOT NULL DEFAULT 'main',
+  row_id            TEXT NOT NULL,
+  task_type         TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'queued',
+  input_json        TEXT NOT NULL DEFAULT '{}',
+  result_json       TEXT,
+  error             TEXT NOT NULL DEFAULT '',
+  actor_user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id          TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+  model_ref         TEXT NOT NULL DEFAULT '',
+  thread_id         TEXT NOT NULL DEFAULT '',
+  idempotency_key   TEXT NOT NULL DEFAULT '',
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  cancel_requested  INTEGER NOT NULL DEFAULT 0,
+  lease_until       INTEGER,
+  created_at        INTEGER NOT NULL,
+  started_at        INTEGER,
+  finished_at       INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_light_app_tasks_app_status
+  ON light_app_tasks(app_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_light_app_tasks_row
+  ON light_app_tasks(app_id, table_key, row_id);
+CREATE INDEX IF NOT EXISTS idx_light_app_tasks_queued
+  ON light_app_tasks(status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_light_app_tasks_idempotency
+  ON light_app_tasks(app_id, idempotency_key)
+  WHERE idempotency_key <> '';
+
+UPDATE _schema_version SET version = 50;

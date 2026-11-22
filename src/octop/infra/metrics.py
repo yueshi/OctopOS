@@ -41,6 +41,7 @@ class Metrics:
     light_app_schedule_runs_total: int = 0
     light_app_schedule_errors_total: int = 0
     light_app_schedule_timeouts_total: int = 0
+    light_app_schedule_lease_lost_total: int = 0
     light_app_schedule_backlog: int = 0
     agent_active: int = 0
     first_agent_created_total: int = 0
@@ -92,6 +93,7 @@ class Metrics:
                 "light_app_schedule_runs_total": self.light_app_schedule_runs_total,
                 "light_app_schedule_errors_total": self.light_app_schedule_errors_total,
                 "light_app_schedule_timeouts_total": self.light_app_schedule_timeouts_total,
+                "light_app_schedule_lease_lost_total": (self.light_app_schedule_lease_lost_total),
                 "light_app_schedule_backlog": self.light_app_schedule_backlog,
                 "agent_active": self.agent_active,
                 "first_agent_created_total": self.first_agent_created_total,

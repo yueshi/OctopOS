@@ -99,6 +99,8 @@ import AppDataTab, {
 } from "./detail/AppDataTab";
 import AppInfoDrawer from "./detail/AppInfoDrawer";
 import AppInterfaceTab from "./detail/AppInterfaceTab";
+import AppTasksPanel from "./detail/AppTasksPanel";
+import RunTaskModal from "./detail/RunTaskModal";
 import AppPublishModal from "./detail/AppPublishModal";
 import AppShareModal from "./detail/AppShareModal";
 import RowHistoryDrawer from "./detail/RowHistoryDrawer";
@@ -238,7 +240,14 @@ export default function AppDetailPage({
   const [importBusy, setImportBusy] = useState(false);
   const [importIncludePii, setImportIncludePii] = useState(false);
 
-  const [activeView, setActiveView] = useState<"ui" | "data" | "members">("ui");
+  const [activeView, setActiveView] = useState<
+    "ui" | "data" | "tasks" | "members"
+  >("ui");
+  const [taskModal, setTaskModal] = useState<{
+    tableKey: string;
+    rowId: string;
+  } | null>(null);
+  const [tasksRefreshToken, setTasksRefreshToken] = useState(0);
   const [dataTable, setDataTable] = useState("main");
   const [dataSearch, setDataSearch] = useState("");
   const [dataRows, setDataRows] = useState<Record<string, string>[]>([]);
@@ -508,6 +517,21 @@ export default function AppDetailPage({
               prompt: String(params.prompt ?? ""),
               system: String(params.system ?? ""),
             });
+          }
+          if (method === "runTask") {
+            return await appsApi.createTask(appId, {
+              task_type: String(params.taskType ?? ""),
+              table: params.table || "main",
+              row_id: String(params.rowId ?? ""),
+              input: params.input ?? {},
+              idempotency_key: String(params.idempotencyKey ?? ""),
+            });
+          }
+          if (method === "getTask") {
+            return await appsApi.getTask(appId, String(params.taskId ?? ""));
+          }
+          if (method === "cancelTask") {
+            return await appsApi.cancelTask(appId, String(params.taskId ?? ""));
           }
           if (method === "composeMessage") {
             const text = String(params.text ?? "").trim();
@@ -1706,7 +1730,9 @@ export default function AppDetailPage({
         )}
         <Tabs
           activeKey={activeView}
-          onChange={(key) => setActiveView(key as "ui" | "data" | "members")}
+          onChange={(key) =>
+            setActiveView(key as "ui" | "data" | "tasks" | "members")
+          }
           items={[
             {
               key: "ui",
@@ -1789,6 +1815,22 @@ export default function AppDetailPage({
                   onViewHistory={(meta) =>
                     meta?.row_id ? setHistoryRowId(meta.row_id) : undefined
                   }
+                  onRunTask={(meta) => {
+                    if (meta?.row_id) {
+                      setTaskModal({ tableKey: dataTable, rowId: meta.row_id });
+                    }
+                  }}
+                />
+              ),
+            },
+            {
+              key: "tasks",
+              label: t("apps.tasksTab"),
+              children: (
+                <AppTasksPanel
+                  appId={appId}
+                  canCancel={canManage || canEditRows}
+                  refreshToken={tasksRefreshToken}
                 />
               ),
             },
@@ -2198,6 +2240,19 @@ export default function AppDetailPage({
         onOpenSourceModal={openSourceModal}
         onRunSource={(source) => void runSourceNow(source)}
         onRemoveSource={(source) => void removeSource(source)}
+      />
+
+      <RunTaskModal
+        open={taskModal !== null}
+        appId={appId}
+        tableKey={taskModal?.tableKey ?? dataTable}
+        rowId={taskModal?.rowId ?? ""}
+        columns={dataColumns}
+        onClose={() => setTaskModal(null)}
+        onCreated={() => {
+          setTasksRefreshToken((value) => value + 1);
+          setActiveView("tasks");
+        }}
       />
 
       <RowHistoryDrawer

@@ -220,6 +220,28 @@ export interface AppEvent {
   acknowledged_at: number | null;
 }
 
+export interface AppTaskType {
+  name: string;
+  label: string;
+  tier: number;
+  output_fields: string[];
+  supports_write: boolean;
+}
+
+export interface AppTask {
+  task_id: string;
+  app_id: string;
+  table: string;
+  row_id: string;
+  task_type: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  result: Record<string, unknown> | null;
+  error: string;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
 export interface AppDetail extends AppSummary {
   columns: AppColumn[];
   tables: AppTable[];
@@ -1531,6 +1553,49 @@ export const appsApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  listTaskTypes: (appId: string) =>
+    request<AppTaskType[]>(`/apps/${encodeId(appId)}/task-types`),
+
+  createTask: (
+    appId: string,
+    body: {
+      task_type: string;
+      table?: string;
+      row_id: string;
+      input?: Record<string, unknown>;
+      idempotency_key?: string;
+    },
+  ) =>
+    request<AppTask>(`/apps/${encodeId(appId)}/tasks`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getTask: (appId: string, taskId: string) =>
+    request<AppTask>(`/apps/${encodeId(appId)}/tasks/${encodeId(taskId)}`),
+
+  listTasks: (
+    appId: string,
+    options: { status?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.limit != null) params.set("limit", String(options.limit));
+    if (options.offset != null) params.set("offset", String(options.offset));
+    const query = params.toString();
+    return request<AppTask[]>(
+      `/apps/${encodeId(appId)}/tasks${query ? `?${query}` : ""}`,
+    );
+  },
+
+  cancelTask: (appId: string, taskId: string) =>
+    request<AppTask>(
+      `/apps/${encodeId(appId)}/tasks/${encodeId(taskId)}/cancel`,
+      {
+        method: "POST",
+      },
+    ),
 
   /** Record a sandbox CSP violation the page reported. Fire-and-forget. */
   reportViolation: (

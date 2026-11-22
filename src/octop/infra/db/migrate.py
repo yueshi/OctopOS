@@ -865,6 +865,17 @@ def _ensure_user_sso_identities_schema(db: DatabasePool) -> None:
         )
 
 
+def _ensure_usage_attribution_schema(db: DatabasePool) -> None:
+    """Add app/task attribution columns to usage_log for upgraded databases."""
+    if not _table_exists(db, "usage_log"):
+        return
+    _ensure_column(db, "usage_log", "app_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(db, "usage_log", "task_id", "TEXT NOT NULL DEFAULT ''")
+    with db.connect() as conn:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_app ON usage_log(app_id, ts)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_task ON usage_log(task_id)")
+
+
 def _ensure_usage_cache_schema(db: DatabasePool) -> None:
     """Backfill cache-aware usage columns for upgraded and repaired databases."""
     if not _table_exists(db, "usage_log"):
@@ -2683,6 +2694,17 @@ def _ensure_light_app_schedules_schema(db: DatabasePool) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_light_app_schedules_app ON light_app_schedules(app_id)"
         )
+        conn.execute(
+            "DELETE FROM light_app_schedules "
+            "WHERE action = 'snapshot_publication' AND id NOT IN ("
+            "  SELECT MIN(id) FROM light_app_schedules "
+            "  WHERE action = 'snapshot_publication' GROUP BY app_id"
+            ")"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_light_app_schedules_snapshot "
+            "ON light_app_schedules(app_id) WHERE action = 'snapshot_publication'"
+        )
         if _table_exists(db, "light_app_sources"):
             target_expr = (
                 "json_build_object('source_id', source_id)::text"
@@ -2704,6 +2726,58 @@ def _ensure_light_app_schedules_schema(db: DatabasePool) -> None:
                 "AND NOT EXISTS (SELECT 1 FROM light_app_schedules "
                 "WHERE schedule_id = 'sch_src_' || light_app_sources.source_id)"
             )
+
+
+def _ensure_light_app_tasks_schema(db: DatabasePool) -> None:
+    """Create the v50 MiniApp AI task table when a DB skipped the file."""
+    if not _table_exists(db, "light_apps"):
+        return
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_tasks (
+              id                {pk},
+              task_id           TEXT NOT NULL UNIQUE,
+              app_id            TEXT NOT NULL REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              table_key         TEXT NOT NULL DEFAULT 'main',
+              row_id            TEXT NOT NULL,
+              task_type         TEXT NOT NULL,
+              status            TEXT NOT NULL DEFAULT 'queued',
+              input_json        TEXT NOT NULL DEFAULT '{{}}',
+              result_json       TEXT,
+              error             TEXT NOT NULL DEFAULT '',
+              actor_user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              agent_id          TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+              model_ref         TEXT NOT NULL DEFAULT '',
+              thread_id         TEXT NOT NULL DEFAULT '',
+              idempotency_key   TEXT NOT NULL DEFAULT '',
+              attempts          INTEGER NOT NULL DEFAULT 0,
+              cancel_requested  INTEGER NOT NULL DEFAULT 0,
+              lease_until       INTEGER,
+              created_at        INTEGER NOT NULL,
+              started_at        INTEGER,
+              finished_at       INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_tasks_app_status "
+            "ON light_app_tasks(app_id, status, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_tasks_row "
+            "ON light_app_tasks(app_id, table_key, row_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_tasks_queued "
+            "ON light_app_tasks(status, created_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_light_app_tasks_idempotency "
+            "ON light_app_tasks(app_id, idempotency_key) "
+            "WHERE idempotency_key <> ''"
+        )
 
 
 def _ensure_notifications_schema(db: DatabasePool) -> None:
@@ -3786,6 +3860,32 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 49:
+            # The raw file's DELETE/index needs the table to exist; the helper
+            # also recreates it for databases whose recorded version skipped 38.
+            _ensure_light_app_schedules_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 50:
+            _ensure_light_app_tasks_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
+        if version == 51:
+            _ensure_usage_attribution_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -3811,6 +3911,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_skill_packages_schema(db)
     _ensure_published_experts_schema(db)
     _ensure_usage_cache_schema(db)
+    _ensure_usage_attribution_schema(db)
     _ensure_user_invites_schema(db)
     _ensure_thread_message_projection_schema(db)
     _ensure_cron_jobs_schema(db)
@@ -3833,6 +3934,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_light_app_webhooks_schema(db)
     _ensure_light_app_ingress_schema(db)
     _ensure_light_app_schedules_schema(db)
+    _ensure_light_app_tasks_schema(db)
     _ensure_light_app_table_visibility(db)
     _ensure_light_app_publications_schema(db)
     _ensure_miniapp_im_identity_schema(db)

@@ -13,6 +13,7 @@ import {
   Download,
   History as HistoryIcon,
   Plus,
+  Sparkles,
   Upload as UploadIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -26,7 +27,7 @@ import type {
 const { Text } = Typography;
 
 export const SOURCE_COLUMN_WIDTH = 90;
-export const ACTIONS_COLUMN_WIDTH = 210;
+export const ACTIONS_COLUMN_WIDTH = 280;
 
 /** Fixed width for a data column, by its schema type. */
 export function dataColumnWidth(type: string): number {
@@ -81,6 +82,7 @@ interface Props {
   ) => void;
   onDeleteRow: (meta: AppRowMeta | undefined) => void;
   onViewHistory: (meta: AppRowMeta | undefined) => void;
+  onRunTask?: (meta: AppRowMeta | undefined) => void;
 }
 
 export default function AppDataTab({
@@ -105,6 +107,7 @@ export default function AppDataTab({
   onEditRow,
   onDeleteRow,
   onViewHistory,
+  onRunTask,
 }: Props) {
   const { t } = useTranslation();
 
@@ -212,6 +215,17 @@ export default function AppDataTab({
             width: ACTIONS_COLUMN_WIDTH,
             render: (_: unknown, __: unknown, index: number) => (
               <Space size={4}>
+                {onRunTask ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    icon={<Sparkles size={14} />}
+                    disabled={!rows[index]?.meta?.row_id}
+                    onClick={() => onRunTask(rows[index]?.meta)}
+                  >
+                    {t("apps.runTaskAction")}
+                  </Button>
+                ) : null}
                 <Button
                   size="small"
                   type="link"

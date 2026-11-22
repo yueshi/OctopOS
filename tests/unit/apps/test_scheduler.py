@@ -390,3 +390,164 @@ async def test_saving_a_source_with_a_new_interval_resets_failure_state(world: W
     assert item.failure_count == 0
     assert item.last_error == ""
     assert item.next_run_at > 1060
+
+
+async def test_tick_claims_each_item_with_a_fresh_run_at(
+    world: World,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A long first action must not leave the next lease already expired."""
+    clock = FixedClock(1000)
+    first_app = await _create(world, name="First")
+    second_app = await _create(world, name="Second")
+    for app_id, source_id in ((first_app, "s1"), (second_app, "s2")):
+        row = world.service.get(app_id)
+        path = f"inbound/imports/{source_id}.csv"
+        await world.workspace.awrite_text(path, "title,qty,status\nmug,1,new\n")
+        world.service.save_source(
+            row,
+            source_id=source_id,
+            table_key="main",
+            kind="workspace_file",
+            mode="append",
+            schedule_seconds=60,
+            params={"path": path},
+            created_by=world.alice_id,
+        )
+        world.schedule_repo.update(
+            f"sch_src_{source_id}", interval_seconds=60, enabled=True, next_run_at=0
+        )
+
+    claimed_at: list[int] = []
+    original_claim = world.schedule_repo.claim
+
+    def claim(
+        schedule_id: str, *, now: int, lease_seconds: int, due_only: bool = True
+    ) -> int | None:
+        claimed_at.append(now)
+        return original_claim(schedule_id, now=now, lease_seconds=lease_seconds, due_only=due_only)
+
+    async def slow_action(*_args: object, **_kwargs: object) -> ImportResult:
+        clock.value += 600
+        await asyncio.sleep(0)
+        return ImportResult(imported=0, skipped=0, errors=[])
+
+    monkeypatch.setattr(world.schedule_repo, "claim", claim)
+    monkeypatch.setattr(world.service, "execute_schedule", slow_action)
+
+    sched = AppSourceScheduler(
+        repo=world.repo,
+        service=world.service,
+        schedule_repo=world.schedule_repo,
+        clock=clock,
+    )
+    assert await sched.tick() == 2
+    assert claimed_at == [1000, 1600]
+
+
+async def test_heartbeat_keeps_renewing_after_a_transient_error(
+    world: World,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = await _create(world)
+    item = world.schedule_repo.create(
+        app_id=app_id,
+        action="snapshot_publication",
+        interval_seconds=60,
+        created_by=world.alice_id,
+        next_run_at=1000,
+    )
+    calls: list[int] = []
+    original_heartbeat = world.schedule_repo.heartbeat
+
+    def flaky_heartbeat(
+        schedule_id: str,
+        *,
+        lease_until: int,
+        now: int,
+        lease_seconds: int,
+    ) -> int | None:
+        calls.append(now)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return original_heartbeat(
+            schedule_id,
+            lease_until=lease_until,
+            now=now,
+            lease_seconds=lease_seconds,
+        )
+
+    async def slow_action(*_args: object, **_kwargs: object) -> None:
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(world.schedule_repo, "heartbeat", flaky_heartbeat)
+    monkeypatch.setattr(world.service, "execute_schedule", slow_action)
+    monkeypatch.setattr("octop.infra.apps.scheduler.HEARTBEAT_SECONDS", 0.01)
+
+    sched = AppSourceScheduler(
+        repo=world.repo,
+        service=world.service,
+        schedule_repo=world.schedule_repo,
+        clock=lambda: 1000,
+    )
+    assert await sched.tick(now=1000) == 1
+    assert len(calls) >= 2
+    updated = world.schedule_repo.get(item.schedule_id)
+    assert updated is not None and updated.last_status == "ok"
+
+
+async def test_lease_loss_cancels_the_running_action(
+    world: World,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id = await _create(world)
+    item = world.schedule_repo.create(
+        app_id=app_id,
+        action="snapshot_publication",
+        interval_seconds=60,
+        created_by=world.alice_id,
+        next_run_at=1000,
+    )
+    cancelled = asyncio.Event()
+
+    async def hang(*_args: object, **_kwargs: object) -> None:
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(world.service, "execute_schedule", hang)
+    monkeypatch.setattr(world.schedule_repo, "heartbeat", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("octop.infra.apps.scheduler.HEARTBEAT_SECONDS", 0.01)
+
+    before = METRICS.snapshot()["light_app_schedule_lease_lost_total"]
+    sched = AppSourceScheduler(
+        repo=world.repo,
+        service=world.service,
+        schedule_repo=world.schedule_repo,
+        clock=lambda: 1000,
+    )
+    assert await sched.tick(now=1000) == 1
+    assert cancelled.is_set()
+    updated = world.schedule_repo.get(item.schedule_id)
+    assert updated is not None and updated.last_status == ""
+    after = METRICS.snapshot()["light_app_schedule_lease_lost_total"]
+    assert after == before + 1
+
+
+async def test_snapshot_schedule_is_unique_per_app(world: World) -> None:  # noqa: F811
+    app_id = await _create(world)
+    first = world.schedule_repo.create_snapshot(
+        app_id=app_id,
+        interval_seconds=60,
+        created_by=world.alice_id,
+    )
+    second = world.schedule_repo.create_snapshot(
+        app_id=app_id,
+        interval_seconds=120,
+        created_by=world.alice_id,
+    )
+    assert second.schedule_id == first.schedule_id
+    assert second.interval_seconds == 120
+    assert world.schedule_repo.count_for_app(app_id) == 1

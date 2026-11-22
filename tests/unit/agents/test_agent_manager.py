@@ -940,6 +940,10 @@ def test_build_harness_config_includes_cronjob_tools_when_cron_manager_set(
         "app_integration_delete_webhook",
         "app_integration_test_webhook",
         "app_delete",
+        "app_run_task",
+        "app_get_task",
+        "app_list_tasks",
+        "app_cancel_task",
     }
 
 
@@ -991,6 +995,10 @@ def test_build_harness_config_includes_search_knowledge_without_cron(
         "app_integration_delete_webhook",
         "app_integration_test_webhook",
         "app_delete",
+        "app_run_task",
+        "app_get_task",
+        "app_list_tasks",
+        "app_cancel_task",
     }
     assert any(isinstance(item, KnowledgeSearchHintMiddleware) for item in (cfg.middleware or []))
     assert any(isinstance(item, ChannelContextMiddleware) for item in (cfg.middleware or []))

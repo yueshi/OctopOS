@@ -9,15 +9,21 @@ import {
 } from "./capabilities";
 
 describe("MiniApp capabilities", () => {
-  it("treats an older payload without a manifest as legacy all-on", () => {
+  it("treats an older payload without a manifest as the frozen R1 set", () => {
     expect(effectiveCapabilities(undefined)).toContain(CAP.AI_GENERATE);
+    expect(effectiveCapabilities(undefined)).not.toContain(CAP.AI_TASK);
     expect(isMethodAllowed("generate", undefined)).toBe(true);
+    expect(isMethodAllowed("runTask", undefined)).toBe(false);
   });
 
   it("gates page methods by the declared manifest", () => {
     expect(isMethodAllowed("rows", [CAP.DATA_READ])).toBe(true);
     expect(isMethodAllowed("append", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("generate", [CAP.AI_GENERATE])).toBe(true);
+    expect(isMethodAllowed("runTask", [CAP.AI_TASK])).toBe(true);
+    expect(isMethodAllowed("getTask", [CAP.AI_TASK])).toBe(true);
+    expect(isMethodAllowed("cancelTask", [CAP.AI_TASK])).toBe(true);
+    expect(isMethodAllowed("runTask", [CAP.AI_GENERATE])).toBe(false);
     expect(isMethodAllowed("launchGame", [CAP.AI_GENERATE])).toBe(false);
     expect(isMethodAllowed("asset", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("composeMessage", [CAP.CHAT_COMPOSE])).toBe(true);

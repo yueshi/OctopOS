@@ -54,6 +54,8 @@ from octop.infra.apps.service import (
 )
 from octop.infra.apps.session import app_card_ids
 from octop.infra.apps.sources import GatewayToolRunner
+from octop.infra.apps.task_types import list_task_types
+from octop.infra.apps.tasks import AppTaskService
 from octop.infra.apps.webhooks import AppWebhookService
 from octop.infra.apps.wiring import (
     build_app_service,
@@ -1105,6 +1107,20 @@ def _generator(server: OctopServer) -> AppGenerator:
         agents=server.app_runtime.agent_registry,
         usage_repo=server.services.usage_repo,
         policy_repo=server.services.user_policy_repo,
+    )
+
+
+def _task_service(server: OctopServer) -> AppTaskService:
+    if server.services is None or server.app_runtime is None:
+        raise OctopError(ErrorCode.INTERNAL_ERROR, "server is not started")
+    return AppTaskService(
+        app_service=_service(server),
+        app_repo=server.services.light_app_repo,
+        task_repo=server.services.repos.app_task_repo,
+        agents=server.app_runtime.agent_registry,
+        usage_repo=server.services.usage_repo,
+        policy_repo=server.services.user_policy_repo,
+        audit_repo=server.services.audit_repo,
     )
 
 
@@ -3559,8 +3575,9 @@ async def set_app_table_rules(
     summary="Download an app backup",
     description=(
         "Bundles app.html, every table's schema and rows, and the assets into "
-        "one zip. Restore it with POST /apps/restore. Requires edit_structure "
-        "because the archive contains unmasked data."
+        "one zip. Restore it with POST /apps/restore. Requires owner or admin "
+        "because the archive contains unmasked data, including rows from "
+        "user-scoped tables."
     ),
     responses={200: {"content": {"application/zip": {}}}},
 )
@@ -3569,7 +3586,7 @@ async def backup_app(
     user: User = Depends(current_user),
     server: OctopServer = Depends(get_server),
 ) -> Response:
-    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_STRUCTURE)
+    service, row, _decision = _authorize(server, user, app_id, Action.MANAGE_APP_SETTINGS)
     filename, content = await service.backup_archive(row)
     from octop.infra.metrics import METRICS  # noqa: PLC0415
 
@@ -4790,3 +4807,196 @@ async def list_app_source_tools(
             for meta in runner.list_tool_meta(instance_id)
         ]
     )
+
+
+class AppTaskTypeOut(BaseModel):
+    name: str = Field(description="Registered task type.")
+    label: str = Field(description="Human-readable label.")
+    tier: int = Field(description="Execution tier: 1 = single model call, 2 = bounded tools.")
+    output_fields: list[str] = Field(description="Structured result fields.")
+    supports_write: bool = Field(description="Whether a write_column may receive the result.")
+
+
+class AppTaskCreateBody(BaseModel):
+    task_type: str = Field(
+        description=(
+            "Registered task type: ``summarize_row`` (Tier 1) or "
+            "``table_digest`` (Tier 2, bounded read-only tools)."
+        )
+    )
+    table: str = Field(
+        MAIN_TABLE_KEY,
+        description="Table key; must match the row's table when supplied.",
+    )
+    row_id: str = Field(description="Row the task operates on.")
+    input: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Task-type-specific input. ``summarize_row`` accepts an optional "
+            "``write_column`` naming a non-PII string column to receive the summary."
+        ),
+    )
+    idempotency_key: str = Field(
+        "",
+        description="Optional idempotency key scoped to this app.",
+    )
+
+
+class AppTaskOut(BaseModel):
+    task_id: str = Field(description="Public task id.")
+    app_id: str = Field(description="Owning app.")
+    table: str = Field(description="Table key.")
+    row_id: str = Field(description="Row the task operates on.")
+    task_type: str = Field(description="Registered task type.")
+    status: str = Field(description="queued / running / succeeded / failed / cancelled.")
+    result: dict[str, Any] | None = Field(
+        default=None, description="Structured result once the task succeeds."
+    )
+    error: str = Field("", description="Failure reason when status is failed.")
+    created_at: int = Field(description="Unix seconds when the task was created.")
+    started_at: int | None = Field(default=None, description="Unix seconds when execution began.")
+    finished_at: int | None = Field(default=None, description="Unix seconds when the task ended.")
+
+
+def _task_out(task: Any) -> AppTaskOut:
+    return AppTaskOut(
+        task_id=task.task_id,
+        app_id=task.app_id,
+        table=task.table_key,
+        row_id=task.row_id,
+        task_type=task.task_type,
+        status=task.status,
+        result=task.result,
+        error=task.error,
+        created_at=task.created_at,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+    )
+
+
+@router.get(
+    "/{app_id}/task-types",
+    response_model=list[AppTaskTypeOut],
+    summary="List registered AI task types",
+    description=(
+        "Returns the code-registered task types an app may request, including "
+        "their execution tier. Requires app view."
+    ),
+)
+async def list_app_task_types(
+    app_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> list[AppTaskTypeOut]:
+    _authorize(server, user, app_id, Action.VIEW_APP)
+    return [
+        AppTaskTypeOut(
+            name=spec.name,
+            label=spec.label,
+            tier=spec.tier,
+            output_fields=list(spec.output_fields),
+            supports_write=bool(spec.write_key),
+        )
+        for spec in list_task_types()
+    ]
+
+
+@router.post(
+    "/{app_id}/tasks",
+    response_model=AppTaskOut,
+    summary="Create an AI task for one row",
+    description=(
+        "Queues a named, schema-bound AI task. The app must enable the "
+        "``ai.agent_task`` capability. The page cannot send a free-form prompt; "
+        "``task_type`` must exist in the code registry. Requires AI access."
+    ),
+)
+async def create_app_task(
+    app_id: str,
+    body: AppTaskCreateBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppTaskOut:
+    _service, row, _decision = _authorize(server, user, app_id, Action.AI)
+    task = await _task_service(server).create(
+        row,
+        user_id=user.id,
+        task_type=body.task_type,
+        row_id=body.row_id,
+        table=body.table,
+        input=body.input,
+        idempotency_key=body.idempotency_key,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.task.create",
+        target=app_id,
+        payload={"task_id": task.task_id, "task_type": task.task_type},
+    )
+    return _task_out(task)
+
+
+@router.get(
+    "/{app_id}/tasks",
+    response_model=list[AppTaskOut],
+    summary="List AI tasks for an app",
+    description="Most recent first. Optional ``status`` filter. Requires app view.",
+)
+async def list_app_tasks(
+    app_id: str,
+    status: str | None = Query(default=None, description="Filter by task status."),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> list[AppTaskOut]:
+    _service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
+    tasks = _task_service(server).list(
+        row, user_id=user.id, status=status, limit=limit, offset=offset
+    )
+    return [_task_out(task) for task in tasks]
+
+
+@router.get(
+    "/{app_id}/tasks/{task_id}",
+    response_model=AppTaskOut,
+    summary="Get one AI task",
+    description="Returns the current state and structured result. Requires app view.",
+)
+async def get_app_task(
+    app_id: str,
+    task_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppTaskOut:
+    _service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
+    task = _task_service(server).get(row, task_id, user_id=user.id)
+    return _task_out(task)
+
+
+@router.post(
+    "/{app_id}/tasks/{task_id}/cancel",
+    response_model=AppTaskOut,
+    summary="Cancel an AI task",
+    description=(
+        "Cancels a queued task, or flags a running one for the runner. "
+        "The task creator or the app owner may cancel."
+    ),
+)
+async def cancel_app_task(
+    app_id: str,
+    task_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> AppTaskOut:
+    _service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
+    task = _task_service(server).cancel(row, task_id, user_id=user.id)
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.task.cancel",
+        target=app_id,
+        payload={"task_id": task_id},
+    )
+    return _task_out(task)

@@ -30,6 +30,14 @@ describe("bridge request checks", () => {
     expect(checkMethodAllowed("serviceDetailed", [CAP.DATA_READ])).toBe(false);
   });
 
+  it("gates AI task methods behind ai.agent_task", () => {
+    for (const method of ["runTask", "getTask", "cancelTask"]) {
+      expect(checkMethodAllowed(method, [CAP.AI_TASK])).toBe(true);
+      expect(checkMethodAllowed(method, [CAP.AI_GENERATE])).toBe(false);
+      expect(checkMethodAllowed(method, [])).toBe(false);
+    }
+  });
+
   it("requires events.emit to emit outbound events", () => {
     expect(checkMethodAllowed("emitEvent", [CAP.EVENTS_EMIT])).toBe(true);
     expect(checkMethodAllowed("emitEvent", [CAP.EVENTS_READ])).toBe(false);
@@ -52,10 +60,13 @@ describe("bridge request checks", () => {
     expect(checkMethodAllowed("unknownMethod", [CAP.DATA_READ])).toBe(false);
   });
 
-  it("keeps legacy apps working", () => {
-    // An app created before the manifest existed keeps every capability.
+  it("keeps legacy apps working on the frozen R1 set", () => {
+    // An app created before the manifest existed keeps the R1 capabilities,
+    // but never inherits capabilities added later.
     expect(checkMethodAllowed("generate", undefined)).toBe(true);
     expect(checkMethodAllowed("launchGame", undefined)).toBe(true);
+    expect(checkMethodAllowed("runTask", undefined)).toBe(false);
+    expect(checkMethodAllowed("service", undefined)).toBe(false);
   });
 
   it("lets the page ask about itself", () => {

@@ -144,6 +144,22 @@ export const APP_SDK = `(function () {
         system: (options || {}).system || ""
       });
     },
+    runTask: function (options) {
+      var opts = options || {};
+      return call("runTask", {
+        taskType: opts.taskType || "",
+        table: opts.table || null,
+        rowId: opts.rowId || "",
+        input: opts.input || {},
+        idempotencyKey: opts.idempotencyKey || ""
+      });
+    },
+    getTask: function (taskId) {
+      return call("getTask", { taskId: taskId || "" });
+    },
+    cancelTask: function (taskId) {
+      return call("cancelTask", { taskId: taskId || "" });
+    },
     launchGame: function (gameId) {
       return call("launchGame", { gameId: gameId || "" });
     },

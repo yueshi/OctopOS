@@ -21,7 +21,7 @@ def _version(db: SqlitePool) -> int:
 def test_fresh_schema_has_v2_identity_and_link_codes(tmp_path: Path) -> None:
     db = SqlitePool(tmp_path / "octop.db")
     run_migrations(db)
-    assert _version(db) == 48
+    assert _version(db) == 51
     assert _columns(db, "channel_identities") == {
         "id",
         "channel_type",
@@ -40,7 +40,7 @@ def test_fresh_schema_has_v2_identity_and_link_codes(tmp_path: Path) -> None:
     assert "channel_link_codes" in tables
     # Second run is a no-op.
     run_migrations(db)
-    assert _version(db) == 48
+    assert _version(db) == 51
 
 
 def test_legacy_binding_is_preserved_and_still_resolves(tmp_path: Path) -> None:
@@ -75,7 +75,7 @@ def test_legacy_binding_is_preserved_and_still_resolves(tmp_path: Path) -> None:
         conn.execute("UPDATE _schema_version SET version = 47")
 
     run_migrations(db)
-    assert _version(db) == 48
+    assert _version(db) == 51
     with db.connect() as conn:
         row = conn.execute(
             "SELECT account_key, sender_id, user_id FROM channel_identities "

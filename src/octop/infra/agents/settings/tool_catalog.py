@@ -120,6 +120,10 @@ BUILTIN_TOOL_CATALOG: tuple[BuiltinToolEntry, ...] = (
     BuiltinToolEntry("app_save_asset", "apps"),
     BuiltinToolEntry("app_set_preview", "apps"),
     BuiltinToolEntry("app_delete", "apps"),
+    BuiltinToolEntry("app_run_task", "apps"),
+    BuiltinToolEntry("app_get_task", "apps"),
+    BuiltinToolEntry("app_list_tasks", "apps"),
+    BuiltinToolEntry("app_cancel_task", "apps"),
 )
 
 

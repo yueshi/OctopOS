@@ -42,9 +42,12 @@ class UsageRow:
     model_calls: int
     source: str
     team_id: str | None
+    app_id: str
+    task_id: str
 
     @classmethod
     def from_row(cls, r: DbRow) -> UsageRow:
+        keys = set(r.keys())
         return cls(
             id=r["id"],
             ts=r["ts"],
@@ -62,6 +65,8 @@ class UsageRow:
             model_calls=r["model_calls"],
             source=r["source"],
             team_id=r["team_id"],
+            app_id=str(r["app_id"] or "") if "app_id" in keys else "",
+            task_id=str(r["task_id"] or "") if "task_id" in keys else "",
         )
 
 
@@ -160,6 +165,8 @@ class UsageRepo:
         thread_id: str = "",
         source: str = "chat",
         team_id: str | None = None,
+        app_id: str = "",
+        task_id: str = "",
         ts: int | None = None,
     ) -> int:
         """Append one usage row. Returns the new row id."""
@@ -171,8 +178,9 @@ class UsageRepo:
                     ts, agent_id, user_id, thread_id, model,
                     input_tokens, uncached_input_tokens,
                     cache_read_tokens, cache_write_tokens,
-                    output_tokens, reasoning_tokens, total_tokens, model_calls, source, team_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    output_tokens, reasoning_tokens, total_tokens, model_calls, source, team_id,
+                    app_id, task_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ts or now_ts(),
@@ -192,6 +200,8 @@ class UsageRepo:
                     int(model_calls),
                     source,
                     team_id,
+                    app_id,
+                    task_id,
                 ),
             )
 
@@ -501,5 +511,15 @@ class UsageRepo:
             row = conn.execute(
                 "SELECT COALESCE(SUM(total_tokens), 0) AS total FROM usage_log WHERE user_id = ?",
                 (user_id,),
+            ).fetchone()
+        return int(row["total"] if row is not None else 0)
+
+    def tokens_for_app_since(self, app_id: str, since: int) -> int:
+        """Tokens attributed to one app at or after *since* (unix seconds)."""
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(total_tokens), 0) AS total FROM usage_log "
+                "WHERE app_id = ? AND ts >= ?",
+                (app_id, int(since)),
             ).fetchone()
         return int(row["total"] if row is not None else 0)

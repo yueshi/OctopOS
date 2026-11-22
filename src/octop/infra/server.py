@@ -24,6 +24,11 @@ from octop.infra.agents.manager import AgentManager
 from octop.infra.agents.plugins.manager import PluginManager
 from octop.infra.agents.subagents.catalog import SubagentCatalog, default_package_root
 from octop.infra.apps.scheduler import AppSourceScheduler, build_scheduler, build_source_service
+from octop.infra.apps.task_runner import (
+    AppTaskRunner,
+    build_task_runner,
+    build_task_service,
+)
 from octop.infra.cron.manager import CronManager
 from octop.infra.db.factory import open_database, should_defer_control_plane_db
 from octop.infra.db.migrate import run_migrations
@@ -291,6 +296,7 @@ class AppRuntime:
     user_manager: UserManager
     proactive_scheduler: ProactiveCareScheduler
     source_scheduler: AppSourceScheduler | None = None
+    task_runner: AppTaskRunner | None = None
     trajectory_service: TrajectoryService | None = None
     history_archive: Any | None = None
     bridge_manager: Any | None = None
@@ -325,6 +331,15 @@ class AppRuntime:
                 schedule_repo=services.repos.app_schedule_repo,
                 service=build_source_service(
                     services=services, workspaces=self.agent_registry, config=config
+                ),
+            )
+        if self.task_runner is not None:
+            self.task_runner.replace_persistence(
+                task_repo=services.repos.app_task_repo,
+                service=build_task_service(
+                    services=services,
+                    workspaces=self.agent_registry,
+                    agents=self.agent_registry,
                 ),
             )
         connector_runner: Any | None = None
@@ -734,6 +749,10 @@ class OctopServer:
             services=self.services, workspaces=registry, config=config
         )
         source_scheduler.start()
+        task_runner = build_task_runner(
+            services=self.services, workspaces=registry, agents=registry, config=config
+        )
+        task_runner.start()
 
         from octop.infra.events.connector_poll import (  # noqa: PLC0415
             build_connector_runner,
@@ -779,6 +798,7 @@ class OctopServer:
             user_manager=user_mgr,
             proactive_scheduler=proactive_scheduler,
             source_scheduler=source_scheduler,
+            task_runner=task_runner,
             trajectory_service=trajectory_service,
             history_archive=history_archive,
             bridge_manager=bridge_mgr,
@@ -891,6 +911,8 @@ class OctopServer:
                 rt = self.app_runtime
                 if rt.external_event_worker is not None:
                     await rt.external_event_worker.shutdown()
+                if rt.task_runner is not None:
+                    await rt.task_runner.shutdown()
                 if rt.source_scheduler is not None:
                     await rt.source_scheduler.shutdown()
                 await rt.proactive_scheduler.shutdown()

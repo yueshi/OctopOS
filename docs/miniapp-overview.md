@@ -1,6 +1,6 @@
 # MiniApp 功能与架构现状
 
-> 快照：2026-11-22，分支 `feature/miniapp-capabilities`，schema **v48**（046/047/048 已应用）；PR-11/12 已实现并部署（commit `f46f7a1c`）。
+> 快照：2026-11-22，分支 `feature/miniapp-ai-native`，schema **v51**（049/050/051 已应用）；PR-11/12 已实现并部署（commit `f46f7a1c`）。
 >
 > 口径：**以当前代码与测试为准**。仓库里多份 `light-apps-*` / `miniapp-*` 文档是不同阶段的设计稿，只保留动机与历史记录，并在文首指向本文；本文把已落地的事实和明确未落地的部分分开写。
 >
@@ -9,6 +9,10 @@
 > 实施顺序、数据所有权与收敛计划见 [MiniApp 实施落地计划](./miniapp-implementation-plan.md)。
 >
 > **产品定位、取舍与阶段顺序见 [MiniApp 产品定位与路线图](./miniapp-product-plan.md)。**
+>
+> **AI-native 增强开发计划见 [MiniApp AI-native 增强开发计划](./miniapp-ai-native-plan.md)。**
+>
+> **P1a/P1b/P2 已落地（2026-11-22）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`。预算预扣、任务 HITL、页面上传/查询下推/审核参考应用仍按计划进行。
 >
 > **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现并部署。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 
@@ -37,7 +41,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 
 关键数字：
 
-- 38 个 `app_*` Agent 工具（含 3 个 setup plan 工具、3 个只读集成诊断工具、8 个 HITL 集成运维工具）；约 97 个 HTTP 路由 + 1 个公开宿主页（apps / public / boards / game；另有访问申请与认证链接路由）。
+- 42 个 `app_*` Agent 工具（含 3 个 setup plan 工具、3 个只读集成诊断工具、8 个 HITL 集成运维工具、4 个 AI 任务工具）；约 102 个 HTTP 路由 + 1 个公开宿主页（apps / public / boards / game；另有访问申请与认证链接路由）。
 - 每个用户最多 50 个应用；每个应用最多 12 张表、每表 50 列、2 万行、5 MB。
 - 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB。
 - 11 个应用能力位：10 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
@@ -456,7 +460,7 @@ owner/admin 可以让 Agent 使用两组工具：
 | `infra/apps/models.py` | Schema/Column/行校验、CSV 序列化、HTML 写入校验、外链/导航扫描 |
 | `infra/apps/capabilities.py` | 能力目录、解析、校验、新应用默认集 |
 | `infra/apps/sandbox.py` | 服务端 CSP、wrapper 文档、WebRTC 冻结、静态 frame 检查、违规 URL 脱敏 |
-| `infra/apps/tools.py` | 38 个 `app_*` LangChain 工具、看板/分享链接载荷 |
+| `infra/apps/tools.py` | 42 个 `app_*` LangChain 工具、看板/分享链接载荷 |
 | `infra/apps/tool_policy.py` | 工具风险分级（read/write/sensitive）、分组与 HITL 集合 |
 | `infra/apps/hitl_preflight.py` | 条件审批预检（哪些调用可以跳过审批卡） |
 | `infra/apps/integration_ops.py` | 集成诊断与运维工具实现 |
@@ -794,7 +798,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 运维 | 审计 | ✅ | 快速创建、分享、发布、导出、备份/恢复、游戏、CSP/沙箱、生成；行写入进 `light_app_row_history`（v40），schema/HTML 写入仍只靠版本与备份 |
 | 运维 | 限流 | ✅ | 每进程；非全局 |
 
-### 4.2 Agent 工具（38 个）
+### 4.2 Agent 工具（42 个）
 
 | 工具 | 权限 | 作用 |
 |---|---|---|
@@ -836,6 +840,10 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | `app_integration_delete_webhook` | owner/admin | 删除出站 Webhook 及其 source/subscription（**强制 HITL**） |
 | `app_integration_test_webhook` | owner/admin | 发送出站测试事件并交给 worker（**强制 HITL**） |
 | `app_delete` | owner/admin | 删除应用（**强制 HITL**） |
+| `app_run_task` | `view` + 任务内行级授权 | 发起 `summarize_row` / `table_digest` AI 任务；需 `ai.agent_task` 能力位 |
+| `app_get_task` | `view` | 读取 AI 任务状态、结果与错误 |
+| `app_list_tasks` | `view` | 列出应用最近的 AI 任务 |
+| `app_cancel_task` | 创建者/owner | 取消排队任务，或标记运行中任务 |
 
 说明：团队 host 不挂这组工具；它们只挂普通 Agent（`if not team_host`）。
 
@@ -915,6 +923,10 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | GET | `/apps/{id}/source-tools` | 可用的只读连接器工具 |
 | GET/POST | `/apps/{id}/schedules` | 列出/创建应用级调度 |
 | PATCH/DELETE | `/apps/{id}/schedules/{schedule_id}` | 修改/删除调度 |
+| GET | `/apps/{id}/task-types` | 已注册的 AI 任务类型 |
+| GET/POST | `/apps/{id}/tasks` | 列出/创建 AI 任务 |
+| GET | `/apps/{id}/tasks/{task_id}` | AI 任务状态与结果 |
+| POST | `/apps/{id}/tasks/{task_id}/cancel` | 取消 AI 任务 |
 | POST | `/apps/{id}/game-sessions` | 创建游戏会话 |
 
 认证与访问（`/api/auth`、`/api/apps`）：

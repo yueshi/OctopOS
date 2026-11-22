@@ -252,6 +252,7 @@ async def test_edit_structure_collaborator_cannot_manage_or_publish(
 
     attempts: list[tuple[str, str, dict[str, object] | None]] = [
         ("GET", f"/api/apps/{app_id}/shares", None),
+        ("GET", f"/api/apps/{app_id}/backup", None),
         ("PUT", f"/api/apps/{app_id}/shares", {"shares": []}),
         ("PUT", f"/api/apps/{app_id}/capabilities", {"capabilities": []}),
         ("PATCH", f"/api/apps/{app_id}/tables/main", {"public_visible": False}),
@@ -4402,3 +4403,88 @@ async def test_setup_plan_list_requires_admin(
     client, _srv, alice_auth, _bob_auth, _agent_id = env_alice_bob_agent
     r = await client.get("/api/apps/setup-plans", headers=alice_auth)
     assert r.status_code == 403
+
+
+async def test_ai_task_api_lifecycle(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    assert srv.app_runtime is not None
+    # Keep the queued task queued: this test asserts the HTTP contract, not
+    # model execution (covered by the unit task runner tests).
+    if srv.app_runtime.task_runner is not None:
+        await srv.app_runtime.task_runner.shutdown()
+        srv.app_runtime.task_runner = None
+
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        capabilities=["data.read", "data.write", "ai.agent_task"],
+        columns=[
+            {"name": "title", "type": "string"},
+            {"name": "ai_summary", "type": "string"},
+        ],
+    )
+    r = await client.post(
+        f"/api/apps/{app_id}/rows",
+        headers=alice_auth,
+        json={"row": {"title": "Mug", "ai_summary": ""}},
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get(f"/api/apps/{app_id}/rows", headers=alice_auth)
+    row_id = r.json()["row_meta"][0]["row_id"]
+
+    r = await client.get(f"/api/apps/{app_id}/task-types", headers=alice_auth)
+    assert r.status_code == 200
+    types = {item["name"]: item for item in r.json()}
+    assert types["summarize_row"]["tier"] == 1
+    assert types["table_digest"]["tier"] == 2
+    r = await client.get(f"/api/apps/{app_id}/task-types", headers=bob_auth)
+    assert r.status_code == 403
+
+    body = {
+        "task_type": "summarize_row",
+        "table": "main",
+        "row_id": row_id,
+        "input": {"write_column": "ai_summary"},
+        "idempotency_key": "same-task",
+    }
+    r = await client.post(f"/api/apps/{app_id}/tasks", headers=alice_auth, json=body)
+    assert r.status_code == 200, r.text
+    task = r.json()
+    assert task["status"] == "queued" and task["task_type"] == "summarize_row"
+
+    # The idempotency key returns the original task instead of creating another.
+    r = await client.post(f"/api/apps/{app_id}/tasks", headers=alice_auth, json=body)
+    assert r.status_code == 200
+    assert r.json()["task_id"] == task["task_id"]
+
+    r = await client.get(f"/api/apps/{app_id}/tasks/{task['task_id']}", headers=alice_auth)
+    assert r.status_code == 200 and r.json()["status"] == "queued"
+    r = await client.get(f"/api/apps/{app_id}/tasks", headers=alice_auth)
+    assert [item["task_id"] for item in r.json()] == [task["task_id"]]
+
+    # A non-collaborator cannot read or cancel the task.
+    r = await client.get(f"/api/apps/{app_id}/tasks/{task['task_id']}", headers=bob_auth)
+    assert r.status_code == 403
+    r = await client.post(f"/api/apps/{app_id}/tasks/{task['task_id']}/cancel", headers=bob_auth)
+    assert r.status_code == 403
+
+    r = await client.post(f"/api/apps/{app_id}/tasks/{task['task_id']}/cancel", headers=alice_auth)
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+
+    # Removing the capability blocks new tasks without deleting old ones.
+    r = await client.put(
+        f"/api/apps/{app_id}/capabilities",
+        headers=alice_auth,
+        json={"capabilities": ["data.read", "data.write"]},
+    )
+    assert r.status_code == 200
+    r = await client.post(
+        f"/api/apps/{app_id}/tasks",
+        headers=alice_auth,
+        json={**body, "idempotency_key": "blocked-task"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "APP_CAPABILITY_DENIED"
