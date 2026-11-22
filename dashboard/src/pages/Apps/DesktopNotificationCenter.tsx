@@ -36,6 +36,7 @@ const KIND_ICON = {
   info: Bell,
   error: AlertCircle,
   task: ListTodo,
+  app_task: ListTodo,
   security: ShieldCheck,
   cron: Clock3,
 } satisfies Record<DesktopNotificationKind, typeof Bell>;

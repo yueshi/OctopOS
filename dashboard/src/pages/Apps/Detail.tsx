@@ -248,6 +248,12 @@ export default function AppDetailPage({
     rowId: string;
   } | null>(null);
   const [tasksRefreshToken, setTasksRefreshToken] = useState(0);
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "ui" || tab === "data" || tab === "tasks" || tab === "members") {
+      setActiveView(tab);
+    }
+  }, [searchParams]);
   const [dataTable, setDataTable] = useState("main");
   const [dataSearch, setDataSearch] = useState("");
   const [dataRows, setDataRows] = useState<Record<string, string>[]>([]);

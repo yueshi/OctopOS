@@ -341,6 +341,8 @@ class AppRuntime:
                     workspaces=self.agent_registry,
                     agents=self.agent_registry,
                 ),
+                notification_repo=services.repos.notification_repo,
+                user_repo=services.repos.user_repo,
             )
         connector_runner: Any | None = None
         if self.external_event_service is not None:
@@ -750,7 +752,13 @@ class OctopServer:
         )
         source_scheduler.start()
         task_runner = build_task_runner(
-            services=self.services, workspaces=registry, agents=registry, config=config
+            services=self.services,
+            workspaces=registry,
+            agents=registry,
+            config=config,
+            notification_repo=self.services.repos.notification_repo,
+            user_repo=self.services.repos.user_repo,
+            push=gateway.ws_hub.push_to_user,
         )
         task_runner.start()
 

@@ -1154,6 +1154,16 @@
     "hitl": {
       "title": "Expert needs your confirmation",
       "body": "{name} is waiting for your confirmation."
+    },
+    "app_task": {
+      "succeeded": {
+        "title": "AI task completed",
+        "body": "Open the app to view the result."
+      },
+      "failed": {
+        "title": "AI task failed",
+        "body": "Open the app to view the error."
+      }
     }
   },
   "external": {

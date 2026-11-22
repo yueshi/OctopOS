@@ -12,7 +12,7 @@
 >
 > **AI-native 增强开发计划见 [MiniApp AI-native 增强开发计划](./miniapp-ai-native-plan.md)。**
 >
-> **P1a/P1b/P2 已落地（2026-11-22）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`、页面图片上传（`asset.write` + `octopApp.upload`）、行查询下推（SQLite `json_extract` / PG `jsonb->>`，2 万行约 47ms）。预算预扣、任务 HITL、审核参考应用仍按计划进行。
+> **P1a/P1b/P2 已落地（2026-11-22）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`、页面图片上传（`asset.write` + `octopApp.upload`）、行查询下推（SQLite `json_extract` / PG `jsonb->>`，2 万行约 47ms）、AI 任务完成/失败通知（`notifications` kind=`app_task`，点击进入应用任务页）。预算预扣、任务 HITL、审核参考应用仍按计划进行。
 >
 > **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现并部署。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 

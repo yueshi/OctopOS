@@ -11,6 +11,7 @@ export type DesktopNotificationKind =
   | "info"
   | "error"
   | "task"
+  | "app_task"
   | "security"
   | "cron";
 
@@ -41,6 +42,7 @@ const KINDS = new Set<DesktopNotificationKind>([
   "info",
   "error",
   "task",
+  "app_task",
   "security",
   "cron",
 ]);

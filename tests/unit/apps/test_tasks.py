@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -19,6 +20,7 @@ from octop.infra.db.repos.app_tasks import (
     TASK_SUCCEEDED,
     AppTaskRepo,
 )
+from octop.infra.db.repos.notifications import NotificationRepo
 from octop.infra.db.repos.usage import UsageRepo
 from octop.infra.db.repos.user_policies import UserPolicyRepo
 from octop.infra.errors import ErrorCode, OctopError
@@ -209,6 +211,37 @@ async def test_table_digest_uses_bounded_read_tools(world: World) -> None:  # no
             (task.task_id,),
         ).fetchone()
     assert usage is not None and usage["total_tokens"] == 36
+
+
+async def test_task_completion_notifies_the_actor(world: World) -> None:  # noqa: F811
+    row, data_row = await _app_with_row(world)
+    service, task_repo = _task_service(world, _FakeModel('{"summary": "Done."}'))
+    notification_repo = NotificationRepo(world.db)
+    push = AsyncMock()
+
+    task = await service.create(
+        row,  # type: ignore[arg-type]
+        user_id=world.alice_id,
+        task_type="summarize_row",
+        row_id=data_row.row_id,  # type: ignore[attr-defined]
+    )
+    runner = AppTaskRunner(
+        task_repo=task_repo,
+        service=service,
+        clock=lambda: 1000,
+        notification_repo=notification_repo,
+        user_repo=world.user_repo,
+        push=push,
+    )
+    assert await runner.tick() == 1
+
+    rows = notification_repo.list_for_user(world.alice_id)
+    assert len(rows) == 1
+    assert rows[0].kind == "app_task"
+    assert rows[0].path == f"/apps/{row.app_id}?tab=tasks"  # type: ignore[attr-defined]
+    assert rows[0].dedupe_key == f"app_task:{task.task_id}"
+    push.assert_awaited_once()
+    assert push.await_args.args[0] == world.alice_id
 
 
 async def test_task_without_write_column_keeps_result_on_task(world: World) -> None:  # noqa: F811

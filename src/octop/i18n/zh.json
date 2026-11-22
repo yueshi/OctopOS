@@ -1154,6 +1154,16 @@
     "hitl": {
       "title": "专家需要你确认",
       "body": "{name} 正在等待你的确认。"
+    },
+    "app_task": {
+      "succeeded": {
+        "title": "AI 任务已完成",
+        "body": "打开应用查看结果。"
+      },
+      "failed": {
+        "title": "AI 任务失败",
+        "body": "打开应用查看错误。"
+      }
     }
   },
   "external": {
