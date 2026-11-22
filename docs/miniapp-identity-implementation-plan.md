@@ -1,6 +1,6 @@
 # MiniApp Identity 功能详细实施计划
 
-> Status: P0/P1/P2a implemented; verification / merge pending  
+> Status: P0/P1/P2a implemented and deployed  
 > Date: 2026-11-21（updated 2026-11-22）  
 > Branch: `feature/miniapp-capabilities`  
 > Design: [`docs/miniapp-identity-access-plan.md`](./miniapp-identity-access-plan.md)（v3）  
@@ -22,7 +22,7 @@
 | P2a | PR-12 | ✅ 已实现 | 分享链接分流、`/link` 握手、guest 个人入口码 |
 | P2b / P3 | — | ⏸ 不在本次范围 | per-sender actor、submission、组织化共享 |
 
-- 代码基线：PR-01~PR-10 已提交 `aed36ded` 并部署（schema v47）；PR-11/12 工作树已完成，schema v48，待提交 / 部署。
+- 代码基线：PR-01~PR-10 提交 `aed36ded`；PR-11/12 提交 `f46f7a1c`（另有 `41a2c7e6` 的 owner→edit_structure 映射修复），线上 schema 已迁移到 **v48**。
 - 验证基线：PR-10 定向测试（应用单测 529、应用集成 97、宿主策略 7、成员服务 10、前端 32 个用例）、`tsc -b`、ESLint、生产构建通过；线上 `/api/health` 与新路由已验收。PR-11/12 定向：identity/gateway/agents 1879、apps 505、db 245、集成 103、备份 22，`make lint` / `make typecheck` 通过。
 - 未完成：PR-01~PR-10 的一次完整 `make all`（本机 88% 中止）；PR-11/12 使用定向测试 + lint + mypy，合并前仍应在 CI 或停服窗口补跑全量。
 - 已知旁路：`PUT /api/apps/{id}/shares` 仍是旧的全量平台协作者接口，保留 guest 行但不经过 host policy；建议在 PR-11 前收口。
@@ -1029,7 +1029,7 @@ CREATE TABLE channel_link_codes (
 | 048 | P2a | `channel_identities` 重建、`app_access_codes.account_key/sender_id`、`channel_link_codes` |
 | 049 | P3 | `light_app_rows.submitter_ref`、`app_submit_tokens`、用户组 / SSO 域 |
 
-> 状态：046（v46）、047（v47）已发布并部署；048（v48）已实现，待提交 / 部署。
+> 状态：046（v46）、047（v47）、048（v48）均已发布并部署。
 
 > 若开工时确认 045 未发布且所有环境 < 45，可把 046 折入 045；否则坚持 046+。**不要**在已到 v45 的库上改 045。
 

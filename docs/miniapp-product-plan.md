@@ -213,7 +213,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | R2.3 最小 workflow runner | 低（建议不做） | 见 §6 取舍 3 |
 | R2.4 公开看板 | 中（可滑档） | 见 §4 阶段 5 |
 | R3 Bundle v2（跨主机迁移） | 高 | 见 §4 阶段 6（建议提前） |
-| R3 IM 认证链接 / 渠道身份 | 中 | D4-lite 已落地；PR-11/12 的 sender 身份、app 工具收口与 `/link` 已实现（schema v48），待部署 |
+| R3 IM 认证链接 / 渠道身份 | 中 | D4-lite 已落地；PR-11/12 的 sender 身份、app 工具收口与 `/link` 已实现并部署（schema v48） |
 | `data_version` 实时刷新 | **已完成（2026-11-15）** | `GET /api/apps/{id}/data-version` + 5 秒两段式轮询 + `data-changed` 事件（`dashboard/src/components/MiniAppFrame/useMiniAppDataVersion.ts`） |
 | 页面写能力（`updateRow` / 批量写） | **已完成（2026-11-15）** | SDK + 双宿主 bridge + 行级 CAS；见 §3.3 V1 |
 | 行查询 `filter` / `sort` | **已完成（2026-11-15）** | `GET /rows?filter=&sort=`；未下推，见 §3.3 P0-4 |

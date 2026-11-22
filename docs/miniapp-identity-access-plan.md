@@ -7,7 +7,7 @@
 > Companion deck: [`docs/slides/miniapp-identity-access-plan.html`](./slides/miniapp-identity-access-plan.html)  
 > Implementation plan: [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)
 >
-> **实现状态（2026-11-22）**：P0 / P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`），包括 Principal / token scope、`authorize()`、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。P2a（`account_key` / `sender_id`、`ToolScope`、app 数据工具收口、`/link`）由 PR-11/12 实现（schema v48），待合并 / 部署；P2b / P3 不在当前范围。
+> **实现状态（2026-11-22）**：P0 / P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`），包括 Principal / token scope、`authorize()`、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。P2a（`account_key` / `sender_id`、`ToolScope`、app 数据工具收口、`/link`）由 PR-11/12 实现并已部署（schema v48）；P2b / P3 不在当前范围。
 
 ---
 
@@ -742,7 +742,7 @@ DM 需求 → 解析 sender（account_key + sender_id）
 
 ## 12. 实施路线图
 
-> 状态（2026-11-22）：P0 / P1 已完成并部署；P2a 已实现（v48），待合并 / 部署；P2b / P3 暂缓。
+> 状态（2026-11-22）：P0 / P1 已完成并部署；P2a 已实现并部署（v48）；P2b / P3 暂缓。
 >
 > 任务级拆分、文件清单、DDL、API 契约与测试矩阵见 [`docs/miniapp-identity-implementation-plan.md`](./miniapp-identity-implementation-plan.md)。
 

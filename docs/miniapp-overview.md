@@ -1,6 +1,6 @@
 # MiniApp 功能与架构现状
 
-> 快照：2026-11-22，分支 `feature/miniapp-capabilities`，schema **v48**（046/047/048；048 已实现、待部署）；P2a 已实现，待提交 / 部署。
+> 快照：2026-11-22，分支 `feature/miniapp-capabilities`，schema **v48**（046/047/048 已应用）；PR-11/12 已实现并部署（commit `f46f7a1c`）。
 >
 > 口径：**以当前代码与测试为准**。仓库里多份 `light-apps-*` / `miniapp-*` 文档是不同阶段的设计稿，只保留动机与历史记录，并在文首指向本文；本文把已落地的事实和明确未落地的部分分开写。
 >
@@ -10,7 +10,7 @@
 >
 > **产品定位、取舍与阶段顺序见 [MiniApp 产品定位与路线图](./miniapp-product-plan.md)。**
 >
-> **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现，待合并与部署验证。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
+> **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现并部署。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 
 ---
 
@@ -33,7 +33,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 | 工作台 | ✅ 个人多 Board、12 列网格、缩放/锁定/撤销/全屏/自动排列 |
 | IM | ✅ `app_share_link` 一次调用交付、纯文本格式化、单轮预算 |
 | 集成/分发（R2/R3） | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度、IM 公开链接与 owner 身份绑定（D4-lite）已实现；公开看板、迁移包 v2 未实现 |
-| 身份与访问（v3） | ✅ P0/P1（PR-01~PR-10）+ P2a（PR-11/12）已实现，schema v48；待合并 / 部署验证 |
+| 身份与访问（v3） | ✅ P0/P1（PR-01~PR-10）+ P2a（PR-11/12）已实现并部署，schema v48 |
 
 关键数字：
 
@@ -42,7 +42,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB。
 - 11 个应用能力位：10 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
 - 后端 `infra/apps/` 约 1.88 万行；应用 API 路由约 4,700 行；前端 MiniApp 页面/宿主约 1.8 万行（不含桌面 Shell；含桌面 Shell 约 3.1 万行）。
-- 最近验证（2026-11-22）：PR-10 已部署（schema v47）；PR-11/12 定向验证——identity/gateway/agents 1879、apps 505、db 245、集成 103、前端 33 个用例，`make lint` / `make typecheck` 通过。schema v48 已实现，待提交 / 部署。全量 `make all` 在本机跑到 88% 因资源被中止，尚未得到一次完整全绿记录。
+- 最近验证（2026-11-22）：PR-10 已部署（schema v47）；PR-11/12 定向验证——identity/gateway/agents 1879、apps 505、db 245、集成 103、前端 33 个用例，`make lint` / `make typecheck` 通过。线上服务已迁移到 schema v48。全量 `make all` 在本机跑到 88% 因资源被中止，尚未得到一次完整全绿记录。
 
 选场景、落地路径与验收口径见 §5「应用场景与落地」。
 
@@ -960,7 +960,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 
 R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `events.emit` 已接入执行链路，`schedules.manage` 仍是可声明、不可执行的能力名，避免未来端点默认放行。
 
-**身份 v3 状态（2026-11-22）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47）：`PrincipalDirectory`、`authorize()`、路由 action 注册表、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页。P2a（`account_key` / `sender_id`、`ToolScope`、IM 数据工具收口、`/link`）已实现，待合并 / 部署验证；submission / per-sender actor 仍属 P2b/P3。
+**身份 v3 状态（2026-11-22）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47）：`PrincipalDirectory`、`authorize()`、路由 action 注册表、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页。P2a（`account_key` / `sender_id`、`ToolScope`、IM 数据工具收口、`/link`）已实现并部署；submission / per-sender actor 仍属 P2b/P3。
 
 ### 4.5 设计文档落地情况
 
