@@ -106,6 +106,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Middleware hooks that rewrite the whole ``messages`` channel. LangGraph's
+# ``messages`` stream then re-emits every replayed AI/tool message as a frame
+# tagged with that hook node. Those frames are checkpoint state, not output:
+# forwarding them glues earlier answers, their usage, and historical tool
+# results onto the current turn (and double-counts tokens/cost).
+_REPLAY_NODE_SUFFIXES = (".before_agent", ".before_model", ".after_model")
+_REPLAY_CHUNK_TYPES = frozenset({"token", "reasoning", "usage", "tool_call_chunk", "tool_result"})
+
+
+def is_state_replay_chunk(chunk: Any) -> bool:
+    """True for harness frames that only replay checkpoint state.
+
+    ``wrap_tool_call`` / ``wrap_model_call`` are deliberately excluded: they can
+    legitimately produce tool results (HITL denials) or canned responses.
+    """
+    if not isinstance(chunk, dict) or chunk.get("type") not in _REPLAY_CHUNK_TYPES:
+        return False
+    node = chunk.get("node")
+    return isinstance(node, str) and node.endswith(_REPLAY_NODE_SUFFIXES)
+
 
 def _model_retry_on_failure(
     exc: Exception,
@@ -1930,6 +1950,8 @@ class AgentManager:
                 turn_model_scope(self._stream_model_label(agent_id, req, thread_id)),
             ):
                 async for chunk in self._harness_manager.stream(agent_id, cast(Any, req)):
+                    if is_state_replay_chunk(chunk):
+                        continue
                     yield chunk
             self._apply_pending_bootstrap_graph_refresh(agent_id)
 
@@ -2044,6 +2066,8 @@ class AgentManager:
                 async for chunk in self._harness_manager.resume_hitl(
                     agent_id, thread_id, decisions
                 ):
+                    if is_state_replay_chunk(chunk):
+                        continue
                     yield chunk
             self._apply_pending_bootstrap_graph_refresh(agent_id)
 

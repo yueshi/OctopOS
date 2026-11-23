@@ -19,7 +19,7 @@ import pytest
 from octop.config import OctopConfig
 from octop.i18n.domains.agents import NO_MODELS_CONFIGURED, format_agent_start_error
 from octop.infra.agents.experts.catalog import default_library_root
-from octop.infra.agents.manager import AgentManager, _memory_extract_settings
+from octop.infra.agents.manager import AgentManager, _memory_extract_settings, is_state_replay_chunk
 from octop.infra.apps.prompt import light_app_system_prompt
 from octop.infra.apps.tools import APP_TOOL_NAMES
 from octop.infra.backend.resolver import default_agent_backend_spec
@@ -1413,6 +1413,110 @@ async def test_stream_applies_bootstrap_refresh_after_turn(manager: AgentManager
     assert chunks == [{"type": "token", "content": "hi"}]
     agent._init_graph.assert_called_once()
     assert agent_id not in manager._bootstrap_graph_refresh_pending
+
+
+@pytest.mark.parametrize(
+    ("chunk", "expected"),
+    [
+        (
+            {"type": "token", "content": "old", "node": "PatchToolCallsMiddleware.before_agent"},
+            True,
+        ),
+        (
+            {"type": "reasoning", "content": "old", "node": "PIIMiddleware[api_key].after_model"},
+            True,
+        ),
+        (
+            {
+                "type": "usage",
+                "usage": {"input_tokens": 10},
+                "node": "SummarizationMiddleware.before_model",
+            },
+            True,
+        ),
+        (
+            {
+                "type": "tool_result",
+                "messages": [],
+                "node": "PatchToolCallsMiddleware.before_agent",
+            },
+            True,
+        ),
+        ({"type": "token", "content": "new", "node": "model"}, False),
+        ({"type": "tool_result", "messages": [], "node": "tools"}, False),
+        (
+            {
+                "type": "tool_result",
+                "messages": [],
+                "node": "HumanInTheLoopMiddleware.wrap_tool_call",
+            },
+            False,
+        ),
+        ({"type": "state_update", "node": "PatchToolCallsMiddleware.before_agent"}, False),
+        ({"type": "token", "content": "x"}, False),
+        ("not-a-dict", False),
+    ],
+)
+def test_is_state_replay_chunk(chunk: Any, expected: bool) -> None:
+    assert is_state_replay_chunk(chunk) is expected
+
+
+@pytest.mark.asyncio
+async def test_stream_drops_state_replay_chunks(manager: AgentManager) -> None:
+    agent_id = "AGT_REPLAY"
+    harness_manager = MagicMock()
+    replay = {
+        "type": "token",
+        "content": "old answer",
+        "node": "PatchToolCallsMiddleware.before_agent",
+    }
+    real = {"type": "token", "content": "new answer", "node": "model"}
+    replay_usage = {
+        "type": "usage",
+        "usage": {"input_tokens": 10},
+        "node": "PatchToolCallsMiddleware.before_agent",
+    }
+    replay_tool = {
+        "type": "tool_result",
+        "messages": [],
+        "node": "PatchToolCallsMiddleware.before_agent",
+    }
+    done = {"type": "done"}
+
+    async def fake_stream(*_args: Any, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        for chunk in (replay, real, replay_usage, replay_tool, done):
+            yield chunk
+
+    harness_manager.stream = fake_stream
+    manager._harness_manager = harness_manager
+
+    chunks = [chunk async for chunk in manager.stream(agent_id, {"thread_id": "thr-replay"})]
+
+    assert chunks == [real, done]
+
+
+@pytest.mark.asyncio
+async def test_resume_hitl_drops_state_replay_chunks(manager: AgentManager) -> None:
+    agent_id = "AGT_REPLAY"
+    harness_manager = MagicMock()
+    replay = {
+        "type": "token",
+        "content": "old answer",
+        "node": "PatchToolCallsMiddleware.before_agent",
+    }
+    real = {"type": "token", "content": "new answer", "node": "model"}
+    done = {"type": "done"}
+
+    async def fake_resume(*_args: Any, **_kwargs: Any) -> AsyncIterator[dict[str, Any]]:
+        for chunk in (replay, real, done):
+            yield chunk
+
+    harness_manager.resume_hitl = fake_resume
+    manager._harness_manager = harness_manager
+
+    chunks = [chunk async for chunk in manager.resume_hitl(agent_id, "thr-replay", [])]
+
+    assert chunks == [real, done]
 
 
 @pytest.mark.asyncio
