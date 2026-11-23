@@ -7,7 +7,9 @@ import json
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 from deepagents.backends import FilesystemBackend
 from octop_harness.backends import BackendWorkspace
@@ -18,6 +20,7 @@ from octop.infra.apps.service import (
     _APP_LOCKS,
     FILE_PENDING,
     AppService,
+    ServiceView,
     app_dir,
     app_path,
 )
@@ -30,6 +33,12 @@ from octop.infra.db.repos.app_events import AppEventRepo
 from octop.infra.db.repos.app_schedules import (
     LightAppScheduleRepo,
     schedule_jitter,
+)
+from octop.infra.db.repos.app_service_operations import (
+    OP_PENDING_CONFIRMATION,
+    OP_SUCCEEDED,
+    OP_UNKNOWN,
+    LightAppServiceOperationRepo,
 )
 from octop.infra.db.repos.app_services import LightAppServiceRepo
 from octop.infra.db.repos.apps import LightAppRepo
@@ -72,6 +81,7 @@ class World:
     user_repo: UserRepo
     access_repo: AppAccessRequestRepo
     service_repo: LightAppServiceRepo
+    operation_repo: LightAppServiceOperationRepo
     binding_repo: LightAppBindingRepo
     event_repo: AppEventRepo
     schedule_repo: LightAppScheduleRepo
@@ -133,6 +143,7 @@ def world(tmp_path: Path) -> World:
     repo = LightAppRepo(db)
     access_repo = AppAccessRequestRepo(db)
     service_repo = LightAppServiceRepo(db)
+    operation_repo = LightAppServiceOperationRepo(db)
     binding_repo = LightAppBindingRepo(db)
     event_repo = AppEventRepo(db)
     schedule_repo = LightAppScheduleRepo(db)
@@ -149,6 +160,7 @@ def world(tmp_path: Path) -> World:
             audit_repo=audit_repo,
             binding_repo=binding_repo,
             service_repo=service_repo,
+            service_operation_repo=operation_repo,
             event_repo=event_repo,
             schedule_repo=schedule_repo,
             connector_repo=connector_repo,
@@ -160,6 +172,7 @@ def world(tmp_path: Path) -> World:
         user_repo=user_repo,
         access_repo=access_repo,
         service_repo=service_repo,
+        operation_repo=operation_repo,
         binding_repo=binding_repo,
         event_repo=event_repo,
         schedule_repo=schedule_repo,
@@ -3450,6 +3463,693 @@ async def test_service_call_requires_external_fetch_capability(world: World) -> 
             args={"url": "https://api.example.com/books"},
         )
     _assert_code(exc, ErrorCode.APP_CAPABILITY_DENIED)
+
+
+async def _extension_app(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    read_tools: list[dict[str, object]] | None = None,
+    write_tools: list[dict[str, object]] | None = None,
+    confirmation: dict[str, str] | None = None,
+    enabled: bool = True,
+    base_url: str = "https://video.example.com",
+    allow_private_network: bool = False,
+    is_admin: bool = False,
+) -> tuple[str, ServiceView]:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    world.service.set_capabilities(
+        row,
+        {"data.read", "data.write", "external.fetch", "external.write"},
+    )
+
+    async def _noop(_url: str, *, allow_private: bool = False) -> None:
+        return None
+
+    monkeypatch.setattr(world.service, "_validate_extension_url", _noop)
+    view = world.service.save_service(
+        world.service.get(app_id),
+        name="video",
+        provider="extension",
+        connector_instance_id="",
+        allowed_tools=[],
+        allowed_url_prefixes=[],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=60,
+        public_live=False,
+        enabled=enabled,
+        actor_user_id=world.alice_id,
+        is_admin=is_admin,
+        mode="write",
+        base_url=base_url,
+        extension_id="octop.video",
+        service_token="svc-token",
+        allow_private_network=allow_private_network,
+        read_tools=read_tools
+        or [
+            {
+                "name": "runs.get",
+                "method": "GET",
+                "path": "/v1/runs/{run_id}",
+                "input_schema": {"type": "object", "required": ["run_id"]},
+            }
+        ],
+        write_tools=write_tools
+        or [
+            {
+                "name": "runs.create",
+                "method": "POST",
+                "path": "/v1/runs",
+                "input_schema": {
+                    "type": "object",
+                    "required": ["run_id", "title"],
+                    "properties": {
+                        "run_id": {"type": "string"},
+                        "title": {"type": "string"},
+                    },
+                },
+            }
+        ],
+        confirmation=confirmation,
+    )
+    return app_id, view
+
+
+async def test_extension_write_requires_capability(world: World, monkeypatch) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    world.service.save_service(
+        row,
+        name="video",
+        provider="extension",
+        connector_instance_id="",
+        allowed_tools=[],
+        allowed_url_prefixes=[],
+        cache_ttl_seconds=0,
+        max_calls_per_minute=60,
+        public_live=False,
+        enabled=True,
+        actor_user_id=world.alice_id,
+        is_admin=False,
+        mode="write",
+        base_url="https://video.example.com",
+        write_tools=[
+            {
+                "name": "runs.create",
+                "method": "POST",
+                "path": "/v1/runs",
+                "input_schema": {"required": ["run_id"]},
+            }
+        ],
+    )
+    with pytest.raises(OctopError) as exc:
+        await world.service.invoke_service(
+            world.service.get(app_id),
+            name="video",
+            tool="runs.create",
+            args={"run_id": "run_1"},
+            idempotency_key="k1",
+            actor_user_id=world.alice_id,
+        )
+    _assert_code(exc, ErrorCode.APP_CAPABILITY_DENIED)
+
+
+async def test_extension_save_validates_write_policy(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    common = {
+        "name": "video",
+        "provider": "extension",
+        "connector_instance_id": "",
+        "allowed_tools": [],
+        "allowed_url_prefixes": [],
+        "max_calls_per_minute": 60,
+        "enabled": True,
+        "actor_user_id": world.alice_id,
+        "is_admin": False,
+        "mode": "write",
+        "base_url": "https://video.example.com",
+        "write_tools": [
+            {
+                "name": "runs.create",
+                "method": "POST",
+                "path": "/v1/runs",
+                "input_schema": {"required": ["run_id"]},
+            }
+        ],
+    }
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(row, cache_ttl_seconds=300, public_live=False, **common)
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(row, cache_ttl_seconds=0, public_live=True, **common)
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            cache_ttl_seconds=0,
+            public_live=False,
+            idempotency_required=False,
+            **common,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            cache_ttl_seconds=0,
+            public_live=False,
+            confirmation={"unknown": "run_owner"},
+            **common,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+    bad_base = dict(common)
+    bad_base["base_url"] = ""
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            cache_ttl_seconds=0,
+            public_live=False,
+            **bad_base,
+        )
+    _assert_code(exc, ErrorCode.APP_SOURCE_INVALID)
+
+
+async def test_extension_invoke_is_idempotent_and_sends_actor(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, view = await _extension_app(world, monkeypatch)
+    assert view.token_configured is True
+    assert view.allowed_tools == ("runs.get",)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"run_id": "run_1", "status": "queued"})
+
+    world.service._extension_http_transport = httpx.MockTransport(handler)
+    row = world.service.get(app_id)
+    first = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="runs.create",
+        args={"run_id": "run_1", "title": "夏季新品"},
+        idempotency_key="k1",
+        actor_user_id=world.alice_id,
+    )
+    assert first.status == OP_SUCCEEDED
+    assert first.result == {"run_id": "run_1", "status": "queued"}
+    assert first.op_id.startswith("op_")
+    assert len(requests) == 1
+    sent = requests[0]
+    assert sent.method == "POST"
+    assert str(sent.url) == "https://video.example.com/v1/runs"
+    assert sent.headers["authorization"] == "Bearer svc-token"
+    assert sent.headers["x-octop-actor-id"] == str(world.alice_id)
+    assert sent.headers["x-octop-app-id"] == app_id
+    assert sent.headers["idempotency-key"] == "k1"
+    assert json.loads(sent.content) == {"run_id": "run_1", "title": "夏季新品"}
+
+    replay = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="runs.create",
+        args={"run_id": "run_1", "title": "夏季新品"},
+        idempotency_key="k1",
+        actor_user_id=world.alice_id,
+    )
+    assert replay.op_id == first.op_id
+    assert replay.result == first.result
+    assert len(requests) == 1
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.invoke_service(
+            row,
+            name="video",
+            tool="runs.create",
+            args={"run_id": "run_1", "title": "不同参数"},
+            idempotency_key="k1",
+            actor_user_id=world.alice_id,
+        )
+    _assert_code(exc, ErrorCode.APP_CONFLICT)
+
+    op = world.service.get_service_operation(row, first.op_id)
+    assert op.status == OP_SUCCEEDED
+    assert op.result_json
+
+
+async def test_extension_read_call_uses_declared_tool(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, _view = await _extension_app(world, monkeypatch)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"run_id": "run_1", "status": "analyzing"})
+
+    world.service._extension_http_transport = httpx.MockTransport(handler)
+    row = world.service.get(app_id)
+    result = await world.service.call_service(
+        row,
+        name="video",
+        tool="runs.get",
+        args={"run_id": "run_1"},
+        actor_user_id=world.alice_id,
+    )
+    assert result.value == {"run_id": "run_1", "status": "analyzing"}
+    assert result.cached is False
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == "https://video.example.com/v1/runs/run_1"
+    assert requests[0].headers["x-octop-actor-id"] == str(world.alice_id)
+    assert "authorization" in requests[0].headers
+
+
+class _AsyncBytes(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    async def __aiter__(self) -> Any:
+        yield self.payload
+
+
+class _CapturingTransport(httpx.AsyncBaseTransport):
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.calls: list[tuple[httpx.Request, bytes]] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        body = b"".join([chunk async for chunk in request.stream])
+        self.calls.append((request, body))
+        response = self.response
+        response.request = request
+        return response
+
+
+async def test_extension_upload_streams_to_declared_tool(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, _view = await _extension_app(
+        world,
+        monkeypatch,
+        read_tools=[
+            {
+                "name": "assets.content",
+                "method": "GET",
+                "path": "/v1/assets/{asset_id}/content",
+                "input_schema": {"required": ["asset_id"]},
+            }
+        ],
+        write_tools=[
+            {
+                "name": "assets.upload",
+                "method": "POST",
+                "path": "/v1/assets/stream",
+                "input_schema": {"type": "object"},
+            }
+        ],
+    )
+    transport = _CapturingTransport(httpx.Response(200, json={"asset_id": "asset_1"}))
+    world.service._extension_http_transport = transport
+
+    async def chunks() -> Any:
+        yield b"abc"
+        yield b"def"
+
+    row = world.service.get(app_id)
+    result = await world.service.upload_service_asset(
+        row,
+        name="video",
+        content=chunks(),
+        content_length=6,
+        filename="clip.mp4",
+        content_type="video/mp4",
+        purpose="reference_video",
+        actor_user_id=world.alice_id,
+    )
+    assert result == {"asset_id": "asset_1"}
+    assert len(transport.calls) == 1
+    request, body = transport.calls[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://video.example.com/v1/assets/stream"
+    assert body == b"abcdef"
+    assert request.headers["content-type"] == "video/mp4"
+    assert request.headers["x-octop-purpose"] == "reference_video"
+    assert request.headers["x-octop-actor-id"] == str(world.alice_id)
+    assert request.headers["authorization"] == "Bearer svc-token"
+
+
+async def test_extension_chunked_upload_session(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, _view = await _extension_app(
+        world,
+        monkeypatch,
+        write_tools=[
+            {
+                "name": "assets.upload",
+                "method": "POST",
+                "path": "/v1/assets/stream",
+                "input_schema": {"type": "object"},
+            }
+        ],
+    )
+    transport = _CapturingTransport(httpx.Response(200, json={"asset_id": "asset_2"}))
+    world.service._extension_http_transport = transport
+    row = world.service.get(app_id)
+    started = world.service.start_upload_session(
+        row,
+        name="video",
+        filename="clip.mp4",
+        content_type="video/mp4",
+        purpose="reference_video",
+        size=6,
+        actor_user_id=world.alice_id,
+    )
+    upload_id = started["upload_id"]
+    first = world.service.append_upload_chunk(
+        row,
+        name="video",
+        upload_id=upload_id,
+        index=0,
+        data=b"abc",
+        actor_user_id=world.alice_id,
+    )
+    assert first["received"] == 3
+    second = world.service.append_upload_chunk(
+        row,
+        name="video",
+        upload_id=upload_id,
+        index=1,
+        data=b"def",
+        actor_user_id=world.alice_id,
+    )
+    assert second["received"] == 6
+    result = await world.service.finish_upload_session(
+        row,
+        name="video",
+        upload_id=upload_id,
+        actor_user_id=world.alice_id,
+    )
+    assert result == {"asset_id": "asset_2"}
+    assert len(transport.calls) == 1
+    request, body = transport.calls[0]
+    assert body == b"abcdef"
+    assert request.headers["x-octop-purpose"] == "reference_video"
+
+    with pytest.raises(OctopError):
+        world.service.append_upload_chunk(
+            row,
+            name="video",
+            upload_id=upload_id,
+            index=2,
+            data=b"",
+            actor_user_id=world.alice_id,
+        )
+
+
+async def test_extension_media_token_and_range_stream(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, _view = await _extension_app(
+        world,
+        monkeypatch,
+        read_tools=[
+            {
+                "name": "assets.content",
+                "method": "GET",
+                "path": "/v1/assets/{asset_id}/content",
+                "input_schema": {"required": ["asset_id"]},
+            }
+        ],
+    )
+    row = world.service.get(app_id)
+    issued = world.service.issue_media_token(
+        row,
+        name="video",
+        asset_id="asset_1",
+        user_id=world.alice_id,
+    )
+    assert issued["url"].startswith(f"/api/apps/{app_id}/services/video/media/asset_1?token=")
+    service_id = world.service.media_service_id(row, "video")
+    assert (
+        world.service.verify_media_token(
+            issued["token"],
+            app_id=app_id,
+            service_id=service_id,
+            asset_id="asset_1",
+        )
+        == world.alice_id
+    )
+    assert (
+        world.service.verify_media_token(
+            issued["token"],
+            app_id=app_id,
+            service_id=service_id,
+            asset_id="asset_2",
+        )
+        is None
+    )
+    assert (
+        world.service.verify_media_token(
+            issued["token"][:-1] + ("a" if issued["token"].endswith("b") else "b"),
+            app_id=app_id,
+            service_id=service_id,
+            asset_id="asset_1",
+        )
+        is None
+    )
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            206,
+            stream=_AsyncBytes(b"frame"),
+            headers={
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-4/10",
+                "accept-ranges": "bytes",
+            },
+        )
+
+    world.service._extension_http_transport = httpx.MockTransport(handler)
+    stream = await world.service.open_media_stream(
+        row,
+        name="video",
+        asset_id="asset_1",
+        range_header="bytes=0-4",
+        actor_user_id=world.alice_id,
+    )
+    assert stream.status_code == 206
+    assert stream.headers["content-range"] == "bytes 0-4/10"
+    assert stream.headers["accept-ranges"] == "bytes"
+    assert stream.headers["cache-control"] == "private, no-store"
+    chunks = [chunk async for chunk in stream.body]
+    assert b"".join(chunks) == b"frame"
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "GET"
+    assert str(request.url) == "https://video.example.com/v1/assets/asset_1/content"
+    assert request.headers["range"] == "bytes=0-4"
+
+
+async def test_extension_private_network_requires_admin(world: World) -> None:
+    app_id = await _create(world)
+    row = world.service.get(app_id)
+    body = {
+        "name": "video",
+        "provider": "extension",
+        "connector_instance_id": "",
+        "allowed_tools": [],
+        "allowed_url_prefixes": [],
+        "cache_ttl_seconds": 0,
+        "max_calls_per_minute": 60,
+        "public_live": False,
+        "enabled": True,
+        "mode": "write",
+        "base_url": "http://video:8000",
+        "allow_private_network": True,
+        "write_tools": [
+            {
+                "name": "runs.create",
+                "method": "POST",
+                "path": "/v1/runs",
+                "input_schema": {"required": ["run_id"]},
+            }
+        ],
+    }
+    with pytest.raises(OctopError) as exc:
+        world.service.save_service(
+            row,
+            actor_user_id=world.alice_id,
+            is_admin=False,
+            **body,
+        )
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+    view = world.service.save_service(
+        row,
+        actor_user_id=world.alice_id,
+        is_admin=True,
+        **body,
+    )
+    assert view.allow_private_network is True
+    assert view.base_url == "http://video:8000"
+
+
+async def test_extension_confirmation_is_two_phase(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, _view = await _extension_app(
+        world,
+        monkeypatch,
+        write_tools=[
+            {
+                "name": "video.submit",
+                "method": "POST",
+                "path": "/v1/runs/{run_id}/video",
+                "input_schema": {"required": ["run_id"]},
+            }
+        ],
+        confirmation={"video.submit": "run_owner"},
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"job_id": "job_1"})
+
+    world.service._extension_http_transport = httpx.MockTransport(handler)
+    row = world.service.get(app_id)
+    pending = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="video.submit",
+        args={"run_id": "run_1"},
+        idempotency_key="submit-1",
+        actor_user_id=world.alice_id,
+    )
+    assert pending.status == OP_PENDING_CONFIRMATION
+    assert pending.confirmation_required is True
+    assert pending.confirmation_token
+    assert requests == []
+
+    with pytest.raises(OctopError) as exc:
+        await world.service.invoke_service(
+            row,
+            name="video",
+            tool="video.submit",
+            args={"run_id": "run_1"},
+            idempotency_key="submit-1",
+            confirmation_token="wrong",
+            actor_user_id=world.alice_id,
+        )
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+
+    # The failed attempt expired the pending confirmation; issue a fresh one.
+    pending = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="video.submit",
+        args={"run_id": "run_1"},
+        idempotency_key="submit-1",
+        actor_user_id=world.alice_id,
+    )
+    assert pending.confirmation_token
+    done = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="video.submit",
+        args={"run_id": "run_1"},
+        idempotency_key="submit-1",
+        confirmation_token=pending.confirmation_token or "",
+        actor_user_id=world.alice_id,
+    )
+    assert done.status == OP_SUCCEEDED
+    assert done.result == {"job_id": "job_1"}
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://video.example.com/v1/runs/run_1/video"
+    assert json.loads(requests[0].content) == {}
+
+    replay = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="video.submit",
+        args={"run_id": "run_1"},
+        idempotency_key="submit-1",
+        actor_user_id=world.alice_id,
+    )
+    assert replay.status == OP_SUCCEEDED
+    assert len(requests) == 1
+
+
+async def test_extension_upstream_5xx_is_submission_unknown(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_id, _view = await _extension_app(world, monkeypatch)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(502, json={"message": "provider exploded"})
+
+    world.service._extension_http_transport = httpx.MockTransport(handler)
+    row = world.service.get(app_id)
+    unknown = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="runs.create",
+        args={"run_id": "run_1", "title": "T"},
+        idempotency_key="k2",
+        actor_user_id=world.alice_id,
+    )
+    assert unknown.status == OP_UNKNOWN
+    assert "502" in unknown.error_message
+    assert "provider exploded" in unknown.error_message
+    assert len(requests) == 1
+    replay = await world.service.invoke_service(
+        row,
+        name="video",
+        tool="runs.create",
+        args={"run_id": "run_1", "title": "T"},
+        idempotency_key="k2",
+        actor_user_id=world.alice_id,
+    )
+    assert replay.status == OP_UNKNOWN
+    assert len(requests) == 1
+
+    with pytest.raises(OctopError) as exc:
+        world.service.resolve_service_operation(
+            row,
+            unknown.op_id,
+            status="failed",
+            result=None,
+            error_message="checked",
+            actor_user_id=world.bob_id,
+            actor_is_admin=False,
+        )
+    _assert_code(exc, ErrorCode.APP_FORBIDDEN)
+
+    resolved = world.service.resolve_service_operation(
+        row,
+        unknown.op_id,
+        status="failed",
+        result=None,
+        error_message="provider exploded",
+        actor_user_id=world.alice_id,
+        actor_is_admin=False,
+    )
+    assert resolved.status == "failed"
+    assert "provider exploded" in resolved.error_message
 
 
 async def test_service_image_is_saved_as_asset(

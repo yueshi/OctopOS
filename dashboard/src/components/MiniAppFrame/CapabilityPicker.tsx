@@ -59,6 +59,11 @@ const CAPABILITY_OPTIONS: {
     fallback: "Call external services",
   },
   {
+    value: CAP.EXTERNAL_WRITE,
+    labelKey: "apps.capabilities.externalWrite",
+    fallback: "Submit work to external services",
+  },
+  {
     value: CAP.EVENTS_EMIT,
     labelKey: "apps.capabilities.eventsEmit",
     fallback: "Send events and alerts",

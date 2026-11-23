@@ -14,8 +14,9 @@ from langchain_core.messages import AIMessage
 from octop.config import GameConfig
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps.game_sessions import create_game_token
-from octop.infra.apps.service import AppService
+from octop.infra.apps.service import AppService, ServiceMediaStream
 from octop.infra.apps.wiring import build_app_service
+from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 
 COLUMNS: list[dict[str, object]] = [
@@ -3431,6 +3432,411 @@ async def test_service_declaration_crud(
     assert r.json()["services"] == []
     r = await client.get(f"/api/apps/{app_id}/bindings", headers=alice_auth)
     assert [item["binding_id"] for item in r.json()["bindings"]] == ["dataset"]
+
+
+async def test_extension_service_invoke_api(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        capabilities=[
+            "data.read",
+            "data.write",
+            "external.fetch",
+            "external.write",
+        ],
+    )
+    body = {
+        "provider": "extension",
+        "mode": "write",
+        "base_url": "https://video.example.com",
+        "extension_id": "octop.video",
+        "service_token": "svc-token",
+        "read_tools": [
+            {
+                "name": "runs.get",
+                "method": "GET",
+                "path": "/v1/runs/{run_id}",
+                "input_schema": {"required": ["run_id"]},
+            }
+        ],
+        "write_tools": [
+            {
+                "name": "runs.create",
+                "method": "POST",
+                "path": "/v1/runs",
+                "input_schema": {"required": ["run_id", "title"]},
+            },
+            {
+                "name": "video.submit",
+                "method": "POST",
+                "path": "/v1/runs/{run_id}/video",
+                "input_schema": {"required": ["run_id"]},
+            },
+        ],
+        "confirmation": {"video.submit": "run_owner"},
+        "cache_ttl_seconds": 0,
+        "max_calls_per_minute": 60,
+        "enabled": True,
+    }
+    r = await client.put(
+        f"/api/apps/{app_id}/services/video",
+        headers=alice_auth,
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+    declared = r.json()
+    assert declared["provider"] == "extension"
+    assert declared["mode"] == "write"
+    assert declared["token_configured"] is True
+    assert "secret_ref" not in declared
+    assert declared["allowed_tools"] == ["runs.get"]
+
+    async def fake_validate(self: AppService, _url: str) -> None:
+        return None
+
+    async def fake_execute(
+        self: AppService,
+        _declaration: object,
+        tool_def: dict[str, object],
+        args: dict[str, object],
+        *,
+        app_id: str,
+        actor_user_id: int,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        return {
+            "tool": tool_def["name"],
+            "run_id": args.get("run_id"),
+            "actor": actor_user_id,
+            "app_id": app_id,
+            "key": idempotency_key,
+        }
+
+    monkeypatch.setattr(AppService, "_validate_extension_url", fake_validate)
+    monkeypatch.setattr(AppService, "_execute_extension_call", fake_execute)
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/invoke",
+        headers=alice_auth,
+        json={
+            "tool": "runs.create",
+            "args": {"run_id": "run_1", "title": "夏季新品"},
+            "idempotency_key": "k1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    first = r.json()
+    assert first["ok"] is True
+    assert first["status"] == "succeeded"
+    assert first["result"]["run_id"] == "run_1"
+    assert first["op_id"].startswith("op_")
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/invoke",
+        headers=alice_auth,
+        json={
+            "tool": "runs.create",
+            "args": {"run_id": "run_1", "title": "夏季新品"},
+            "idempotency_key": "k1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["op_id"] == first["op_id"]
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/invoke",
+        headers=alice_auth,
+        json={
+            "tool": "runs.create",
+            "args": {"run_id": "run_1", "title": "改过的标题"},
+            "idempotency_key": "k1",
+        },
+    )
+    assert r.status_code == 409, r.text
+
+    r = await client.get(
+        f"/api/apps/{app_id}/services/video/operations/{first['op_id']}",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "succeeded"
+    assert r.json()["result"]["run_id"] == "run_1"
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/invoke",
+        headers=alice_auth,
+        json={
+            "tool": "video.submit",
+            "args": {"run_id": "run_1"},
+            "idempotency_key": "submit-1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    challenge = r.json()
+    assert challenge["confirmation_required"] is True
+    assert challenge["confirmation_token"]
+    assert challenge["ok"] is False
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/invoke",
+        headers=alice_auth,
+        json={
+            "tool": "video.submit",
+            "args": {"run_id": "run_1"},
+            "idempotency_key": "submit-1",
+            "confirmation_token": challenge["confirmation_token"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    assert r.json()["result"]["tool"] == "video.submit"
+
+
+async def test_extension_operation_resolve_api(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        capabilities=[
+            "data.read",
+            "data.write",
+            "external.fetch",
+            "external.write",
+        ],
+    )
+    body = {
+        "provider": "extension",
+        "mode": "write",
+        "base_url": "https://video.example.com",
+        "extension_id": "octop.video",
+        "write_tools": [
+            {
+                "name": "runs.create",
+                "method": "POST",
+                "path": "/v1/runs",
+                "input_schema": {"required": ["run_id"]},
+            }
+        ],
+        "cache_ttl_seconds": 0,
+        "max_calls_per_minute": 60,
+        "enabled": True,
+    }
+    r = await client.put(
+        f"/api/apps/{app_id}/services/video",
+        headers=alice_auth,
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+
+    async def fake_execute(
+        self: AppService,
+        _declaration: object,
+        _tool_def: object,
+        _args: object,
+        *,
+        app_id: str,
+        actor_user_id: int,
+        idempotency_key: str,
+    ) -> object:
+        raise OctopError(
+            ErrorCode.APP_SOURCE_INVALID,
+            "extension timeout",
+            details={"unknown": True},
+        )
+
+    monkeypatch.setattr(AppService, "_execute_extension_call", fake_execute)
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/invoke",
+        headers=alice_auth,
+        json={
+            "tool": "runs.create",
+            "args": {"run_id": "run_1"},
+            "idempotency_key": "k1",
+        },
+    )
+    assert r.status_code == 200, r.text
+    unknown = r.json()
+    assert unknown["ok"] is False
+    assert unknown["status"] == "submission_unknown"
+    assert unknown["op_id"].startswith("op_")
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/operations/{unknown['op_id']}/resolve",
+        headers=alice_auth,
+        json={"status": "succeeded", "result": {"run_id": "run_1"}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "succeeded"
+    assert r.json()["result"] == {"run_id": "run_1"}
+
+    r = await client.get(
+        f"/api/apps/{app_id}/services/video/operations/{unknown['op_id']}",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "succeeded"
+
+
+async def test_extension_upload_and_media_api(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(
+        srv,
+        agent_id,
+        "alice",
+        capabilities=[
+            "data.read",
+            "data.write",
+            "external.fetch",
+            "external.write",
+        ],
+    )
+    body = {
+        "provider": "extension",
+        "mode": "write",
+        "base_url": "https://video.example.com",
+        "extension_id": "octop.video",
+        "service_token": "svc-token",
+        "read_tools": [
+            {
+                "name": "assets.content",
+                "method": "GET",
+                "path": "/v1/assets/{asset_id}/content",
+                "input_schema": {"required": ["asset_id"]},
+            }
+        ],
+        "write_tools": [
+            {
+                "name": "assets.upload",
+                "method": "POST",
+                "path": "/v1/assets/stream",
+                "input_schema": {"type": "object"},
+            }
+        ],
+        "cache_ttl_seconds": 0,
+        "max_calls_per_minute": 60,
+        "enabled": True,
+    }
+    r = await client.put(
+        f"/api/apps/{app_id}/services/video",
+        headers=alice_auth,
+        json=body,
+    )
+    assert r.status_code == 200, r.text
+
+    async def fake_upload(
+        self: AppService,
+        row: object,
+        *,
+        name: str,
+        content: object,
+        content_length: int | None,
+        filename: str,
+        content_type: str,
+        purpose: str,
+        actor_user_id: int,
+    ) -> dict[str, object]:
+        return {
+            "asset_id": "asset_1",
+            "name": filename,
+            "purpose": purpose,
+            "actor": actor_user_id,
+        }
+
+    async def fake_media(
+        self: AppService,
+        row: object,
+        *,
+        name: str,
+        asset_id: str,
+        range_header: str = "",
+        actor_user_id: int = 0,
+    ) -> ServiceMediaStream:
+        async def stream() -> object:
+            yield b"frame"
+
+        return ServiceMediaStream(
+            status_code=206 if range_header else 200,
+            headers={
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-4/10" if range_header else "",
+            },
+            body=stream(),
+        )
+
+    monkeypatch.setattr(AppService, "upload_service_asset", fake_upload)
+    monkeypatch.setattr(AppService, "open_media_stream", fake_media)
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/upload?purpose=reference_video",
+        headers=alice_auth,
+        files={"file": ("clip.mp4", b"abcdef", "video/mp4")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["value"]["asset_id"] == "asset_1"
+    assert r.json()["value"]["purpose"] == "reference_video"
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/upload-sessions",
+        headers=alice_auth,
+        json={
+            "filename": "clip.mp4",
+            "content_type": "video/mp4",
+            "size": 6,
+            "purpose": "reference_video",
+        },
+    )
+    assert r.status_code == 200, r.text
+    upload_id = r.json()["upload_id"]
+    assert r.json()["max_chunk_bytes"] > 0
+
+    for index, payload in enumerate([b"abc", b"def"]):
+        r = await client.put(
+            f"/api/apps/{app_id}/services/video/upload-sessions/{upload_id}/chunks/{index}",
+            headers={**alice_auth, "Content-Type": "application/octet-stream"},
+            content=payload,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["received"] == (index + 1) * 3
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/upload-sessions/{upload_id}/finish",
+        headers=alice_auth,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["value"]["asset_id"] == "asset_1"
+
+    r = await client.post(
+        f"/api/apps/{app_id}/services/video/media-token",
+        headers=alice_auth,
+        json={"asset_id": "asset_1"},
+    )
+    assert r.status_code == 200, r.text
+    media = r.json()
+    assert media["url"].startswith(f"/api/apps/{app_id}/services/video/media/asset_1?token=")
+
+    # The media route is JWT-exempt: the scoped token is the credential.
+    r = await client.get(
+        media["url"],
+        headers={"Range": "bytes=0-4"},
+    )
+    assert r.status_code == 206, r.text
+    assert r.content == b"frame"
+    assert r.headers["content-range"] == "bytes 0-4/10"
+
+    r = await client.get(media["url"].replace("asset_1", "asset_2"))
+    assert r.status_code == 403, r.text
 
 
 async def test_service_declaration_auto_provisions_public_http(

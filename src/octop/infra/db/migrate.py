@@ -2217,6 +2217,69 @@ def _ensure_light_app_services_schema(db: DatabasePool) -> None:
     )
 
 
+def _ensure_light_app_external_write_schema(db: DatabasePool) -> None:
+    """Add v52 extension columns and the operation ledger idempotently."""
+    if not _table_exists(db, "light_app_services"):
+        return
+    columns = (
+        ("mode", "TEXT NOT NULL DEFAULT 'read'"),
+        ("base_url", "TEXT NOT NULL DEFAULT ''"),
+        ("extension_id", "TEXT NOT NULL DEFAULT ''"),
+        ("secret_ref", "TEXT NOT NULL DEFAULT ''"),
+        ("read_tools_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("write_tools_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("timeout_seconds", "INTEGER NOT NULL DEFAULT 30"),
+        ("max_request_bytes", "INTEGER NOT NULL DEFAULT 65536"),
+        ("max_response_bytes", "INTEGER NOT NULL DEFAULT 5242880"),
+        ("idempotency_required", "INTEGER NOT NULL DEFAULT 1"),
+        ("confirmation_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("allow_private_network", "INTEGER NOT NULL DEFAULT 0"),
+    )
+    for column, definition in columns:
+        _ensure_column(db, "light_app_services", column, definition)
+    pk = _integer_pk_sql(db)
+    with db.connect() as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS light_app_service_operations (
+              id                        {pk},
+              op_id                     TEXT NOT NULL UNIQUE,
+              service_id                TEXT NOT NULL
+                REFERENCES light_app_services(service_id) ON DELETE CASCADE,
+              app_id                    TEXT NOT NULL
+                REFERENCES light_apps(app_id) ON DELETE CASCADE,
+              tool                      TEXT NOT NULL,
+              args_hash                 TEXT NOT NULL,
+              idempotency_key           TEXT NOT NULL,
+              status                    TEXT NOT NULL,
+              confirmation_token_hash   TEXT NOT NULL DEFAULT '',
+              confirmation_expires_at   INTEGER,
+              result_json               TEXT NOT NULL DEFAULT '',
+              error_code                TEXT NOT NULL DEFAULT '',
+              error_message             TEXT NOT NULL DEFAULT '',
+              actor_user_id             INTEGER NOT NULL
+                REFERENCES users(id) ON DELETE CASCADE,
+              created_at                INTEGER NOT NULL,
+              updated_at                INTEGER NOT NULL,
+              expires_at                INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_light_app_service_operations_idem "
+            "ON light_app_service_operations(service_id, tool, actor_user_id, idempotency_key) "
+            "WHERE idempotency_key <> ''"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_service_operations_app "
+            "ON light_app_service_operations(app_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_light_app_service_operations_status "
+            "ON light_app_service_operations(status, created_at)"
+        )
+
+
 def _ensure_app_setup_plans_schema(db: DatabasePool) -> None:
     """Create the v45 setup-plan table and app link idempotently."""
     pk = _integer_pk_sql(db)
@@ -3576,6 +3639,13 @@ def _apply_sqlite_migration(db: DatabasePool, version: int, path: Path) -> None:
         with db.connect() as conn:
             conn.execute("UPDATE _schema_version SET version = ?", (version,))
         return
+    if version == 52:
+        # ADD COLUMN / CREATE TABLE are not replay-safe on SQLite; the helper
+        # also repairs databases whose recorded version skipped this file.
+        _ensure_light_app_external_write_schema(db)
+        with db.connect() as conn:
+            conn.execute("UPDATE _schema_version SET version = ?", (version,))
+        return
     sql = path.read_text(encoding="utf-8")
     with db.connect() as conn:
         conn.executescript(sql)
@@ -3886,6 +3956,14 @@ def run_migrations(db: DatabasePool) -> None:
                 else:
                     conn.execute("UPDATE _schema_version SET version = ?", (version,))
             continue
+        if version == 52:
+            _ensure_light_app_external_write_schema(db)
+            with db.connect() as conn:
+                if db.dialect == "postgresql":
+                    conn.execute("UPDATE _schema_version SET version = %s", (version,))
+                else:
+                    conn.execute("UPDATE _schema_version SET version = ?", (version,))
+            continue
         if db.dialect == "postgresql":
             sql = path.read_text(encoding="utf-8")
             with db.connect() as conn, conn.transaction():
@@ -3929,6 +4007,7 @@ def run_migrations(db: DatabasePool) -> None:
     _ensure_light_apps_schema(db)
     _ensure_light_app_rows_schema(db)
     _ensure_light_app_services_schema(db)
+    _ensure_light_app_external_write_schema(db)
     _ensure_light_app_events_schema(db)
     _ensure_external_deliveries_result_schema(db)
     _ensure_light_app_webhooks_schema(db)

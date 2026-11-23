@@ -47,6 +47,11 @@ def test_exempt_paths() -> None:
     assert not is_jwt_exempt_path("/api/workspace-preview")
     assert is_jwt_exempt_path("/api/hooks/src-1")
     assert not is_jwt_exempt_path("/api/hooks")
+    # Same-origin media proxies: only the exact asset path is token-authenticated.
+    assert is_jwt_exempt_path("/api/apps/app_1/services/video/media/asset_1")
+    assert not is_jwt_exempt_path("/api/apps/app_1/services/video/media")
+    assert not is_jwt_exempt_path("/api/apps/app_1/services/video/media/asset_1/extra")
+    assert not is_jwt_exempt_path("/api/apps/app_1/services/video/invoke")
     assert not is_jwt_exempt_path("/api/external/sources")
     assert not is_jwt_exempt_path("/api/auth/oidc/config")
     assert not is_jwt_exempt_path("/api/auth/oauth/providers/feishu")

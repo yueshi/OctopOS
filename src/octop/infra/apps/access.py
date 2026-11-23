@@ -31,6 +31,7 @@ class Action(StrEnum):
     AGGREGATE = "aggregate"
     AI = "ai"
     SERVICE_CALL = "service_call"
+    SERVICE_INVOKE = "service_invoke"
     EMIT_EVENT = "emit_event"
     MANAGE_STRUCTURE = "manage_structure"
     MANAGE_APP_SETTINGS = "manage_app_settings"
@@ -217,6 +218,8 @@ def authorize(
             return role != ROLE_PARTICIPATE
         if action in {Action.AI, Action.SERVICE_CALL, Action.EMIT_EVENT}:
             return role != ROLE_PARTICIPATE
+        if action is Action.SERVICE_INVOKE:
+            return role in {ROLE_OWNER, ROLE_EDIT_STRUCTURE, ROLE_EDIT_DATA}
         if action in {Action.MANAGE_ASSETS, Action.RUN_SOURCE, Action.UPLOAD_IMPORT}:
             return role in _EDIT_ROLES
         if action is Action.RUN_GAME:

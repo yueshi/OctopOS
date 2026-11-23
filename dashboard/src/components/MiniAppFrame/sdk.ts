@@ -215,6 +215,78 @@ export const APP_SDK = `(function () {
         },
         image: function (url) {
           return call("serviceImage", { name: name || "", url: url || "" });
+        },
+        invoke: function (tool, args, options) {
+          var opts = options || {};
+          var key = opts.idempotencyKey || (
+            "k_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+          );
+          return call("serviceInvoke", {
+            name: name || "",
+            tool: tool || "",
+            args: args || {},
+            idempotencyKey: key,
+            confirmationToken: opts.confirmationToken || ""
+          });
+        },
+        operation: function (opId) {
+          return call("serviceOperation", { name: name || "", opId: opId || "" });
+        },
+        resolveOperation: function (opId, status, options) {
+          var opts = options || {};
+          return call("serviceResolveOperation", {
+            name: name || "",
+            opId: opId || "",
+            status: status || "failed",
+            result: opts.result === undefined ? null : opts.result,
+            errorMessage: opts.errorMessage || ""
+          });
+        },
+        upload: function (file, options) {
+          if (!file || typeof file.slice !== "function") {
+            return Promise.reject(new Error("upload requires a File"));
+          }
+          var opts = options || {};
+          return call("serviceUploadStart", {
+            name: name || "",
+            fileName: file.name || "upload",
+            fileType: file.type || "",
+            size: file.size,
+            purpose: opts.purpose || ""
+          }).then(function (start) {
+            var uploadId = String((start && start.upload_id) || "");
+            var chunkBytes = Number((start && start.max_chunk_bytes) || 4194304);
+            var index = 0;
+            function send(offset) {
+              if (offset >= file.size) {
+                return call("serviceUploadFinish", {
+                  name: name || "",
+                  uploadId: uploadId
+                }, 300000);
+              }
+              var end = Math.min(offset + chunkBytes, file.size);
+              return file.slice(offset, end).arrayBuffer().then(function (buffer) {
+                return call("serviceUploadChunk", {
+                  name: name || "",
+                  uploadId: uploadId,
+                  index: index,
+                  bytes: buffer
+                }, 120000).then(function () {
+                  index += 1;
+                  return send(end);
+                });
+              });
+            }
+            return send(0);
+          });
+        },
+        mediaUrl: function (assetId) {
+          return call("serviceMediaToken", {
+            name: name || "",
+            assetId: assetId || ""
+          }).then(function (result) {
+            return result && result.url ? result.url : "";
+          });
         }
       };
     }
@@ -409,6 +481,8 @@ export interface BuildSrcDocOptions {
   sdk?: string;
   /** Locale exposed to system apps as ``window.__OCTOP_LOCALE__``. */
   locale?: string;
+  /** CSP for this app; defaults to the static APP_CSP. */
+  csp?: string;
 }
 
 export function buildSrcDoc(
@@ -418,14 +492,18 @@ export function buildSrcDoc(
   // Old apps may predate the write-time rule; never run one whose static HTML
   // would create a fresh realm before the freeze can protect it.
   if (hasEmbeddedFrame(html)) {
-    return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${APP_CSP}">${APP_HOST_STYLE}</head><body><p>This MiniApp embeds a frame and cannot be displayed.</p></body></html>`;
+    return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${
+      options.csp ?? APP_CSP
+    }">${APP_HOST_STYLE}</head><body><p>This MiniApp embeds a frame and cannot be displayed.</p></body></html>`;
   }
   const localeScript = options.locale
     ? `<script>window.__OCTOP_LOCALE__=${JSON.stringify(
         options.locale,
       )};</script>`
     : "";
-  const head = `<meta http-equiv="Content-Security-Policy" content="${APP_CSP}">${localeScript}<script>${
+  const head = `<meta http-equiv="Content-Security-Policy" content="${
+    options.csp ?? APP_CSP
+  }">${localeScript}<script>${
     options.sdk ?? APP_SDK
   }</script>${APP_HOST_STYLE}`;
   // Pull the first <html ...> tag out so the freeze script can precede every

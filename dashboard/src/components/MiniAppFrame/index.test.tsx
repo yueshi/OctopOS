@@ -31,7 +31,7 @@ vi.mock("../../api/modules/apps", () => ({
     appendRow: vi.fn(async () => ({ row_id: "row_1" })),
     updateRow: vi.fn(async () => ({ row_id: "row_1", row: {}, version: 2 })),
     deleteRow: vi.fn(async () => ({ deleted: "row_1" })),
-    get: vi.fn(),
+    get: vi.fn(async () => ({ media_paths: [] })),
     asset: vi.fn(),
     generate: vi.fn(),
     reportViolation: vi.fn(),

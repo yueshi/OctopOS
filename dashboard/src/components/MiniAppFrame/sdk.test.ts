@@ -38,6 +38,19 @@ describe("APP_SDK", () => {
     expect(APP_SDK).toContain('call("serviceImage"');
   });
 
+  it("exposes external write, upload, and media helpers", () => {
+    expect(APP_SDK).toContain('call("serviceInvoke"');
+    expect(APP_SDK).toContain('call("serviceOperation"');
+    expect(APP_SDK).toContain('call("serviceResolveOperation"');
+    expect(APP_SDK).toContain('call("serviceUploadStart"');
+    expect(APP_SDK).toContain('call("serviceUploadChunk"');
+    expect(APP_SDK).toContain('call("serviceUploadFinish"');
+    expect(APP_SDK).toContain('call("serviceMediaToken"');
+    expect(APP_SDK).toContain("idempotencyKey");
+    expect(APP_SDK).toContain("confirmationToken");
+    expect(APP_SDK).toContain("mediaUrl: function");
+  });
+
   it("exposes the event inbox", () => {
     expect(APP_SDK).toContain('call("events"');
     expect(APP_SDK).toContain('call("ackEvents"');

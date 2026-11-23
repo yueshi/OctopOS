@@ -246,6 +246,51 @@ export interface AppTask {
 export interface AppDetail extends AppSummary {
   columns: AppColumn[];
   tables: AppTable[];
+  /** Same-origin media path prefixes allowed by the page CSP. */
+  media_paths?: string[];
+}
+
+export interface ServiceInvokeResult {
+  ok: boolean;
+  op_id: string;
+  status: string;
+  result?: unknown;
+  error_code?: string;
+  error_message?: string;
+  confirmation_required: boolean;
+  confirmation_token?: string | null;
+  expires_at?: number | null;
+  args_hash?: string;
+}
+
+export interface ServiceOperationResult {
+  op_id: string;
+  tool: string;
+  status: string;
+  result?: unknown;
+  error_code?: string;
+  error_message?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ServiceUploadStart {
+  upload_id: string;
+  max_chunk_bytes: number;
+  expires_in: number;
+}
+
+export interface ServiceUploadChunk {
+  upload_id: string;
+  next_index: number;
+  received: number;
+  size: number;
+}
+
+export interface ServiceMediaToken {
+  token: string;
+  expires_at: number;
+  url: string;
 }
 
 export interface RestoreIssue {
@@ -843,10 +888,17 @@ export interface AppBindingInput {
   enabled?: boolean;
 }
 
+export interface ServiceToolDeclaration {
+  name: string;
+  method: string;
+  path: string;
+  input_schema: Record<string, unknown>;
+}
+
 export interface AppServiceDeclaration {
   service_id: string;
   name: string;
-  provider: "connector" | "external";
+  provider: "connector" | "external" | "extension";
   connector_instance_id: string;
   allowed_tools: string[];
   allowed_url_prefixes: string[];
@@ -857,10 +909,22 @@ export interface AppServiceDeclaration {
   enabled: boolean;
   created_at: number;
   updated_at: number;
+  mode?: "read" | "write";
+  base_url?: string;
+  extension_id?: string;
+  token_configured?: boolean;
+  read_tools?: ServiceToolDeclaration[];
+  write_tools?: ServiceToolDeclaration[];
+  timeout_seconds?: number;
+  max_request_bytes?: number;
+  max_response_bytes?: number;
+  idempotency_required?: boolean;
+  confirmation?: Record<string, string>;
+  allow_private_network?: boolean;
 }
 
 export interface AppServiceInput {
-  provider: "connector" | "external";
+  provider: "connector" | "external" | "extension";
   connector_instance_id: string;
   allowed_tools: string[];
   allowed_url_prefixes?: string[];
@@ -869,6 +933,18 @@ export interface AppServiceInput {
   max_calls_per_minute?: number;
   public_live?: boolean;
   enabled?: boolean;
+  mode?: "read" | "write";
+  base_url?: string;
+  extension_id?: string;
+  service_token?: string;
+  read_tools?: ServiceToolDeclaration[];
+  write_tools?: ServiceToolDeclaration[];
+  timeout_seconds?: number;
+  max_request_bytes?: number;
+  max_response_bytes?: number;
+  idempotency_required?: boolean;
+  confirmation?: Record<string, string>;
+  allow_private_network?: boolean;
 }
 
 function encodeId(appId: string): string {
@@ -1148,6 +1224,113 @@ export const appsApi = {
         method: "POST",
         body: JSON.stringify({ url }),
       },
+    ),
+
+  invokeService: (
+    appId: string,
+    name: string,
+    body: {
+      tool: string;
+      args: Record<string, unknown>;
+      idempotency_key: string;
+      confirmation_token?: string;
+    },
+  ) =>
+    request<ServiceInvokeResult>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(name)}/invoke`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  getServiceOperation: (appId: string, name: string, opId: string) =>
+    request<ServiceOperationResult>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/operations/${encodeURIComponent(opId)}`,
+    ),
+
+  resolveServiceOperation: (
+    appId: string,
+    name: string,
+    opId: string,
+    body: {
+      status: "succeeded" | "failed" | "cancelled";
+      result?: unknown;
+      error_message?: string;
+    },
+  ) =>
+    request<ServiceOperationResult>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/operations/${encodeURIComponent(opId)}/resolve`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  uploadServiceAsset: (
+    appId: string,
+    name: string,
+    file: File,
+    purpose: string,
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    const query = purpose ? `?purpose=${encodeURIComponent(purpose)}` : "";
+    return requestUpload<{ value: unknown }>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/upload${query}`,
+      form,
+    );
+  },
+
+  startServiceUpload: (
+    appId: string,
+    name: string,
+    body: {
+      filename: string;
+      content_type: string;
+      size: number;
+      purpose: string;
+    },
+  ) =>
+    request<ServiceUploadStart>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/upload-sessions`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  uploadServiceChunk: (
+    appId: string,
+    name: string,
+    uploadId: string,
+    index: number,
+    bytes: Uint8Array,
+  ) =>
+    request<ServiceUploadChunk>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/upload-sessions/${encodeURIComponent(uploadId)}/chunks/${index}`,
+      {
+        method: "PUT",
+        body: bytes as BodyInit,
+        headers: { "Content-Type": "application/octet-stream" },
+      },
+    ),
+
+  finishServiceUpload: (appId: string, name: string, uploadId: string) =>
+    request<{ value: unknown }>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/upload-sessions/${encodeURIComponent(uploadId)}/finish`,
+      { method: "POST" },
+    ),
+
+  issueServiceMediaToken: (appId: string, name: string, assetId: string) =>
+    request<ServiceMediaToken>(
+      `/apps/${encodeId(appId)}/services/${encodeURIComponent(
+        name,
+      )}/media-token`,
+      { method: "POST", body: JSON.stringify({ asset_id: assetId }) },
     ),
 
   setTableVisibility: (

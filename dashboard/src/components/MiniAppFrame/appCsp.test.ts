@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { APP_CSP, WRAPPER_CSP } from "./appCsp";
+import { APP_CSP, WRAPPER_CSP, buildAppCsp, buildWrapperCsp } from "./appCsp";
 
 describe("APP_CSP", () => {
   it("blocks remote resources so app rows cannot be exfiltrated", () => {
@@ -36,5 +36,35 @@ describe("WRAPPER_CSP", () => {
     expect(WRAPPER_CSP).toContain("font-src data:");
     expect(WRAPPER_CSP).toContain("media-src data: blob:");
     expect(WRAPPER_CSP).toBe(`${APP_CSP}; frame-src 'none'`);
+  });
+});
+
+describe("buildAppCsp", () => {
+  it("allows only the declared same-origin media prefixes", () => {
+    const origin = window.location.origin;
+    const csp = buildAppCsp(["/api/apps/app_1/services/video/media/"]);
+    expect(csp).toContain(
+      `img-src data: blob: ${origin}/api/apps/app_1/services/video/media/;`,
+    );
+    expect(csp).toContain(
+      `media-src data: blob: ${origin}/api/apps/app_1/services/video/media/;`,
+    );
+    // No wildcard or scheme-wide allowance.
+    expect(csp).not.toContain("https:");
+    expect(csp).not.toContain("http://*");
+    expect(csp).not.toContain("https://*");
+  });
+
+  it("falls back to the static policy without valid media paths", () => {
+    expect(buildAppCsp([])).toBe(APP_CSP);
+    expect(buildAppCsp(["/media", "../evil/", "/a;b/", "https://evil/"])).toBe(
+      APP_CSP,
+    );
+  });
+
+  it("keeps the wrapper navigation ban while extending media", () => {
+    const csp = buildWrapperCsp(["/api/apps/app_1/services/video/media/"]);
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).toContain("media-src data: blob:");
   });
 });

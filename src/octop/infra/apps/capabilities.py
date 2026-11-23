@@ -28,6 +28,7 @@ CAP_AI_GENERATE = "ai.generate"
 CAP_AI_TASK = "ai.agent_task"
 CAP_GAME_LAUNCH = "game.launch"
 CAP_EXTERNAL_FETCH = "external.fetch"
+CAP_EXTERNAL_WRITE = "external.write"
 CAP_EVENTS_EMIT = "events.emit"
 CAP_SCHEDULES_MANAGE = "schedules.manage"
 
@@ -43,6 +44,7 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     CAP_AI_TASK,
     CAP_GAME_LAUNCH,
     CAP_EXTERNAL_FETCH,
+    CAP_EXTERNAL_WRITE,
     CAP_EVENTS_EMIT,
     CAP_SCHEDULES_MANAGE,
 )
@@ -169,6 +171,7 @@ __all__ = [
     "CAP_EVENTS_READ",
     "CAP_EXTERNAL_FETCH",
     "CAP_EXTERNAL_OPEN",
+    "CAP_EXTERNAL_WRITE",
     "CAP_GAME_LAUNCH",
     "CAP_SCHEDULES_MANAGE",
     "LEGACY_CAPABILITIES",

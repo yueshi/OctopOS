@@ -1,0 +1,19 @@
+{
+  "id": "video-workbench",
+  "version": 1,
+  "name": { "zh": "视频工作台", "en": "Video Workbench" },
+  "description": {
+    "zh": "多人创建视频任务、上传参考视频、查看进度并审片。",
+    "en": "Create video runs, upload references, follow progress, and review results."
+  },
+  "category": "operations",
+  "tags": ["video", "review", "production", "external-service"],
+  "capabilities": [
+    "data.read",
+    "data.write",
+    "external.fetch",
+    "external.write"
+  ],
+  "schema": "schema.json",
+  "html": "app.html"
+}

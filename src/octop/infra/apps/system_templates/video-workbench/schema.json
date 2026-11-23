@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "columns": [
+    { "name": "title", "label": "标题", "type": "string", "required": true },
+    { "name": "reference_asset_id", "label": "参考视频", "type": "string" },
+    { "name": "run_id", "label": "任务 ID", "type": "string" },
+    {
+      "name": "review_decision",
+      "label": "审片结论",
+      "type": "enum",
+      "values": ["approve", "reject", "needs_review"]
+    },
+    { "name": "review_note", "label": "审片意见", "type": "text" }
+  ]
+}

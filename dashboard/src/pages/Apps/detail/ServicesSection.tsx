@@ -21,6 +21,7 @@ import {
   type AppServiceDeclaration,
   type AppServiceInput,
   type AppSourceTool,
+  type ServiceToolDeclaration,
 } from "../../../api/modules/apps";
 import {
   connectorsApi,
@@ -52,6 +53,79 @@ const PUBLIC_HTTP_TOOLS: AppSourceTool[] = [
     input_schema: {},
   },
 ];
+
+const V1B_READ_TOOLS: ServiceToolDeclaration[] = [
+  {
+    name: "runs.list",
+    method: "GET",
+    path: "/v1/runs",
+    input_schema: { type: "object" },
+  },
+  {
+    name: "runs.get",
+    method: "GET",
+    path: "/v1/runs/{run_id}",
+    input_schema: { type: "object", required: ["run_id"] },
+  },
+  {
+    name: "assets.content",
+    method: "GET",
+    path: "/v1/assets/{asset_id}/content",
+    input_schema: { type: "object", required: ["asset_id"] },
+  },
+];
+
+const V1B_WRITE_TOOLS: ServiceToolDeclaration[] = [
+  {
+    name: "runs.create",
+    method: "POST",
+    path: "/v1/runs",
+    input_schema: { type: "object", required: ["run_id", "title"] },
+  },
+  {
+    name: "review.decide",
+    method: "POST",
+    path: "/v1/runs/{run_id}/review",
+    input_schema: { type: "object", required: ["run_id", "decision"] },
+  },
+  {
+    name: "assets.upload",
+    method: "POST",
+    path: "/v1/assets/stream",
+    input_schema: { type: "object" },
+  },
+];
+
+function toolsToText(
+  tools: readonly ServiceToolDeclaration[] | undefined,
+): string {
+  return JSON.stringify(tools ?? [], null, 2);
+}
+
+function textToTools(
+  text: string,
+  invalidMessage: string,
+): ServiceToolDeclaration[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text || "[]");
+  } catch {
+    throw new Error(invalidMessage);
+  }
+  if (!Array.isArray(parsed)) throw new Error(invalidMessage);
+  for (const item of parsed) {
+    if (
+      !item ||
+      typeof item !== "object" ||
+      typeof (item as { name?: unknown }).name !== "string" ||
+      typeof (item as { method?: unknown }).method !== "string" ||
+      typeof (item as { path?: unknown }).path !== "string"
+    ) {
+      throw new Error(invalidMessage);
+    }
+  }
+  return parsed as ServiceToolDeclaration[];
+}
 
 function headersToText(headers: Record<string, string>): string {
   return Object.entries(headers)
@@ -85,7 +159,7 @@ interface Props {
 
 interface ServiceFormValues {
   name: string;
-  provider: "connector" | "external";
+  provider: "connector" | "external" | "extension";
   connector_instance_id: string;
   allowed_tools: string[];
   allowed_url_prefixes: string[];
@@ -93,6 +167,13 @@ interface ServiceFormValues {
   cache_ttl_seconds: number;
   max_calls_per_minute: number;
   enabled: boolean;
+  mode?: "read" | "write";
+  base_url?: string;
+  extension_id?: string;
+  service_token?: string;
+  read_tools_text?: string;
+  write_tools_text?: string;
+  allow_private_network?: boolean;
 }
 
 export default function ServicesSection({ appId, open, canManage }: Props) {
@@ -106,7 +187,9 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
   const [tools, setTools] = useState<AppSourceTool[]>([]);
   const [form] = Form.useForm<ServiceFormValues>();
   const instanceId = Form.useWatch("connector_instance_id", form);
-  const provider = Form.useWatch("provider", form);
+  const provider = Form.useWatch("provider", form) as
+    | ServiceFormValues["provider"]
+    | undefined;
   const selectedInstance = instances.find(
     (item) => item.instance_id === instanceId,
   );
@@ -166,6 +249,13 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
       cache_ttl_seconds: 300,
       max_calls_per_minute: 30,
       enabled: true,
+      mode: "write",
+      base_url: "",
+      extension_id: "",
+      service_token: "",
+      read_tools_text: toolsToText(V1B_READ_TOOLS),
+      write_tools_text: toolsToText(V1B_WRITE_TOOLS),
+      allow_private_network: false,
     });
     setModalOpen(true);
   };
@@ -182,6 +272,13 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
       cache_ttl_seconds: service.cache_ttl_seconds,
       max_calls_per_minute: service.max_calls_per_minute,
       enabled: service.enabled,
+      mode: service.mode ?? "write",
+      base_url: service.base_url ?? "",
+      extension_id: service.extension_id ?? "",
+      service_token: "",
+      read_tools_text: toolsToText(service.read_tools),
+      write_tools_text: toolsToText(service.write_tools),
+      allow_private_network: Boolean(service.allow_private_network),
     });
     setModalOpen(true);
   };
@@ -193,21 +290,57 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
     const supportsHeaders =
       instance?.kind === "http-extract" ||
       (values.provider === "external" && !values.connector_instance_id);
-    const body: AppServiceInput = {
-      provider: values.provider,
-      connector_instance_id: values.connector_instance_id,
-      allowed_tools: values.allowed_tools,
-      allowed_url_prefixes: values.allowed_url_prefixes,
-      request_headers: supportsHeaders
-        ? textToHeaders(
-            values.request_headers,
-            t("apps.services.requestHeadersInvalid"),
-          )
-        : {},
-      cache_ttl_seconds: values.cache_ttl_seconds,
-      max_calls_per_minute: values.max_calls_per_minute,
-      enabled: values.enabled,
-    };
+    let body: AppServiceInput;
+    if (values.provider === "extension") {
+      const readTools = textToTools(
+        values.read_tools_text ?? "[]",
+        t("apps.services.extensionToolsInvalid"),
+      );
+      const writeTools = textToTools(
+        values.write_tools_text ?? "[]",
+        t("apps.services.extensionToolsInvalid"),
+      );
+      body = {
+        provider: "extension",
+        connector_instance_id: "",
+        allowed_tools: [],
+        allowed_url_prefixes: [],
+        request_headers: {},
+        cache_ttl_seconds: 0,
+        max_calls_per_minute: values.max_calls_per_minute,
+        enabled: values.enabled,
+        mode: values.mode ?? "write",
+        base_url: (values.base_url ?? "").trim(),
+        extension_id: (values.extension_id ?? "").trim(),
+        service_token: values.service_token?.trim()
+          ? values.service_token
+          : undefined,
+        read_tools: readTools,
+        write_tools: writeTools,
+        timeout_seconds: 30,
+        max_request_bytes: 65536,
+        max_response_bytes: 5_242_880,
+        idempotency_required: true,
+        confirmation: {},
+        allow_private_network: Boolean(values.allow_private_network),
+      };
+    } else {
+      body = {
+        provider: values.provider,
+        connector_instance_id: values.connector_instance_id,
+        allowed_tools: values.allowed_tools,
+        allowed_url_prefixes: values.allowed_url_prefixes,
+        request_headers: supportsHeaders
+          ? textToHeaders(
+              values.request_headers,
+              t("apps.services.requestHeadersInvalid"),
+            )
+          : {},
+        cache_ttl_seconds: values.cache_ttl_seconds,
+        max_calls_per_minute: values.max_calls_per_minute,
+        enabled: values.enabled,
+      };
+    }
     const saved = await appsApi.saveService(appId, values.name, body);
     setServices((current) => {
       const next = current.filter((item) => item.name !== saved.name);
@@ -229,18 +362,52 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
     }
   };
 
-  const toggle = async (service: AppServiceDeclaration, enabled: boolean) => {
-    try {
-      const saved = await appsApi.saveService(appId, service.name, {
-        provider: service.provider,
-        connector_instance_id: service.connector_instance_id,
-        allowed_tools: service.allowed_tools,
-        allowed_url_prefixes: service.allowed_url_prefixes,
-        request_headers: service.request_headers || {},
+  const toInput = (
+    service: AppServiceDeclaration,
+    enabled: boolean,
+  ): AppServiceInput => {
+    if (service.provider === "extension") {
+      return {
+        provider: "extension",
+        connector_instance_id: "",
+        allowed_tools: [],
+        allowed_url_prefixes: [],
+        request_headers: {},
         cache_ttl_seconds: service.cache_ttl_seconds,
         max_calls_per_minute: service.max_calls_per_minute,
         enabled,
-      });
+        mode: service.mode ?? "write",
+        base_url: service.base_url ?? "",
+        extension_id: service.extension_id ?? "",
+        read_tools: service.read_tools ?? [],
+        write_tools: service.write_tools ?? [],
+        timeout_seconds: service.timeout_seconds ?? 30,
+        max_request_bytes: service.max_request_bytes ?? 65536,
+        max_response_bytes: service.max_response_bytes ?? 5_242_880,
+        idempotency_required: service.idempotency_required ?? true,
+        confirmation: service.confirmation ?? {},
+        allow_private_network: Boolean(service.allow_private_network),
+      };
+    }
+    return {
+      provider: service.provider,
+      connector_instance_id: service.connector_instance_id,
+      allowed_tools: service.allowed_tools,
+      allowed_url_prefixes: service.allowed_url_prefixes,
+      request_headers: service.request_headers || {},
+      cache_ttl_seconds: service.cache_ttl_seconds,
+      max_calls_per_minute: service.max_calls_per_minute,
+      enabled,
+    };
+  };
+
+  const toggle = async (service: AppServiceDeclaration, enabled: boolean) => {
+    try {
+      const saved = await appsApi.saveService(
+        appId,
+        service.name,
+        toInput(service, enabled),
+      );
       setServices((current) =>
         current.map((item) => (item.name === saved.name ? saved : item)),
       );
@@ -312,7 +479,13 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Tag
-                  color={service.provider === "external" ? "default" : "purple"}
+                  color={
+                    service.provider === "extension"
+                      ? "geekblue"
+                      : service.provider === "external"
+                      ? "default"
+                      : "purple"
+                  }
                 >
                   {service.provider}
                 </Tag>
@@ -324,7 +497,9 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
                   style={{ fontSize: 12, flex: 1, minWidth: 0 }}
                   ellipsis
                 >
-                  {instanceLabel(service.connector_instance_id)}
+                  {service.provider === "extension"
+                    ? `${service.base_url ?? ""} · ${service.mode ?? "write"}`
+                    : instanceLabel(service.connector_instance_id)}
                 </Text>
                 {canManage && (
                   <>
@@ -359,17 +534,50 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
                 )}
               </div>
               <Space size={4} wrap style={{ marginTop: 6 }}>
-                {service.allowed_tools.map((tool) => (
-                  <Tag key={tool} style={{ marginInlineEnd: 0 }}>
-                    {tool}
-                  </Tag>
-                ))}
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {t("apps.services.limits", {
-                    ttl: service.cache_ttl_seconds,
-                    calls: service.max_calls_per_minute,
-                  })}
-                </Text>
+                {service.provider === "extension" ? (
+                  <>
+                    {(service.read_tools ?? []).map((tool) => (
+                      <Tag
+                        key={`r:${tool.name}`}
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        R:{tool.name}
+                      </Tag>
+                    ))}
+                    {(service.write_tools ?? []).map((tool) => (
+                      <Tag
+                        key={`w:${tool.name}`}
+                        color="blue"
+                        style={{ marginInlineEnd: 0 }}
+                      >
+                        W:{tool.name}
+                      </Tag>
+                    ))}
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {service.token_configured
+                        ? t("apps.services.extensionTokenConfigured")
+                        : t("apps.services.extensionTokenMissing")}
+                      {" · "}
+                      {t("apps.services.extensionTimeout", {
+                        seconds: service.timeout_seconds ?? 30,
+                      })}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    {service.allowed_tools.map((tool) => (
+                      <Tag key={tool} style={{ marginInlineEnd: 0 }}>
+                        {tool}
+                      </Tag>
+                    ))}
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {t("apps.services.limits", {
+                        ttl: service.cache_ttl_seconds,
+                        calls: service.max_calls_per_minute,
+                      })}
+                    </Text>
+                  </>
+                )}
               </Space>
             </div>
           ))}
@@ -426,79 +634,151 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
                   value: "connector",
                   label: t("apps.services.providerConnector"),
                 },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item
-            name="connector_instance_id"
-            label={t("apps.services.connector")}
-            extra={
-              provider === "external"
-                ? t("apps.services.publicHttpHint")
-                : undefined
-            }
-            rules={[
-              ({ getFieldValue }) => ({
-                validator(_, value) {
-                  if (getFieldValue("provider") === "connector" && !value) {
-                    return Promise.reject(
-                      new Error(t("apps.services.selectConnector")),
-                    );
-                  }
-                  return Promise.resolve();
+                {
+                  value: "extension",
+                  label: t("apps.services.providerExtension"),
                 },
-              }),
-            ]}
-          >
-            <Select
-              showSearch
-              optionFilterProp="label"
-              placeholder={t("apps.services.selectConnector")}
-              options={[
-                ...(provider === "external"
-                  ? [
-                      {
-                        value: "",
-                        label: t("apps.services.publicHttp"),
-                      },
-                    ]
-                  : []),
-                ...instances.map((item) => ({
-                  value: item.instance_id,
-                  label: `${item.display_name} (${item.kind})`,
-                })),
               ]}
-              onChange={() =>
-                form.setFieldsValue({
-                  allowed_tools: [],
-                })
-              }
             />
           </Form.Item>
-          <Form.Item
-            name="allowed_tools"
-            label={t("apps.services.allowedTools")}
-            rules={[{ required: true }]}
-            extra={t("apps.services.allowedToolsHint")}
-          >
-            <Select
-              mode="tags"
-              options={tools.map((tool) => ({
-                value: tool.name,
-                label: tool.description
-                  ? `${tool.name} — ${tool.description}`
-                  : tool.name,
-              }))}
-              tokenSeparators={[","]}
-            />
-          </Form.Item>
-          <Form.Item
-            name="allowed_url_prefixes"
-            label={t("apps.services.urlPrefixes")}
-            extra={t("apps.services.urlPrefixesHint")}
-          >
-            <Select mode="tags" tokenSeparators={[","]} />
-          </Form.Item>
+          {provider !== "extension" && (
+            <>
+              <Form.Item
+                name="connector_instance_id"
+                label={t("apps.services.connector")}
+                extra={
+                  provider === "external"
+                    ? t("apps.services.publicHttpHint")
+                    : undefined
+                }
+                rules={[
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (getFieldValue("provider") === "connector" && !value) {
+                        return Promise.reject(
+                          new Error(t("apps.services.selectConnector")),
+                        );
+                      }
+                      return Promise.resolve();
+                    },
+                  }),
+                ]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder={t("apps.services.selectConnector")}
+                  options={[
+                    ...(provider === "external"
+                      ? [
+                          {
+                            value: "",
+                            label: t("apps.services.publicHttp"),
+                          },
+                        ]
+                      : []),
+                    ...instances.map((item) => ({
+                      value: item.instance_id,
+                      label: `${item.display_name} (${item.kind})`,
+                    })),
+                  ]}
+                  onChange={() =>
+                    form.setFieldsValue({
+                      allowed_tools: [],
+                    })
+                  }
+                />
+              </Form.Item>
+              <Form.Item
+                name="allowed_tools"
+                label={t("apps.services.allowedTools")}
+                rules={[{ required: true }]}
+                extra={t("apps.services.allowedToolsHint")}
+              >
+                <Select
+                  mode="tags"
+                  options={tools.map((tool) => ({
+                    value: tool.name,
+                    label: tool.description
+                      ? `${tool.name} — ${tool.description}`
+                      : tool.name,
+                  }))}
+                  tokenSeparators={[","]}
+                />
+              </Form.Item>
+              <Form.Item
+                name="allowed_url_prefixes"
+                label={t("apps.services.urlPrefixes")}
+                extra={t("apps.services.urlPrefixesHint")}
+              >
+                <Select mode="tags" tokenSeparators={[","]} />
+              </Form.Item>
+            </>
+          )}
+          {provider === "extension" && (
+            <>
+              <Form.Item
+                name="base_url"
+                label={t("apps.services.extensionBaseUrl")}
+                rules={[{ required: true }]}
+                extra={t("apps.services.extensionBaseUrlHint")}
+              >
+                <Input placeholder="https://video.example.com" />
+              </Form.Item>
+              <Space style={{ display: "flex" }} align="start">
+                <Form.Item name="mode" label={t("apps.services.extensionMode")}>
+                  <Select
+                    style={{ width: 160 }}
+                    options={[
+                      {
+                        value: "write",
+                        label: t("apps.services.extensionModeWrite"),
+                      },
+                      {
+                        value: "read",
+                        label: t("apps.services.extensionModeRead"),
+                      },
+                    ]}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="extension_id"
+                  label={t("apps.services.extensionId")}
+                >
+                  <Input placeholder="octop.video" style={{ width: 200 }} />
+                </Form.Item>
+              </Space>
+              <Form.Item
+                name="service_token"
+                label={t("apps.services.extensionToken")}
+                extra={t("apps.services.extensionTokenHint")}
+              >
+                <Input.Password autoComplete="new-password" />
+              </Form.Item>
+              <Form.Item
+                name="read_tools_text"
+                label={t("apps.services.extensionReadTools")}
+                extra={t("apps.services.extensionToolsHint")}
+              >
+                <Input.TextArea rows={7} spellCheck={false} />
+              </Form.Item>
+              <Form.Item
+                name="write_tools_text"
+                label={t("apps.services.extensionWriteTools")}
+                extra={t("apps.services.extensionToolsHint")}
+              >
+                <Input.TextArea rows={8} spellCheck={false} />
+              </Form.Item>
+              <Form.Item
+                name="allow_private_network"
+                label={t("apps.services.extensionPrivateNetwork")}
+                valuePropName="checked"
+                extra={t("apps.services.extensionPrivateNetworkHint")}
+              >
+                <Switch />
+              </Form.Item>
+            </>
+          )}
           {supportsRequestHeaders && (
             <Form.Item
               name="request_headers"
@@ -512,12 +792,14 @@ export default function ServicesSection({ appId, open, canManage }: Props) {
             </Form.Item>
           )}
           <Space style={{ display: "flex" }} align="start">
-            <Form.Item
-              name="cache_ttl_seconds"
-              label={t("apps.services.cacheTtl")}
-            >
-              <InputNumber min={0} max={86400} style={{ width: 150 }} />
-            </Form.Item>
+            {provider !== "extension" && (
+              <Form.Item
+                name="cache_ttl_seconds"
+                label={t("apps.services.cacheTtl")}
+              >
+                <InputNumber min={0} max={86400} style={{ width: 150 }} />
+              </Form.Item>
+            )}
             <Form.Item
               name="max_calls_per_minute"
               label={t("apps.services.maxCalls")}

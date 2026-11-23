@@ -44,6 +44,7 @@ from octop.infra.apps.service import (
     MAX_ASSET_BYTES,
     MAX_BACKUP_BYTES,
     SCHEDULE_ACTION_SNAPSHOT_PUBLICATION,
+    SERVICE_MAX_UPLOAD_BYTES,
     AppRecord,
     AppService,
     AppTableView,
@@ -56,6 +57,7 @@ from octop.infra.apps.session import app_card_ids
 from octop.infra.apps.sources import GatewayToolRunner
 from octop.infra.apps.task_types import list_task_types
 from octop.infra.apps.tasks import AppTaskService
+from octop.infra.apps.upload_sessions import UPLOAD_CHUNK_BYTES
 from octop.infra.apps.webhooks import AppWebhookService
 from octop.infra.apps.wiring import (
     build_app_service,
@@ -65,7 +67,7 @@ from octop.infra.apps.wiring import (
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
-from octop.infra.users.principals import principal_of
+from octop.infra.users.principals import principal_from_user_row, principal_of
 from octop.infra.utils.locale import Locale, resolve_request_locale
 from octop.infra.utils.ulid import new_short_id
 
@@ -288,10 +290,20 @@ class SaveBindingBody(BaseModel):
     enabled: bool = Field(default=True, description="Whether the binding is active.")
 
 
+class ServiceToolOut(BaseModel):
+    name: str = Field(description="Tool name exposed to the page.")
+    method: str = Field(description="HTTP method used against the extension.")
+    path: str = Field(description="Extension path; {name} placeholders are filled from args.")
+    input_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Small JSON Schema subset used for argument validation.",
+    )
+
+
 class AppServiceOut(BaseModel):
     service_id: str = Field(description="Public service declaration id.")
     name: str = Field(description="Page-facing name used by octopApp.service().")
-    provider: str = Field(description="connector or external.")
+    provider: str = Field(description="connector, external or extension.")
     connector_instance_id: str = Field(description="Connector instance that runs the tool.")
     allowed_tools: list[str] = Field(description="Read-only tools the page may call.")
     allowed_url_prefixes: list[str] = Field(
@@ -306,15 +318,46 @@ class AppServiceOut(BaseModel):
     enabled: bool = Field(description="Whether the page may call this service.")
     created_at: int
     updated_at: int
+    mode: str = Field(default="read", description="read or write.")
+    base_url: str = Field(default="", description="Extension base URL (provider=extension).")
+    extension_id: str = Field(default="", description="Extension id from the bundle manifest.")
+    token_configured: bool = Field(
+        default=False,
+        description="Whether a service token is stored; the token itself is never returned.",
+    )
+    read_tools: list[ServiceToolOut] = Field(default_factory=list)
+    write_tools: list[ServiceToolOut] = Field(default_factory=list)
+    timeout_seconds: int = Field(default=30)
+    max_request_bytes: int = Field(default=65536)
+    max_response_bytes: int = Field(default=5242880)
+    idempotency_required: bool = Field(default=True)
+    confirmation: dict[str, str] = Field(default_factory=dict)
+    allow_private_network: bool = Field(
+        default=False,
+        description="Admin-only: allow http/private-network base URLs (same-host Compose).",
+    )
 
 
 class AppServicesResponse(BaseModel):
     services: list[AppServiceOut]
 
 
+class ServiceToolBody(BaseModel):
+    name: str = Field(description="Tool name exposed to the page.")
+    method: str = Field(default="", description="HTTP method (GET/HEAD or POST/PUT/PATCH/DELETE).")
+    path: str = Field(description="Extension path; {name} placeholders are filled from args.")
+    input_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Small JSON Schema subset: type/required/properties/enum.",
+    )
+
+
 class SaveAppServiceBody(BaseModel):
-    provider: Literal["connector", "external"] = Field(
-        description="connector: authenticated connector; external: public source."
+    provider: Literal["connector", "external", "extension"] = Field(
+        description=(
+            "connector: authenticated connector; external: public source; "
+            "extension: HTTP write/read service with tool contracts."
+        )
     )
     connector_instance_id: str = Field(
         default="",
@@ -331,8 +374,8 @@ class SaveAppServiceBody(BaseModel):
         ),
     )
     allowed_tools: list[str] = Field(
-        min_length=1,
-        description="Read-only tool names the page may call.",
+        default_factory=list,
+        description="Read-only tool names the page may call (connector/external).",
     )
     allowed_url_prefixes: list[str] = Field(
         default_factory=list,
@@ -352,6 +395,24 @@ class SaveAppServiceBody(BaseModel):
         description="Reserved for the R2.1b public-link live feature.",
     )
     enabled: bool = Field(default=True)
+    mode: Literal["read", "write"] = Field(default="read")
+    base_url: str = Field(default="", description="Extension base URL (provider=extension).")
+    extension_id: str = Field(default="")
+    service_token: str | None = Field(
+        default=None,
+        description="Write-only extension token; stored encrypted. Omit to keep the existing token.",
+    )
+    read_tools: list[ServiceToolBody] = Field(default_factory=list)
+    write_tools: list[ServiceToolBody] = Field(default_factory=list)
+    timeout_seconds: int = Field(default=30, ge=1, le=300)
+    max_request_bytes: int = Field(default=65536, ge=1024, le=1_048_576)
+    max_response_bytes: int = Field(default=5_242_880, ge=1024, le=5_242_880)
+    idempotency_required: bool = Field(default=True)
+    confirmation: dict[str, str] = Field(default_factory=dict)
+    allow_private_network: bool = Field(
+        default=False,
+        description="Admin-only: allow http/private-network base URLs (same-host Compose).",
+    )
 
 
 class ServiceCallBody(BaseModel):
@@ -369,6 +430,83 @@ class ServiceCallOut(BaseModel):
         default=None,
         description="Cache expiry, when the result was cached.",
     )
+
+
+class ServiceInvokeBody(BaseModel):
+    tool: str = Field(description="Write tool name; must be in write_tools.")
+    args: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str = Field(default="", description="Stable key for retries.")
+    confirmation_token: str = Field(
+        default="",
+        description="Token returned by the first invoke when confirmation is required.",
+    )
+
+
+class ServiceInvokeOut(BaseModel):
+    ok: bool = Field(description="True when the operation succeeded.")
+    op_id: str = Field(description="Operation id for polling and idempotent replay.")
+    status: str = Field(description="pending_confirmation, running, succeeded or failed.")
+    result: Any | None = Field(default=None)
+    error_code: str = Field(default="")
+    error_message: str = Field(default="")
+    confirmation_required: bool = Field(default=False)
+    confirmation_token: str | None = Field(default=None)
+    expires_at: int | None = Field(default=None)
+    args_hash: str = Field(default="")
+
+
+class ServiceOperationOut(BaseModel):
+    op_id: str
+    tool: str
+    status: str
+    result: Any | None = None
+    error_code: str = ""
+    error_message: str = ""
+    created_at: int
+    updated_at: int
+
+
+class ServiceOperationResolveBody(BaseModel):
+    status: Literal["succeeded", "failed", "cancelled"]
+    result: Any | None = Field(
+        default=None,
+        description="Optional small result; media/large objects stay in the extension.",
+    )
+    error_message: str = Field(default="", max_length=2000)
+
+
+class ServiceUploadOut(BaseModel):
+    value: Any = Field(description="Extension response, usually {asset_id, ...}.")
+
+
+class ServiceUploadStartBody(BaseModel):
+    filename: str = Field(default="upload", max_length=255)
+    content_type: str = Field(default="application/octet-stream", max_length=255)
+    size: int = Field(gt=0, description="Declared file size in bytes.")
+    purpose: str = Field(default="", max_length=64)
+
+
+class ServiceUploadStartOut(BaseModel):
+    upload_id: str
+    max_chunk_bytes: int
+    expires_in: int
+
+
+class ServiceUploadChunkOut(BaseModel):
+    upload_id: str
+    next_index: int
+    received: int
+    size: int
+
+
+class ServiceMediaTokenBody(BaseModel):
+    asset_id: str = Field(description="Extension asset id from the invoke/upload response.")
+
+
+class ServiceMediaTokenOut(BaseModel):
+    token: str
+    expires_at: int
+    url: str = Field(description="Same-origin media URL; append nothing else.")
 
 
 class ServiceImageBody(BaseModel):
@@ -583,6 +721,13 @@ class AppDetail(AppSummary):
     tables: list[AppTableOut] = Field(
         default_factory=list,
         description="Tables of the app; the first one is the main table.",
+    )
+    media_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Same-origin media path prefixes the sandboxed page may load. "
+            "Empty when the app has no extension media service."
+        ),
     )
 
 
@@ -954,6 +1099,7 @@ async def _app_detail(service: AppService, row: AppRecord) -> AppDetail:
         has_html=await service.has_html(row),
         has_preview=await service.has_preview(row),
         tables=await _table_outs(service, row),
+        media_paths=service.media_paths(row),
     )
 
 
@@ -2120,6 +2266,7 @@ async def restore_app(
         has_html=await service.has_html(row),
         has_preview=await service.has_preview(row),
         tables=await _table_outs(service, row),
+        media_paths=service.media_paths(row),
     )
 
 
@@ -2148,6 +2295,7 @@ async def get_app(
         has_html=await service.has_html(row),
         has_preview=await service.has_preview(row),
         tables=[await _table_out(service, row, table) for table in tables],
+        media_paths=service.media_paths(row),
     )
 
 
@@ -2427,6 +2575,34 @@ def _service_out(view: ServiceView) -> AppServiceOut:
         enabled=view.enabled,
         created_at=view.created_at,
         updated_at=view.updated_at,
+        mode=view.mode,
+        base_url=view.base_url,
+        extension_id=view.extension_id,
+        token_configured=view.token_configured,
+        read_tools=[
+            ServiceToolOut(
+                name=str(item.get("name") or ""),
+                method=str(item.get("method") or "GET"),
+                path=str(item.get("path") or ""),
+                input_schema=dict(item.get("input_schema") or {}),
+            )
+            for item in view.read_tools
+        ],
+        write_tools=[
+            ServiceToolOut(
+                name=str(item.get("name") or ""),
+                method=str(item.get("method") or "POST"),
+                path=str(item.get("path") or ""),
+                input_schema=dict(item.get("input_schema") or {}),
+            )
+            for item in view.write_tools
+        ],
+        timeout_seconds=view.timeout_seconds,
+        max_request_bytes=view.max_request_bytes,
+        max_response_bytes=view.max_response_bytes,
+        idempotency_required=view.idempotency_required,
+        confirmation=dict(view.confirmation),
+        allow_private_network=view.allow_private_network,
     )
 
 
@@ -2480,6 +2656,18 @@ async def save_app_service(
         enabled=body.enabled,
         actor_user_id=user.id,
         is_admin=user.is_admin,
+        mode=body.mode,
+        base_url=body.base_url,
+        extension_id=body.extension_id,
+        service_token=body.service_token,
+        read_tools=[item.model_dump() for item in body.read_tools],
+        write_tools=[item.model_dump() for item in body.write_tools],
+        timeout_seconds=body.timeout_seconds,
+        max_request_bytes=body.max_request_bytes,
+        max_response_bytes=body.max_response_bytes,
+        idempotency_required=body.idempotency_required,
+        confirmation=body.confirmation,
+        allow_private_network=body.allow_private_network,
     )
     _audit(
         server,
@@ -2545,11 +2733,429 @@ async def call_app_service(
         name=name,
         tool=body.tool,
         args=body.args,
+        actor_user_id=user.id,
     )
     return ServiceCallOut(
         value=result.value,
         cached=result.cached,
         expires_at=result.expires_at,
+    )
+
+
+def _decode_operation_result(raw: str) -> Any:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+@router.post(
+    "/{app_id}/services/{name}/invoke",
+    response_model=ServiceInvokeOut,
+    summary="Invoke an extension write tool",
+    description=(
+        "Calls one allowlisted write tool on a provider=extension service. "
+        "Requires edit_data and the ``external.write`` capability. Every call "
+        "needs an idempotency_key; high-risk tools return a confirmation "
+        "challenge on the first call and execute only after the token is "
+        "confirmed."
+    ),
+)
+async def invoke_app_service(
+    app_id: str,
+    name: str,
+    body: ServiceInvokeBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceInvokeOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    result = await _service_with_runner(server).invoke_service(
+        row,
+        name=name,
+        tool=body.tool,
+        args=body.args,
+        idempotency_key=body.idempotency_key,
+        confirmation_token=body.confirmation_token,
+        actor_user_id=user.id,
+        actor_is_admin=user.is_admin,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.invoke",
+        target=app_id,
+        payload={
+            "name": name.strip().lower(),
+            "tool": body.tool.strip(),
+            "op_id": result.op_id,
+            "status": result.status,
+        },
+    )
+    return ServiceInvokeOut(
+        ok=result.status == "succeeded",
+        op_id=result.op_id,
+        status=result.status,
+        result=result.result,
+        error_code=result.error_code,
+        error_message=result.error_message,
+        confirmation_required=result.confirmation_required,
+        confirmation_token=result.confirmation_token,
+        expires_at=result.expires_at,
+        args_hash=result.args_hash,
+    )
+
+
+@router.get(
+    "/{app_id}/services/{name}/operations/{op_id}",
+    response_model=ServiceOperationOut,
+    summary="Read an extension operation",
+    description="Returns the idempotent result of one invoke call.",
+)
+async def get_app_service_operation(
+    app_id: str,
+    name: str,
+    op_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceOperationOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    del name
+    op = _service_with_runner(server).get_service_operation(row, op_id)
+    return ServiceOperationOut(
+        op_id=op.op_id,
+        tool=op.tool,
+        status=op.status,
+        result=_decode_operation_result(op.result_json),
+        error_code=op.error_code,
+        error_message=op.error_message,
+        created_at=op.created_at,
+        updated_at=op.updated_at,
+    )
+
+
+@router.post(
+    "/{app_id}/services/{name}/operations/{op_id}/resolve",
+    response_model=ServiceOperationOut,
+    summary="Reconcile a submission_unknown operation",
+    description=(
+        "Marks a submission_unknown operation as succeeded/failed/cancelled "
+        "after checking the extension. Only the operator who submitted it, "
+        "the app owner, or an admin may resolve it."
+    ),
+)
+async def resolve_app_service_operation(
+    app_id: str,
+    name: str,
+    op_id: str,
+    body: ServiceOperationResolveBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceOperationOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    op = _service_with_runner(server).resolve_service_operation(
+        row,
+        op_id,
+        status=body.status,
+        result=body.result,
+        error_message=body.error_message,
+        actor_user_id=user.id,
+        actor_is_admin=user.is_admin,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.operation.resolve",
+        target=app_id,
+        payload={
+            "name": name.strip().lower(),
+            "op_id": op.op_id,
+            "status": op.status,
+        },
+    )
+    return ServiceOperationOut(
+        op_id=op.op_id,
+        tool=op.tool,
+        status=op.status,
+        result=_decode_operation_result(op.result_json),
+        error_code=op.error_code,
+        error_message=op.error_message,
+        created_at=op.created_at,
+        updated_at=op.updated_at,
+    )
+
+
+@router.post(
+    "/{app_id}/services/{name}/upload",
+    response_model=ServiceUploadOut,
+    summary="Upload a file to an extension service",
+    description=(
+        "Streams a file (50 MB max) to the service's declared ``assets.upload`` "
+        "write tool. Requires edit_data and ``external.write``."
+    ),
+)
+async def upload_app_service_asset(
+    app_id: str,
+    name: str,
+    file: UploadFile = File(...),  # noqa: B008
+    purpose: str = Query(default="", max_length=64),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceUploadOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    if file.size is not None and file.size > SERVICE_MAX_UPLOAD_BYTES:
+        raise _invalid_upload_size()
+
+    async def chunks() -> AsyncIterator[bytes]:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    value = await _service_with_runner(server).upload_service_asset(
+        row,
+        name=name,
+        content=chunks(),
+        content_length=file.size,
+        filename=file.filename or "upload",
+        content_type=file.content_type or "",
+        purpose=purpose,
+        actor_user_id=user.id,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.upload",
+        target=app_id,
+        payload={"name": name.strip().lower(), "purpose": purpose.split("/")[0][:32]},
+    )
+    return ServiceUploadOut(value=value)
+
+
+def _invalid_upload_size() -> OctopError:
+    return OctopError(
+        ErrorCode.APP_SOURCE_INVALID,
+        f"upload exceeds the {SERVICE_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+    )
+
+
+@router.post(
+    "/{app_id}/services/{name}/upload-sessions",
+    response_model=ServiceUploadStartOut,
+    summary="Start a chunked extension upload",
+    description=(
+        "Creates a temp upload session. The page sends 4 MB chunks through "
+        "the host instead of one large postMessage; finish streams the file "
+        "to the extension."
+    ),
+)
+async def start_app_service_upload(
+    app_id: str,
+    name: str,
+    body: ServiceUploadStartBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceUploadStartOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    result = _service_with_runner(server).start_upload_session(
+        row,
+        name=name,
+        filename=body.filename,
+        content_type=body.content_type,
+        purpose=body.purpose,
+        size=body.size,
+        actor_user_id=user.id,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.upload.start",
+        target=app_id,
+        payload={"name": name.strip().lower(), "upload_id": result["upload_id"]},
+    )
+    return ServiceUploadStartOut(**result)
+
+
+@router.put(
+    "/{app_id}/services/{name}/upload-sessions/{upload_id}/chunks/{index}",
+    response_model=ServiceUploadChunkOut,
+    summary="Append one chunk to an extension upload",
+    description="Raw application/octet-stream body; chunks must arrive in order.",
+)
+async def append_app_service_upload_chunk(
+    app_id: str,
+    name: str,
+    upload_id: str,
+    index: int,
+    request: Request,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceUploadChunkOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    data = await request.body()
+    if len(data) > UPLOAD_CHUNK_BYTES:
+        raise OctopError(ErrorCode.APP_SOURCE_INVALID, "upload chunk is too large")
+    result = _service_with_runner(server).append_upload_chunk(
+        row,
+        name=name,
+        upload_id=upload_id,
+        index=index,
+        data=data,
+        actor_user_id=user.id,
+    )
+    return ServiceUploadChunkOut(**result)
+
+
+@router.post(
+    "/{app_id}/services/{name}/upload-sessions/{upload_id}/finish",
+    response_model=ServiceUploadOut,
+    summary="Finish a chunked extension upload",
+    description="Streams the completed temp file to the extension and deletes the session.",
+)
+async def finish_app_service_upload(
+    app_id: str,
+    name: str,
+    upload_id: str,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceUploadOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_INVOKE)
+    value = await _service_with_runner(server).finish_upload_session(
+        row,
+        name=name,
+        upload_id=upload_id,
+        actor_user_id=user.id,
+    )
+    _audit(
+        server,
+        actor=f"user:{user.id}",
+        action="light_app.service.upload.finish",
+        target=app_id,
+        payload={"name": name.strip().lower(), "upload_id": upload_id},
+    )
+    return ServiceUploadOut(value=value)
+
+
+@router.post(
+    "/{app_id}/services/{name}/media-token",
+    response_model=ServiceMediaTokenOut,
+    summary="Mint a short-lived media URL",
+    description=(
+        "Returns a same-origin URL for one extension asset. The scoped token "
+        "is the only credential the iframe's <video>/<img> can send."
+    ),
+)
+async def issue_app_service_media_token(
+    app_id: str,
+    name: str,
+    body: ServiceMediaTokenBody,
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> ServiceMediaTokenOut:
+    _service_check, row, _decision = _authorize(server, user, app_id, Action.SERVICE_CALL)
+    payload = _service_with_runner(server).issue_media_token(
+        row,
+        name=name,
+        asset_id=body.asset_id,
+        user_id=user.id,
+    )
+    return ServiceMediaTokenOut(**payload)
+
+
+async def _serve_app_service_media(
+    *,
+    app_id: str,
+    name: str,
+    asset_id: str,
+    token: str,
+    request: Request,
+    server: OctopServer,
+    head: bool,
+) -> Response:
+    service = _service_with_runner(server)
+    row = service.get(app_id)
+    service_id = service.media_service_id(row, name)
+    user_id = service.verify_media_token(
+        token,
+        app_id=app_id,
+        service_id=service_id,
+        asset_id=asset_id,
+    )
+    if user_id is None or server.services is None:
+        raise OctopError(ErrorCode.APP_FORBIDDEN, "invalid or expired media token")
+    user_row = server.services.user_repo.get(user_id)
+    if user_row is None or user_row.disabled:
+        raise OctopError(ErrorCode.APP_FORBIDDEN, "media token user is disabled")
+    decision = service.authorize(principal_from_user_row(user_row), row, Action.VIEW_APP)
+    if not decision.allowed:
+        raise OctopError(ErrorCode.APP_FORBIDDEN, "media token user lost app access")
+    stream = await service.open_media_stream(
+        row,
+        name=name,
+        asset_id=asset_id,
+        range_header=request.headers.get("range", ""),
+        actor_user_id=user_id,
+    )
+    if head:
+        await stream.body.aclose()
+        return Response(status_code=stream.status_code, headers=stream.headers)
+    return StreamingResponse(
+        stream.body,
+        status_code=stream.status_code,
+        headers=stream.headers,
+    )
+
+
+@router.get(
+    "/{app_id}/services/{name}/media/{asset_id}",
+    response_class=StreamingResponse,
+    summary="Stream extension media with Range support",
+    description=(
+        "Same-origin media proxy. The request carries a short-lived scoped "
+        "token instead of a JWT; Range/206 are forwarded to the extension."
+    ),
+)
+async def get_app_service_media(
+    app_id: str,
+    name: str,
+    asset_id: str,
+    request: Request,
+    token: str = Query(..., description="Token from /media-token."),
+    server: OctopServer = Depends(get_server),
+) -> Response:
+    return await _serve_app_service_media(
+        app_id=app_id,
+        name=name,
+        asset_id=asset_id,
+        token=token,
+        request=request,
+        server=server,
+        head=False,
+    )
+
+
+@router.head(
+    "/{app_id}/services/{name}/media/{asset_id}",
+    include_in_schema=False,
+)
+async def head_app_service_media(
+    app_id: str,
+    name: str,
+    asset_id: str,
+    request: Request,
+    token: str = Query(..., description="Token from /media-token."),
+    server: OctopServer = Depends(get_server),
+) -> Response:
+    return await _serve_app_service_media(
+        app_id=app_id,
+        name=name,
+        asset_id=asset_id,
+        token=token,
+        request=request,
+        server=server,
+        head=True,
     )
 
 
@@ -3673,6 +4279,7 @@ async def update_app(
         has_html=await service.has_html(row),
         has_preview=await service.has_preview(row),
         tables=await _table_outs(service, row),
+        media_paths=service.media_paths(row),
     )
 
 

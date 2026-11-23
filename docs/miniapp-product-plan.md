@@ -637,4 +637,6 @@ GET /api/apps/{id}/rows?...     → 真正的数据
 | [miniapp-sandbox-hardening.md](./miniapp-sandbox-hardening.md) | 沙箱结构、CSP/wrapper 依据；§6 与 MCP Apps 的关系及「门面优先」结论 |
 | [miniapp-implementation-plan.md](./miniapp-implementation-plan.md) | 阶段执行细节、PR 顺序、决策门、验证清单 |
 | [miniapp-platform-roadmap.md](./miniapp-platform-roadmap.md) | R2/R3 需求来源与历史决策（含被本文推翻的原始设想） |
-| [ai-video-commerce-system.md](./ai-video-commerce-system.md) | 关联项目：审片台做 MiniApp、逐帧剪辑与经营 BI 留在 React 侧的分工依据 |
+| [miniapp-ai-native-plan.md](./miniapp-ai-native-plan.md) | AI 任务运行时、`usage_log` 归因、预算治理；任务/通知/用量复用的依据 |
+| [video-workbench-implementation-plan.md](./video-workbench-implementation-plan.md) | 视频工作台落地方案（2026-11-23 修订）：外部扩展服务、V1/V2 分期、写服务/媒体/回写边界 |
+| [ai-video-commerce-system.md](./ai-video-commerce-system.md) | 关联项目：审片台做 MiniApp、逐帧剪辑与经营 BI 留在 React 侧的分工依据；其 in-Octop 视频流水线落点已被上述方案取代 |

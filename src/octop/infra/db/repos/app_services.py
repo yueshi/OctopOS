@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from octop.infra.db.pool import DatabasePool
 from octop.infra.db.repos._base import (
@@ -39,6 +40,18 @@ def _json_dict(raw: object) -> dict[str, str]:
     return {str(key): str(value) for key, value in parsed.items()}
 
 
+def _json_objects(raw: object) -> tuple[dict[str, Any], ...]:
+    if not isinstance(raw, str) or not raw.strip():
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(item for item in parsed if isinstance(item, dict))
+
+
 @dataclass(frozen=True)
 class LightAppServiceRow:
     service_id: str
@@ -57,6 +70,18 @@ class LightAppServiceRow:
     created_by: int
     created_at: int
     updated_at: int
+    mode: str = "read"
+    base_url: str = ""
+    extension_id: str = ""
+    secret_ref: str = ""
+    read_tools: tuple[dict[str, Any], ...] = ()
+    write_tools: tuple[dict[str, Any], ...] = ()
+    timeout_seconds: int = 30
+    max_request_bytes: int = 65536
+    max_response_bytes: int = 5242880
+    idempotency_required: bool = True
+    confirmation: dict[str, str] = field(default_factory=dict)
+    allow_private_network: bool = False
 
     @classmethod
     def from_row(cls, r: DbRow) -> LightAppServiceRow:
@@ -77,6 +102,18 @@ class LightAppServiceRow:
             created_by=int(r["created_by"]),
             created_at=int(r["created_at"]),
             updated_at=int(r["updated_at"]),
+            mode=str(r["mode"] or "read"),
+            base_url=str(r["base_url"] or ""),
+            extension_id=str(r["extension_id"] or ""),
+            secret_ref=str(r["secret_ref"] or ""),
+            read_tools=_json_objects(r["read_tools_json"]),
+            write_tools=_json_objects(r["write_tools_json"]),
+            timeout_seconds=int(r["timeout_seconds"] or 30),
+            max_request_bytes=int(r["max_request_bytes"] or 65536),
+            max_response_bytes=int(r["max_response_bytes"] or 5242880),
+            idempotency_required=bool(int(r["idempotency_required"] or 0)),
+            confirmation=_json_dict(r["confirmation_json"]),
+            allow_private_network=bool(int(r["allow_private_network"] or 0)),
         )
 
 
@@ -130,6 +167,18 @@ class LightAppServiceRepo:
         public_live: bool,
         enabled: bool,
         created_by: int,
+        mode: str = "read",
+        base_url: str = "",
+        extension_id: str = "",
+        secret_ref: str = "",
+        read_tools: list[dict[str, Any]] | None = None,
+        write_tools: list[dict[str, Any]] | None = None,
+        timeout_seconds: int = 30,
+        max_request_bytes: int = 65536,
+        max_response_bytes: int = 5242880,
+        idempotency_required: bool = True,
+        confirmation: dict[str, str] | None = None,
+        allow_private_network: bool = False,
     ) -> LightAppServiceRow:
         service_id = self.allocate_id()
         ts = now_ts()
@@ -140,8 +189,11 @@ class LightAppServiceRepo:
                 "service_id, app_id, name, provider, connector_instance_id, "
                 "allowed_tools_json, allowed_url_prefixes_json, request_headers_json, "
                 "cache_ttl_seconds, max_calls_per_minute, public_live, enabled, "
-                "created_by, created_at, updated_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_by, created_at, updated_at, mode, base_url, extension_id, "
+                "secret_ref, read_tools_json, write_tools_json, timeout_seconds, "
+                "max_request_bytes, max_response_bytes, idempotency_required, "
+                "confirmation_json, allow_private_network"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     service_id,
                     app_id,
@@ -158,6 +210,18 @@ class LightAppServiceRepo:
                     created_by,
                     ts,
                     ts,
+                    mode,
+                    base_url,
+                    extension_id,
+                    secret_ref,
+                    json.dumps(read_tools or [], ensure_ascii=False),
+                    json.dumps(write_tools or [], ensure_ascii=False),
+                    timeout_seconds,
+                    max_request_bytes,
+                    max_response_bytes,
+                    int(idempotency_required),
+                    json.dumps(confirmation or {}, ensure_ascii=False),
+                    int(allow_private_network),
                 ),
             )
         row = self.get(service_id)
@@ -178,14 +242,29 @@ class LightAppServiceRepo:
         max_calls_per_minute: int,
         public_live: bool,
         enabled: bool,
+        mode: str = "read",
+        base_url: str = "",
+        extension_id: str = "",
+        secret_ref: str = "",
+        read_tools: list[dict[str, Any]] | None = None,
+        write_tools: list[dict[str, Any]] | None = None,
+        timeout_seconds: int = 30,
+        max_request_bytes: int = 65536,
+        max_response_bytes: int = 5242880,
+        idempotency_required: bool = True,
+        confirmation: dict[str, str] | None = None,
+        allow_private_network: bool = False,
     ) -> LightAppServiceRow | None:
         with self._db.transaction() as conn:
             conn.execute(
                 "UPDATE light_app_services SET "
                 "provider = ?, connector_instance_id = ?, allowed_tools_json = ?, "
                 "allowed_url_prefixes_json = ?, request_headers_json = ?, "
-                "cache_ttl_seconds = ?, "
-                "max_calls_per_minute = ?, public_live = ?, enabled = ?, updated_at = ? "
+                "cache_ttl_seconds = ?, max_calls_per_minute = ?, public_live = ?, "
+                "enabled = ?, mode = ?, base_url = ?, extension_id = ?, secret_ref = ?, "
+                "read_tools_json = ?, write_tools_json = ?, timeout_seconds = ?, "
+                "max_request_bytes = ?, max_response_bytes = ?, idempotency_required = ?, "
+                "confirmation_json = ?, allow_private_network = ?, updated_at = ? "
                 "WHERE service_id = ?",
                 (
                     provider,
@@ -197,6 +276,18 @@ class LightAppServiceRepo:
                     max_calls_per_minute,
                     int(public_live),
                     int(enabled),
+                    mode,
+                    base_url,
+                    extension_id,
+                    secret_ref,
+                    json.dumps(read_tools or [], ensure_ascii=False),
+                    json.dumps(write_tools or [], ensure_ascii=False),
+                    timeout_seconds,
+                    max_request_bytes,
+                    max_response_bytes,
+                    int(idempotency_required),
+                    json.dumps(confirmation or {}, ensure_ascii=False),
+                    int(allow_private_network),
                     now_ts(),
                     service_id,
                 ),

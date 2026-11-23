@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -48,6 +49,8 @@ _JWT_EXEMPT_PREFIXES = (
     # Public webhook ingress: HMAC signature and source id are the credentials.
     "/api/hooks/",
 )
+# Same-origin media proxies: the short-lived scoped token is the credential.
+_JWT_EXEMPT_PATTERNS = (re.compile(r"^/api/apps/[^/]+/services/[^/]+/media/[^/]+$"),)
 _JWT_EXEMPT_EXACT = (
     "/api/health",
     "/api/auth/login",
@@ -76,7 +79,11 @@ _JWT_EXEMPT_EXACT = (
 
 
 def is_jwt_exempt_path(path: str) -> bool:
-    return path in _JWT_EXEMPT_EXACT or any(path.startswith(p) for p in _JWT_EXEMPT_PREFIXES)
+    return (
+        path in _JWT_EXEMPT_EXACT
+        or any(path.startswith(p) for p in _JWT_EXEMPT_PREFIXES)
+        or any(pattern.match(path) for pattern in _JWT_EXEMPT_PATTERNS)
+    )
 
 
 def is_jwt_exempt_request(request: Request) -> bool:

@@ -8,6 +8,8 @@ caller.
 
 from __future__ import annotations
 
+import httpx
+
 from octop.infra.apps.ingress import AppIngressService
 from octop.infra.apps.service import AppService, ExternalToolRunner
 from octop.infra.apps.webhooks import AppWebhookService
@@ -19,6 +21,7 @@ def build_app_service(
     repos: RepoBundle,
     workspaces: object,
     external_tool_runner: ExternalToolRunner | None = None,
+    extension_http_transport: httpx.AsyncBaseTransport | None = None,
 ) -> AppService:
     return AppService(
         app_repo=repos.light_app_repo,
@@ -31,6 +34,8 @@ def build_app_service(
         access_code_repo=repos.app_access_code_repo,
         binding_repo=repos.app_binding_repo,
         service_repo=repos.app_service_repo,
+        service_operation_repo=repos.app_service_operation_repo,
+        extension_http_transport=extension_http_transport,
         connector_repo=repos.connector_repo,
         event_repo=repos.app_event_repo,
         schedule_repo=repos.app_schedule_repo,

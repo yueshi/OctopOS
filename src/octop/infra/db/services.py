@@ -15,6 +15,7 @@ from octop.infra.db.repos.app_ingress import LightAppIngressRepo
 from octop.infra.db.repos.app_join_codes import AppJoinCodeRepo
 from octop.infra.db.repos.app_member_invites import AppMemberInviteRepo
 from octop.infra.db.repos.app_schedules import LightAppScheduleRepo
+from octop.infra.db.repos.app_service_operations import LightAppServiceOperationRepo
 from octop.infra.db.repos.app_services import LightAppServiceRepo
 from octop.infra.db.repos.app_sessions import AppSessionRepo
 from octop.infra.db.repos.app_setup_plans import AppSetupPlanRepo
@@ -108,6 +109,7 @@ class RepoBundle:
     app_session_repo: AppSessionRepo
     app_binding_repo: LightAppBindingRepo
     app_service_repo: LightAppServiceRepo
+    app_service_operation_repo: LightAppServiceOperationRepo
     app_event_repo: AppEventRepo
     app_ingress_repo: LightAppIngressRepo
     app_webhook_repo: LightAppWebhookRepo
@@ -172,6 +174,7 @@ class RepoBundle:
             app_session_repo=AppSessionRepo(db),
             app_binding_repo=LightAppBindingRepo(db),
             app_service_repo=LightAppServiceRepo(db),
+            app_service_operation_repo=LightAppServiceOperationRepo(db),
             app_event_repo=AppEventRepo(db),
             app_ingress_repo=LightAppIngressRepo(db),
             app_webhook_repo=LightAppWebhookRepo(db),
@@ -345,6 +348,10 @@ class SharedServices:
     @property
     def app_service_repo(self) -> LightAppServiceRepo:
         return self.repos.app_service_repo
+
+    @property
+    def app_service_operation_repo(self) -> LightAppServiceOperationRepo:
+        return self.repos.app_service_operation_repo
 
     @property
     def app_event_repo(self) -> AppEventRepo:

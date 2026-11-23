@@ -37,6 +37,19 @@ describe("MiniApp capabilities", () => {
     expect(isMethodAllowed("serviceDetailed", [CAP.DATA_READ])).toBe(false);
     expect(isMethodAllowed("serviceImage", [CAP.EXTERNAL_FETCH])).toBe(true);
     expect(isMethodAllowed("serviceImage", [CAP.DATA_READ])).toBe(false);
+    for (const method of [
+      "serviceInvoke",
+      "serviceOperation",
+      "serviceResolveOperation",
+      "serviceUploadStart",
+      "serviceUploadChunk",
+      "serviceUploadFinish",
+      "serviceMediaToken",
+    ]) {
+      expect(isMethodAllowed(method, [CAP.EXTERNAL_WRITE])).toBe(true);
+      expect(isMethodAllowed(method, [CAP.EXTERNAL_FETCH])).toBe(false);
+      expect(isMethodAllowed(method, [CAP.DATA_WRITE])).toBe(false);
+    }
     expect(isMethodAllowed("events", [CAP.EVENTS_READ])).toBe(true);
     expect(isMethodAllowed("ackEvents", [CAP.EVENTS_READ])).toBe(true);
     expect(isMethodAllowed("events", [CAP.DATA_READ])).toBe(false);

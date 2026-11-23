@@ -41,6 +41,16 @@ export interface BridgeParams {
   taskId?: string;
   input?: Record<string, unknown>;
   idempotencyKey?: string;
+  confirmationToken?: string;
+  opId?: string;
+  purpose?: string;
+  assetId?: string;
+  size?: number;
+  index?: number;
+  uploadId?: string;
+  status?: string;
+  result?: unknown;
+  errorMessage?: string;
   bytes?: ArrayBuffer;
   fileName?: string;
   fileType?: string;
@@ -124,6 +134,13 @@ export const KNOWN_METHODS: ReadonlySet<string> = new Set([
   "service",
   "serviceDetailed",
   "serviceImage",
+  "serviceInvoke",
+  "serviceOperation",
+  "serviceResolveOperation",
+  "serviceUploadStart",
+  "serviceUploadChunk",
+  "serviceUploadFinish",
+  "serviceMediaToken",
   "events",
   "ackEvents",
   "emitEvent",

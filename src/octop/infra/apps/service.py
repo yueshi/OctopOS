@@ -16,7 +16,9 @@ of leaving the pair truncated or inconsistent.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import io
 import json
 import logging
@@ -28,7 +30,7 @@ import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from octop_harness.backends import BackendWorkspace
@@ -38,6 +40,7 @@ from octop.infra.apps import access as app_access
 from octop.infra.apps import aggregate as app_aggregate
 from octop.infra.apps import capabilities as app_capabilities
 from octop.infra.apps import limits as app_limits
+from octop.infra.apps import upload_sessions
 from octop.infra.apps.importer import parse_import_file
 from octop.infra.apps.inspect import detect_pii, inspect_file
 from octop.infra.apps.models import (
@@ -86,6 +89,7 @@ from octop.infra.apps.viewgen import render_html as render_view_html
 from octop.infra.apps.viewgen import render_multi_html, suggest_view
 from octop.infra.connectors.builder import mcp_server_name
 from octop.infra.connectors.catalog import get_catalog_entry
+from octop.infra.connectors.crypto import decrypt_credentials, encrypt_credentials
 from octop.infra.connectors.gateway.adapters.douban import COVER_URL_PREFIXES
 from octop.infra.connectors.gateway.adapters.http_extract import normalize_request_headers
 from octop.infra.connectors.gateway.registry import mcp_tools_for_kind
@@ -112,6 +116,15 @@ from octop.infra.db.repos.app_schedules import (
     LightAppScheduleRepo,
     LightAppScheduleRow,
     schedule_jitter,
+)
+from octop.infra.db.repos.app_service_operations import (
+    OP_FAILED,
+    OP_PENDING_CONFIRMATION,
+    OP_RUNNING,
+    OP_SUCCEEDED,
+    OP_UNKNOWN,
+    LightAppServiceOperationRepo,
+    LightAppServiceOperationRow,
 )
 from octop.infra.db.repos.app_services import (
     LightAppServiceRepo,
@@ -151,6 +164,7 @@ from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo, UserRow
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.principals import Principal, principal_from_user_row
+from octop.infra.utils.ssrf_guard import validate_https_url, validate_https_url_resolved
 from octop.infra.utils.ulid import new_short_id, new_ulid
 
 logger = logging.getLogger(__name__)
@@ -391,6 +405,18 @@ class ServiceView:
     enabled: bool
     created_at: int
     updated_at: int
+    mode: str = "read"
+    base_url: str = ""
+    extension_id: str = ""
+    token_configured: bool = False
+    read_tools: tuple[dict[str, Any], ...] = ()
+    write_tools: tuple[dict[str, Any], ...] = ()
+    timeout_seconds: int = 30
+    max_request_bytes: int = 65536
+    max_response_bytes: int = 5242880
+    idempotency_required: bool = True
+    confirmation: dict[str, str] = field(default_factory=dict)
+    allow_private_network: bool = False
 
 
 @dataclass(frozen=True)
@@ -398,6 +424,26 @@ class ServiceCallResult:
     value: Any
     cached: bool
     expires_at: int | None
+
+
+@dataclass(frozen=True)
+class ServiceMediaStream:
+    status_code: int
+    headers: dict[str, str]
+    body: Any
+
+
+@dataclass(frozen=True)
+class ServiceInvokeResult:
+    op_id: str
+    status: str
+    result: Any | None = None
+    error_code: str = ""
+    error_message: str = ""
+    confirmation_required: bool = False
+    confirmation_token: str | None = None
+    expires_at: int | None = None
+    args_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -444,8 +490,16 @@ IMPORT_MODE_REPLACE = "replace"
 IMPORT_MODES = (IMPORT_MODE_APPEND, IMPORT_MODE_REPLACE)
 
 SERVICE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
-SERVICE_PROVIDERS = ("connector", "external")
+SERVICE_PROVIDERS = ("connector", "external", "extension")
 SERVICE_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+SERVICE_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+SERVICE_MEDIA_TOKEN_TTL_SECONDS = 1800
+SERVICE_OPERATION_TTL_SECONDS = 24 * 3600
+SERVICE_CONFIRMATION_TTL_SECONDS = 300
+SERVICE_CONFIRMATION_ROLES = frozenset({"app_owner", "run_owner", "admin"})
+SERVICE_TOOL_METHODS_READ = frozenset({"GET", "HEAD"})
+SERVICE_TOOL_METHODS_WRITE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+SERVICE_TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 
 APP_EVENT_RETENTION_SECONDS = 30 * 24 * 3600
 APP_EVENT_KEEP = 500
@@ -869,6 +923,45 @@ def _service_url_allowed(prefixes: Sequence[str], url: str) -> bool:
     return any(url == prefix or url.startswith(f"{prefix}/") for prefix in prefixes)
 
 
+def _validate_extension_base_url(url: str, *, allow_private: bool) -> None:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError("extension base_url must be an http(s) URL without credentials")
+    if not allow_private:
+        validate_https_url(url)
+
+
+def _b64encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64decode(text: str) -> bytes:
+    padding = "=" * (-len(text) % 4)
+    try:
+        return base64.urlsafe_b64decode(text + padding)
+    except Exception as exc:
+        raise ValueError("invalid base64") from exc
+
+
+def _extension_error_message(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("message", "error", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:500]
+    text = response.text.strip()
+    return text[:500] if text else "no error body"
+
+
 def _validate_webhook_url(raw: str) -> str:
     """Reject destinations the outbound webhook delivery would refuse."""
     url = raw.strip()
@@ -1115,6 +1208,8 @@ class AppService:
         access_code_repo: AppAccessCodeRepo | None = None,
         binding_repo: LightAppBindingRepo | None = None,
         service_repo: LightAppServiceRepo | None = None,
+        service_operation_repo: LightAppServiceOperationRepo | None = None,
+        extension_http_transport: httpx.AsyncBaseTransport | None = None,
         connector_repo: ConnectorRepo | None = None,
         event_repo: AppEventRepo | None = None,
         schedule_repo: LightAppScheduleRepo | None = None,
@@ -1136,6 +1231,8 @@ class AppService:
         self._access_code_repo = access_code_repo
         self._binding_repo = binding_repo
         self._service_repo = service_repo
+        self._service_operation_repo = service_operation_repo
+        self._extension_http_transport = extension_http_transport
         self._connector_repo = connector_repo
         self._event_repo = event_repo
         self._schedule_repo = schedule_repo
@@ -7485,12 +7582,37 @@ class AppService:
             enabled=item.enabled,
             created_at=item.created_at,
             updated_at=item.updated_at,
+            mode=item.mode,
+            base_url=item.base_url,
+            extension_id=item.extension_id,
+            token_configured=bool(item.secret_ref),
+            read_tools=item.read_tools,
+            write_tools=item.write_tools,
+            timeout_seconds=item.timeout_seconds,
+            max_request_bytes=item.max_request_bytes,
+            max_response_bytes=item.max_response_bytes,
+            idempotency_required=item.idempotency_required,
+            confirmation=dict(item.confirmation),
+            allow_private_network=item.allow_private_network,
         )
 
     def list_services(self, row: AppRecord) -> list[ServiceView]:
         if self._service_repo is None:
             return []
         return [self._service_view(item) for item in self._service_repo.list_for_app(row.app_id)]
+
+    def media_paths(self, row: AppRecord) -> list[str]:
+        """Same-origin media prefixes for enabled extension write services."""
+        if self._service_repo is None:
+            return []
+        return [
+            f"/api/apps/{row.app_id}/services/{item.name}/media/"
+            for item in self._service_repo.list_for_app(row.app_id)
+            if item.enabled and item.provider == "extension" and item.mode == "write"
+        ]
+
+    def media_service_id(self, row: AppRecord, name: str) -> str:
+        return self._extension_write_declaration(row, name).service_id
 
     @staticmethod
     def _gateway_tool_names(kind: str) -> set[str]:
@@ -7556,6 +7678,18 @@ class AppService:
         enabled: bool,
         actor_user_id: int,
         is_admin: bool,
+        mode: str = "read",
+        base_url: str = "",
+        extension_id: str = "",
+        service_token: str | None = None,
+        read_tools: list[dict[str, Any]] | None = None,
+        write_tools: list[dict[str, Any]] | None = None,
+        timeout_seconds: int = 30,
+        max_request_bytes: int = 65536,
+        max_response_bytes: int = 5242880,
+        idempotency_required: bool = True,
+        confirmation: Mapping[str, str] | None = None,
+        allow_private_network: bool = False,
     ) -> ServiceView:
         """Create or update one service declaration.
 
@@ -7573,7 +7707,52 @@ class AppService:
         clean_provider = provider.strip().lower()
         if clean_provider not in SERVICE_PROVIDERS:
             raise _invalid(
-                ErrorCode.APP_SOURCE_INVALID, "service provider must be connector or external"
+                ErrorCode.APP_SOURCE_INVALID,
+                "service provider must be connector, external or extension",
+            )
+        clean_mode = mode.strip().lower()
+        if clean_mode not in ("read", "write"):
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "mode must be read or write")
+        if clean_provider == "extension":
+            return self._save_extension_service(
+                row,
+                name=clean_name,
+                mode=clean_mode,
+                base_url=base_url,
+                extension_id=extension_id,
+                service_token=service_token,
+                read_tools=read_tools,
+                write_tools=write_tools,
+                timeout_seconds=timeout_seconds,
+                max_request_bytes=max_request_bytes,
+                max_response_bytes=max_response_bytes,
+                idempotency_required=idempotency_required,
+                confirmation=confirmation,
+                allow_private_network=allow_private_network,
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_calls_per_minute=max_calls_per_minute,
+                public_live=public_live,
+                enabled=enabled,
+                actor_user_id=actor_user_id,
+                is_admin=is_admin,
+            )
+        if (
+            clean_mode != "read"
+            or base_url
+            or extension_id
+            or service_token
+            or read_tools
+            or write_tools
+            or confirmation
+            or idempotency_required is not True
+            or timeout_seconds != 30
+            or max_request_bytes != 65536
+            or max_response_bytes != 5242880
+            or allow_private_network
+        ):
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "extension-only fields require provider=extension",
             )
         instance_id = connector_instance_id.strip()
         instance_kind: str | None = None
@@ -7690,6 +7869,344 @@ class AppService:
             )
         return self._service_view(stored)
 
+    def _save_extension_service(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        mode: str,
+        base_url: str,
+        extension_id: str,
+        service_token: str | None,
+        read_tools: list[dict[str, Any]] | None,
+        write_tools: list[dict[str, Any]] | None,
+        timeout_seconds: int,
+        max_request_bytes: int,
+        max_response_bytes: int,
+        idempotency_required: bool,
+        confirmation: Mapping[str, str] | None,
+        allow_private_network: bool,
+        cache_ttl_seconds: int,
+        max_calls_per_minute: int,
+        public_live: bool,
+        enabled: bool,
+        actor_user_id: int,
+        is_admin: bool,
+    ) -> ServiceView:
+        if self._service_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "app services are not configured")
+        if allow_private_network and not is_admin:
+            raise OctopError(
+                ErrorCode.APP_FORBIDDEN,
+                "allow_private_network can only be enabled by an admin",
+            )
+        clean_base = base_url.strip().rstrip("/")
+        if not clean_base:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "base_url is required for extension")
+        try:
+            _validate_extension_base_url(clean_base, allow_private=allow_private_network)
+        except ValueError as exc:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid base_url: {exc}") from None
+        clean_extension = extension_id.strip()
+        if len(clean_extension) > 128:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "extension_id is too long")
+        if mode == "write" and public_live:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "write services cannot be public_live")
+        if mode == "write" and cache_ttl_seconds != 0:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID, "write services require cache_ttl_seconds=0"
+            )
+        if mode == "write" and not idempotency_required:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "write services require idempotency_required=true",
+            )
+        if not 1 <= timeout_seconds <= 300:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "timeout_seconds must be 1..300")
+        if not 1024 <= max_request_bytes <= 1024 * 1024:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "max_request_bytes must be 1024..1048576",
+            )
+        if not 1024 <= max_response_bytes <= SERVICE_MAX_RESPONSE_BYTES:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"max_response_bytes must be 1024..{SERVICE_MAX_RESPONSE_BYTES}",
+            )
+        if not 1 <= max_calls_per_minute <= 600:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "max_calls_per_minute must be 1..600",
+            )
+        read_defs = self._normalize_extension_tools(read_tools, write=False)
+        write_defs = self._normalize_extension_tools(write_tools, write=True)
+        if mode == "read" and write_defs:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "write_tools require mode=write",
+            )
+        if mode == "write" and not write_defs:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "mode=write requires at least one write tool",
+            )
+        names = [item["name"] for item in (*read_defs, *write_defs)]
+        if len(set(names)) != len(names):
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "tool names must be unique")
+        confirmation_map: dict[str, str] = {}
+        for tool_name, role in (confirmation or {}).items():
+            clean_tool = str(tool_name).strip()
+            clean_role = str(role).strip().lower()
+            if clean_tool not in {item["name"] for item in write_defs}:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"confirmation tool {clean_tool!r} is not a write tool",
+                )
+            if clean_role not in SERVICE_CONFIRMATION_ROLES:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    "confirmation role must be app_owner, run_owner or admin",
+                )
+            confirmation_map[clean_tool] = clean_role
+        if self._secret_repo is None and service_token:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "secrets are not configured")
+        existing = self._service_repo.get_by_name(row.app_id, name)
+        secret_ref = existing.secret_ref if existing is not None else ""
+        if service_token is not None:
+            token = service_token.strip()
+            if token:
+                if self._secret_repo is None:
+                    raise OctopError(ErrorCode.INTERNAL_ERROR, "secrets are not configured")
+                new_ref = f"app_service_token:{new_short_id(16)}"
+                self._secret_repo.set(
+                    new_ref,
+                    encrypt_credentials(self._secret_repo, {"token": token}),
+                )
+                if secret_ref and secret_ref != new_ref:
+                    self._secret_repo.delete(secret_ref)
+                secret_ref = new_ref
+            else:
+                if secret_ref and self._secret_repo is not None:
+                    self._secret_repo.delete(secret_ref)
+                secret_ref = ""
+        if existing is None:
+            stored = self._service_repo.create(
+                app_id=row.app_id,
+                name=name,
+                provider="extension",
+                connector_instance_id="",
+                allowed_tools=[item["name"] for item in read_defs],
+                allowed_url_prefixes=[],
+                request_headers={},
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_calls_per_minute=max_calls_per_minute,
+                public_live=public_live,
+                enabled=enabled,
+                created_by=actor_user_id,
+                mode=mode,
+                base_url=clean_base,
+                extension_id=clean_extension,
+                secret_ref=secret_ref,
+                read_tools=read_defs,
+                write_tools=write_defs,
+                timeout_seconds=timeout_seconds,
+                max_request_bytes=max_request_bytes,
+                max_response_bytes=max_response_bytes,
+                idempotency_required=idempotency_required,
+                confirmation=confirmation_map,
+                allow_private_network=allow_private_network,
+            )
+        else:
+            updated = self._service_repo.update(
+                existing.service_id,
+                provider="extension",
+                connector_instance_id="",
+                allowed_tools=[item["name"] for item in read_defs],
+                allowed_url_prefixes=[],
+                request_headers={},
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_calls_per_minute=max_calls_per_minute,
+                public_live=public_live,
+                enabled=enabled,
+                mode=mode,
+                base_url=clean_base,
+                extension_id=clean_extension,
+                secret_ref=secret_ref,
+                read_tools=read_defs,
+                write_tools=write_defs,
+                timeout_seconds=timeout_seconds,
+                max_request_bytes=max_request_bytes,
+                max_response_bytes=max_response_bytes,
+                idempotency_required=idempotency_required,
+                confirmation=confirmation_map,
+                allow_private_network=allow_private_network,
+            )
+            if updated is None:
+                raise OctopError(ErrorCode.APP_NOT_FOUND, "service declaration not found")
+            self._service_repo.clear_cache(existing.service_id)
+            stored = updated
+        if self._binding_repo is not None:
+            # An extension service is not a data-source binding. Remove a stale
+            # binding left by a previous connector/external declaration.
+            self._binding_repo.delete(row.app_id, name)
+        return self._service_view(stored)
+
+    @staticmethod
+    def _normalize_extension_tools(
+        tools: list[dict[str, Any]] | None,
+        *,
+        write: bool,
+    ) -> list[dict[str, Any]]:
+        if tools is None:
+            return []
+        if not isinstance(tools, list):
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "tools must be a list")
+        allowed_methods = SERVICE_TOOL_METHODS_WRITE if write else SERVICE_TOOL_METHODS_READ
+        normalized: list[dict[str, Any]] = []
+        for item in tools:
+            if not isinstance(item, dict):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "each tool must be an object")
+            name = str(item.get("name") or "").strip()
+            if not SERVICE_TOOL_NAME_RE.fullmatch(name):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid tool name: {name!r}")
+            method = str(item.get("method") or ("POST" if write else "GET")).strip().upper()
+            if method not in allowed_methods:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"tool {name!r} uses method {method}; expected {sorted(allowed_methods)}",
+                )
+            path = str(item.get("path") or "").strip()
+            if (
+                not path.startswith("/")
+                or path.startswith("//")
+                or "://" in path
+                or any(char.isspace() for char in path)
+                or len(path) > 512
+            ):
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"invalid tool path: {path!r}")
+            schema = item.get("input_schema") or {}
+            if not isinstance(schema, dict):
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"tool {name!r} input_schema must be an object",
+                )
+            normalized.append(
+                {"name": name, "method": method, "path": path, "input_schema": schema}
+            )
+        return normalized
+
+    @staticmethod
+    def _validate_extension_tool_args(
+        tool: Mapping[str, Any],
+        args: Mapping[str, Any],
+    ) -> None:
+        schema = tool.get("input_schema") or {}
+        if not isinstance(schema, Mapping):
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "tool input_schema must be an object")
+        required = schema.get("required") or []
+        if isinstance(required, list):
+            for key in required:
+                if str(key) not in args:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"missing required argument: {key!r}",
+                    )
+        properties = schema.get("properties") or {}
+        if not isinstance(properties, Mapping):
+            properties = {}
+        if schema.get("additionalProperties") is False:
+            unknown = set(args) - {str(key) for key in properties}
+            if unknown:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"unknown arguments: {', '.join(sorted(unknown))}",
+                )
+        type_checks: dict[str, tuple[type, ...]] = {
+            "string": (str,),
+            "integer": (int,),
+            "number": (int, float),
+            "boolean": (bool,),
+            "object": (dict,),
+            "array": (list,),
+        }
+        for key, spec in properties.items():
+            name = str(key)
+            if name not in args or not isinstance(spec, Mapping):
+                continue
+            value = args[name]
+            expected = str(spec.get("type") or "")
+            if expected == "integer" and isinstance(value, bool):
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"argument {name!r} must be integer",
+                )
+            if expected == "number" and isinstance(value, bool):
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"argument {name!r} must be number",
+                )
+            allowed_types = type_checks.get(expected)
+            if allowed_types is not None and not isinstance(value, allowed_types):
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"argument {name!r} must be {expected}",
+                )
+            choices = spec.get("enum")
+            if isinstance(choices, list) and value not in choices:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"argument {name!r} must be one of {choices!r}",
+                )
+
+    @staticmethod
+    def _extension_tool_path(
+        tool: Mapping[str, Any],
+        args: Mapping[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        path = str(tool.get("path") or "")
+        remaining = {str(key): value for key, value in args.items()}
+        for key in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", path):
+            if key not in remaining:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"missing path argument: {key!r}",
+                )
+            value = remaining.pop(key)
+            path = path.replace("{" + key + "}", quote(str(value), safe=""))
+        return path, remaining
+
+    def _extension_service_token(self, declaration: LightAppServiceRow) -> str:
+        if not declaration.secret_ref or self._secret_repo is None:
+            return ""
+        blob = self._secret_repo.get(declaration.secret_ref)
+        if not blob:
+            return ""
+        try:
+            payload = decrypt_credentials(self._secret_repo, blob)
+        except Exception:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "service token cannot be decrypted; reconfigure it",
+            ) from None
+        return str(payload.get("token") or "")
+
+    async def _validate_extension_url(
+        self,
+        base_url: str,
+        *,
+        allow_private: bool = False,
+    ) -> None:
+        try:
+            if allow_private:
+                _validate_extension_base_url(base_url, allow_private=True)
+                return
+            await validate_https_url_resolved(base_url)
+        except ValueError as exc:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"unsafe extension URL: {exc}",
+            ) from None
+
     def delete_service(self, row: AppRecord, name: str) -> bool:
         if self._service_repo is None:
             raise OctopError(ErrorCode.INTERNAL_ERROR, "app services are not configured")
@@ -7709,15 +8226,17 @@ class AppService:
         name: str,
         tool: str,
         args: Mapping[str, Any] | None = None,
+        actor_user_id: int = 0,
     ) -> ServiceCallResult:
-        """Call one declared, allowlisted read-only connector tool.
+        """Call one declared, allowlisted read-only tool.
 
-        The declaration is enforced here as well as at bind time: tools must be
-        allowlisted, URLs must match a prefix, live calls are rate-limited, and
-        responses are cached with the declared TTL.
+        Connector/external services go through the gateway runner; extension
+        services use their declared read tool path. Tools must be allowlisted,
+        live calls are rate-limited, and responses are cached with the declared
+        TTL.
         """
         self.require_capability(row, "external.fetch")
-        if self._service_repo is None or self._external_tool_runner is None:
+        if self._service_repo is None:
             raise _invalid(
                 ErrorCode.APP_SOURCE_INVALID,
                 "external services are not available on this server",
@@ -7725,6 +8244,11 @@ class AppService:
         declaration = self._service_repo.get_by_name(row.app_id, name.strip().lower())
         if declaration is None or not declaration.enabled:
             raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown or disabled service: {name!r}")
+        if declaration.provider != "extension" and self._external_tool_runner is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external services are not available on this server",
+            )
         clean_tool = tool.strip()
         if clean_tool not in declaration.allowed_tools:
             raise _invalid(
@@ -7737,14 +8261,27 @@ class AppService:
                 ErrorCode.APP_SOURCE_INVALID,
                 "_headers is reserved for the service declaration",
             )
-        url = clean_args.get("url")
-        if isinstance(url, str) and url.strip():
-            clean_url = url.strip()
-            if not _service_url_allowed(declaration.allowed_url_prefixes, clean_url):
+        extension_tool: Mapping[str, Any] | None = None
+        if declaration.provider == "extension":
+            extension_tool = next(
+                (item for item in declaration.read_tools if item.get("name") == clean_tool),
+                None,
+            )
+            if extension_tool is None:
                 raise _invalid(
                     ErrorCode.APP_SOURCE_INVALID,
-                    "URL is outside the service's allowed prefixes",
+                    f"tool {clean_tool!r} has no read contract for service {declaration.name!r}",
                 )
+            self._validate_extension_tool_args(extension_tool, clean_args)
+        else:
+            url = clean_args.get("url")
+            if isinstance(url, str) and url.strip():
+                clean_url = url.strip()
+                if not _service_url_allowed(declaration.allowed_url_prefixes, clean_url):
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        "URL is outside the service's allowed prefixes",
+                    )
         args_json = json.dumps(
             clean_args,
             ensure_ascii=False,
@@ -7777,12 +8314,31 @@ class AppService:
             declaration.service_id,
             per_minute=declaration.max_calls_per_minute,
         ):
-            output = await asyncio.to_thread(
-                self._external_tool_runner.run,
-                instance_id=declaration.connector_instance_id,
-                tool=clean_tool,
-                args=runner_args,
-            )
+            if extension_tool is not None:
+                result = await self._execute_extension_call(
+                    declaration,
+                    extension_tool,
+                    clean_args,
+                    app_id=row.app_id,
+                    actor_user_id=actor_user_id,
+                    idempotency_key="",
+                )
+                output = (
+                    result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+                )
+            else:
+                runner = self._external_tool_runner
+                if runner is None:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        "external services are not available on this server",
+                    )
+                output = await asyncio.to_thread(
+                    runner.run,
+                    instance_id=declaration.connector_instance_id,
+                    tool=clean_tool,
+                    args=runner_args,
+                )
         if not isinstance(output, str):
             output = str(output)
         if len(output.encode("utf-8")) > SERVICE_MAX_RESPONSE_BYTES:
@@ -7804,6 +8360,867 @@ class AppService:
             cached=False,
             expires_at=expires_at,
         )
+
+    async def invoke_service(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        tool: str,
+        args: Mapping[str, Any] | None = None,
+        idempotency_key: str,
+        confirmation_token: str = "",
+        actor_user_id: int,
+        actor_is_admin: bool = False,
+    ) -> ServiceInvokeResult:
+        """Invoke one declared extension write tool with idempotency/confirmation."""
+        self.require_capability(row, "external.write")
+        if self._service_repo is None or self._service_operation_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external write services are not available on this server",
+            )
+        declaration = self._service_repo.get_by_name(row.app_id, name.strip().lower())
+        if declaration is None or not declaration.enabled:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown or disabled service: {name!r}")
+        if declaration.provider != "extension":
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "invoke requires provider=extension",
+            )
+        if declaration.mode != "write":
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "service is not in write mode")
+        clean_tool = tool.strip()
+        tool_def = next(
+            (item for item in declaration.write_tools if item.get("name") == clean_tool),
+            None,
+        )
+        if tool_def is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"tool {clean_tool!r} is not allowed for service {declaration.name!r}",
+            )
+        clean_args = {str(key): value for key, value in (args or {}).items()}
+        self._validate_extension_tool_args(tool_def, clean_args)
+        args_json = json.dumps(
+            clean_args,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        args_hash = hashlib.sha256(args_json.encode("utf-8")).hexdigest()
+        key = idempotency_key.strip()
+        if declaration.idempotency_required and not key:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "idempotency_key is required for this service",
+            )
+        now = int(time.time())
+        confirmation_token = confirmation_token.strip()
+        existing = None
+        if key:
+            existing = self._service_operation_repo.get_by_key(
+                service_id=declaration.service_id,
+                tool=clean_tool,
+                actor_user_id=actor_user_id,
+                idempotency_key=key,
+            )
+        if existing is not None:
+            if existing.args_hash != args_hash:
+                raise OctopError(
+                    ErrorCode.APP_CONFLICT,
+                    "idempotency_key was reused with different arguments",
+                )
+            if existing.status == OP_PENDING_CONFIRMATION:
+                if not confirmation_token:
+                    return self._issue_confirmation(existing, now=now)
+                token_hash = self._hash_confirmation_token(confirmation_token)
+                if not self._service_operation_repo.confirm(
+                    existing.op_id,
+                    token_hash=token_hash,
+                    now=now,
+                ):
+                    raise OctopError(
+                        ErrorCode.APP_FORBIDDEN,
+                        "confirmation token is invalid or expired",
+                    )
+                return await self._run_extension_operation(
+                    row,
+                    declaration,
+                    tool_def,
+                    clean_args,
+                    op_id=existing.op_id,
+                    idempotency_key=key,
+                    actor_user_id=actor_user_id,
+                    args_hash=args_hash,
+                )
+            if existing.status == OP_RUNNING:
+                return ServiceInvokeResult(
+                    op_id=existing.op_id,
+                    status=OP_RUNNING,
+                    args_hash=args_hash,
+                )
+            if existing.status == OP_SUCCEEDED:
+                return ServiceInvokeResult(
+                    op_id=existing.op_id,
+                    status=OP_SUCCEEDED,
+                    result=_service_value(existing.result_json) if existing.result_json else None,
+                    args_hash=args_hash,
+                )
+            if existing.status == OP_FAILED:
+                return ServiceInvokeResult(
+                    op_id=existing.op_id,
+                    status=OP_FAILED,
+                    error_code=existing.error_code,
+                    error_message=existing.error_message,
+                    args_hash=args_hash,
+                )
+            if existing.status == OP_UNKNOWN:
+                return ServiceInvokeResult(
+                    op_id=existing.op_id,
+                    status=OP_UNKNOWN,
+                    error_code=existing.error_code,
+                    error_message=existing.error_message,
+                    args_hash=args_hash,
+                )
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                f"operation {existing.op_id} is {existing.status}; use a new idempotency_key",
+            )
+        confirmation_role = declaration.confirmation.get(clean_tool)
+        if confirmation_role:
+            self._require_confirmation_role(
+                row,
+                confirmation_role,
+                actor_user_id=actor_user_id,
+                actor_is_admin=actor_is_admin,
+            )
+            if confirmation_token:
+                raise OctopError(
+                    ErrorCode.APP_FORBIDDEN,
+                    "no pending confirmation for this idempotency_key",
+                )
+            issued = secrets.token_urlsafe(32)
+            op = self._service_operation_repo.create(
+                service_id=declaration.service_id,
+                app_id=row.app_id,
+                tool=clean_tool,
+                args_hash=args_hash,
+                idempotency_key=key,
+                status=OP_PENDING_CONFIRMATION,
+                actor_user_id=actor_user_id,
+                confirmation_token_hash=self._hash_confirmation_token(issued),
+                confirmation_expires_at=now + SERVICE_CONFIRMATION_TTL_SECONDS,
+                expires_at=now + SERVICE_OPERATION_TTL_SECONDS,
+            )
+            return ServiceInvokeResult(
+                op_id=op.op_id,
+                status=OP_PENDING_CONFIRMATION,
+                confirmation_required=True,
+                confirmation_token=issued,
+                expires_at=now + SERVICE_CONFIRMATION_TTL_SECONDS,
+                args_hash=args_hash,
+            )
+        op = self._service_operation_repo.create(
+            service_id=declaration.service_id,
+            app_id=row.app_id,
+            tool=clean_tool,
+            args_hash=args_hash,
+            idempotency_key=key,
+            status=OP_RUNNING,
+            actor_user_id=actor_user_id,
+            expires_at=now + SERVICE_OPERATION_TTL_SECONDS,
+        )
+        return await self._run_extension_operation(
+            row,
+            declaration,
+            tool_def,
+            clean_args,
+            op_id=op.op_id,
+            idempotency_key=key,
+            actor_user_id=actor_user_id,
+            args_hash=args_hash,
+        )
+
+    def get_service_operation(self, row: AppRecord, op_id: str) -> LightAppServiceOperationRow:
+        if self._service_operation_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external write services are not available on this server",
+            )
+        op = self._service_operation_repo.get(op_id.strip())
+        if op is None or op.app_id != row.app_id:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, "operation not found")
+        return op
+
+    def resolve_service_operation(
+        self,
+        row: AppRecord,
+        op_id: str,
+        *,
+        status: str,
+        result: Any | None,
+        error_message: str,
+        actor_user_id: int,
+        actor_is_admin: bool,
+    ) -> LightAppServiceOperationRow:
+        if self._service_operation_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external write services are not available on this server",
+            )
+        op = self._service_operation_repo.get(op_id.strip())
+        if op is None or op.app_id != row.app_id:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, "operation not found")
+        if op.status != OP_UNKNOWN:
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                f"operation {op.op_id} is {op.status}, not submission_unknown",
+            )
+        if not (
+            actor_is_admin
+            or actor_user_id == op.actor_user_id
+            or actor_user_id == int(row.owner_user_id)
+        ):
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "only the actor or app owner may reconcile")
+        clean_status = status.strip().lower()
+        try:
+            result_json = "" if result is None else json.dumps(result, ensure_ascii=False)
+        except (TypeError, ValueError):
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID, "result is not JSON serializable"
+            ) from None
+        if len(result_json.encode("utf-8")) > SERVICE_MAX_RESPONSE_BYTES:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "result is too large")
+        if not self._service_operation_repo.resolve_unknown(
+            op.op_id,
+            status=clean_status,
+            result_json=result_json,
+            error_code="" if clean_status == "succeeded" else op.error_code,
+            error_message=error_message.strip()[:2000],
+        ):
+            raise OctopError(ErrorCode.APP_CONFLICT, "operation changed; reload and retry")
+        updated = self._service_operation_repo.get(op.op_id)
+        if updated is None:
+            raise OctopError(ErrorCode.APP_NOT_FOUND, "operation not found")
+        return updated
+
+    def _extension_write_declaration(self, row: AppRecord, name: str) -> LightAppServiceRow:
+        if self._service_repo is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "external write services are not available on this server",
+            )
+        declaration = self._service_repo.get_by_name(row.app_id, name.strip().lower())
+        if declaration is None or not declaration.enabled:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, f"unknown or disabled service: {name!r}")
+        if declaration.provider != "extension" or declaration.mode != "write":
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID, "service is not an extension write service"
+            )
+        return declaration
+
+    async def upload_service_asset(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        content: Any,
+        content_length: int | None,
+        filename: str,
+        content_type: str,
+        purpose: str,
+        actor_user_id: int,
+    ) -> Any:
+        """Stream one file to a declared extension upload tool."""
+        self.require_capability(row, "external.write")
+        declaration = self._extension_write_declaration(row, name)
+        tool_def = next(
+            (
+                item
+                for item in declaration.write_tools
+                if item.get("name") in {"assets.upload", "upload"}
+            ),
+            None,
+        )
+        if tool_def is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "service does not declare an assets.upload write tool",
+            )
+        if str(tool_def.get("method") or "POST").upper() != "POST":
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "upload tool must use POST")
+        if "{" in str(tool_def.get("path") or ""):
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "upload tool path cannot contain placeholders",
+            )
+        if content_length is not None and content_length > SERVICE_MAX_UPLOAD_BYTES:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"upload exceeds the {SERVICE_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+            )
+        await self._validate_extension_url(
+            declaration.base_url,
+            allow_private=declaration.allow_private_network,
+        )
+        url = declaration.base_url.rstrip("/") + str(tool_def.get("path") or "")
+        safe_purpose = re.sub(r"[^A-Za-z0-9_.-]", "", purpose)[:64]
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": content_type or "application/octet-stream",
+            "X-Octop-App-Id": row.app_id,
+            "X-Octop-Filename": quote(filename or "upload", safe=""),
+            "X-Octop-Purpose": safe_purpose,
+        }
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
+        if actor_user_id:
+            headers["X-Octop-Actor-Id"] = str(actor_user_id)
+        token = self._extension_service_token(declaration)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        async def counted() -> Any:
+            total = 0
+            async for chunk in content:
+                total += len(chunk)
+                if total > SERVICE_MAX_UPLOAD_BYTES:
+                    raise _invalid(
+                        ErrorCode.APP_SOURCE_INVALID,
+                        f"upload exceeds the {SERVICE_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+                    )
+                yield chunk
+
+        async with (
+            httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=10.0),
+                follow_redirects=False,
+                transport=self._extension_http_transport,
+            ) as client,
+            client.stream("POST", url, headers=headers, content=counted()) as response,
+        ):
+            data = await response.aread()
+            if len(data) > declaration.max_response_bytes:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "extension response is too large")
+            if response.status_code >= 500:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"extension returned {response.status_code}: {_extension_error_message(response)}",
+                    unknown=True,
+                )
+            if response.status_code >= 400:
+                raise _invalid(
+                    ErrorCode.APP_SOURCE_INVALID,
+                    f"extension returned {response.status_code}: {_extension_error_message(response)}",
+                )
+            if not data:
+                return None
+            if "json" in response.headers.get("content-type", "").lower():
+                try:
+                    return json.loads(data)
+                except ValueError:
+                    return data.decode("utf-8", errors="replace")
+            return data.decode("utf-8", errors="replace")
+
+    def start_upload_session(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        filename: str,
+        content_type: str,
+        purpose: str,
+        size: int,
+        actor_user_id: int,
+    ) -> dict[str, Any]:
+        self.require_capability(row, "external.write")
+        declaration = self._extension_write_declaration(row, name)
+        tool_def = next(
+            (
+                item
+                for item in declaration.write_tools
+                if item.get("name") in {"assets.upload", "upload"}
+            ),
+            None,
+        )
+        if tool_def is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "service does not declare an assets.upload write tool",
+            )
+        session = upload_sessions.start_session(
+            app_id=row.app_id,
+            service_id=declaration.service_id,
+            name=declaration.name,
+            filename=filename,
+            content_type=content_type,
+            purpose=purpose,
+            size=size,
+            actor_user_id=actor_user_id,
+            max_bytes=SERVICE_MAX_UPLOAD_BYTES,
+        )
+        return {
+            "upload_id": session.upload_id,
+            "max_chunk_bytes": upload_sessions.UPLOAD_CHUNK_BYTES,
+            "expires_in": upload_sessions.UPLOAD_SESSION_TTL_SECONDS,
+        }
+
+    def append_upload_chunk(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        upload_id: str,
+        index: int,
+        data: bytes,
+        actor_user_id: int,
+    ) -> dict[str, Any]:
+        self.require_capability(row, "external.write")
+        declaration = self._extension_write_declaration(row, name)
+        session = upload_sessions.get_session(upload_id)
+        if session.app_id != row.app_id or session.service_id != declaration.service_id:
+            raise OctopError(
+                ErrorCode.APP_FORBIDDEN, "upload session does not match this app/service"
+            )
+        if session.actor_user_id != actor_user_id:
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "upload session belongs to another user")
+        updated = upload_sessions.append_chunk(
+            upload_id,
+            index=index,
+            data=data,
+            max_bytes=SERVICE_MAX_UPLOAD_BYTES,
+        )
+        return {
+            "upload_id": updated.upload_id,
+            "next_index": updated.next_index,
+            "received": updated.received,
+            "size": updated.size,
+        }
+
+    async def finish_upload_session(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        upload_id: str,
+        actor_user_id: int,
+    ) -> Any:
+        self.require_capability(row, "external.write")
+        declaration = self._extension_write_declaration(row, name)
+        session = upload_sessions.get_session(upload_id)
+        if session.app_id != row.app_id or session.service_id != declaration.service_id:
+            raise OctopError(
+                ErrorCode.APP_FORBIDDEN, "upload session does not match this app/service"
+            )
+        if session.actor_user_id != actor_user_id:
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "upload session belongs to another user")
+        session = upload_sessions.finish_session(upload_id)
+
+        async def content() -> Any:
+            with session.path.open("rb") as handle:
+                while True:
+                    chunk = await asyncio.to_thread(handle.read, 1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        result = await self.upload_service_asset(
+            row,
+            name=declaration.name,
+            content=content(),
+            content_length=session.size,
+            filename=session.filename,
+            content_type=session.content_type,
+            purpose=session.purpose,
+            actor_user_id=actor_user_id,
+        )
+        upload_sessions.discard_session(upload_id)
+        return result
+
+    def issue_media_token(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        asset_id: str,
+        user_id: int,
+    ) -> dict[str, Any]:
+        self.require_capability(row, "external.write")
+        declaration = self._extension_write_declaration(row, name)
+        clean_asset = asset_id.strip()
+        if not clean_asset:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "asset_id is required")
+        expires_at = int(self._clock()) + SERVICE_MEDIA_TOKEN_TTL_SECONDS
+        token = self._sign_media_token(
+            {
+                "app_id": row.app_id,
+                "service_id": declaration.service_id,
+                "asset_id": clean_asset,
+                "user_id": user_id,
+                "exp": expires_at,
+            }
+        )
+        path = (
+            f"/api/apps/{row.app_id}/services/{declaration.name}/media/"
+            f"{quote(clean_asset, safe='')}"
+        )
+        return {
+            "token": token,
+            "expires_at": expires_at,
+            "url": f"{path}?token={token}",
+        }
+
+    def verify_media_token(
+        self,
+        token: str,
+        *,
+        app_id: str,
+        service_id: str,
+        asset_id: str,
+    ) -> int | None:
+        secret = self._media_token_secret()
+        try:
+            payload_b64, signature_b64 = token.split(".", 1)
+            expected = hmac.new(
+                secret,
+                payload_b64.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            if not hmac.compare_digest(expected, _b64decode(signature_b64)):
+                return None
+            payload = json.loads(_b64decode(payload_b64).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if (
+            payload.get("app_id") != app_id
+            or payload.get("service_id") != service_id
+            or payload.get("asset_id") != asset_id
+        ):
+            return None
+        exp = payload.get("exp")
+        if not isinstance(exp, int) or exp < int(self._clock()):
+            return None
+        user_id = payload.get("user_id")
+        return int(user_id) if isinstance(user_id, int) else None
+
+    async def open_media_stream(
+        self,
+        row: AppRecord,
+        *,
+        name: str,
+        asset_id: str,
+        range_header: str = "",
+        actor_user_id: int = 0,
+    ) -> ServiceMediaStream:
+        declaration = self._extension_write_declaration(row, name)
+        tool_def = next(
+            (item for item in declaration.read_tools if item.get("name") == "assets.content"),
+            None,
+        )
+        if tool_def is None:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                "service does not declare an assets.content read tool",
+            )
+        await self._validate_extension_url(
+            declaration.base_url,
+            allow_private=declaration.allow_private_network,
+        )
+        path, _ = self._extension_tool_path(tool_def, {"asset_id": asset_id})
+        url = declaration.base_url.rstrip("/") + path
+        headers = {
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
+            "X-Octop-App-Id": row.app_id,
+        }
+        if actor_user_id:
+            headers["X-Octop-Actor-Id"] = str(actor_user_id)
+        if range_header:
+            headers["Range"] = range_header
+        token = self._extension_service_token(declaration)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            follow_redirects=False,
+            transport=self._extension_http_transport,
+        )
+        request = client.build_request(
+            str(tool_def.get("method") or "GET"),
+            url,
+            headers=headers,
+        )
+        try:
+            response = await client.send(request, stream=True)
+        except Exception:
+            await client.aclose()
+            raise
+        forwarded = {
+            key.lower(): value
+            for key, value in response.headers.items()
+            if key.lower()
+            in {
+                "content-type",
+                "content-length",
+                "content-range",
+                "accept-ranges",
+                "etag",
+                "last-modified",
+            }
+        }
+        forwarded["cache-control"] = "private, no-store"
+
+        async def body() -> Any:
+            try:
+                async for chunk in response.aiter_raw():
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+        return ServiceMediaStream(
+            status_code=response.status_code,
+            headers=forwarded,
+            body=body(),
+        )
+
+    def _media_token_secret(self) -> bytes:
+        if self._secret_repo is None:
+            raise OctopError(ErrorCode.INTERNAL_ERROR, "secrets are not configured")
+        return self._secret_repo.get_or_create(
+            "app_media_token_secret",
+            lambda: secrets.token_bytes(32),
+        )
+
+    def _sign_media_token(self, payload: Mapping[str, Any]) -> str:
+        raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        payload_b64 = _b64encode(raw)
+        signature = hmac.new(
+            self._media_token_secret(),
+            payload_b64.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return f"{payload_b64}.{_b64encode(signature)}"
+
+    @staticmethod
+    def _require_confirmation_role(
+        row: AppRecord,
+        role: str,
+        *,
+        actor_user_id: int,
+        actor_is_admin: bool,
+    ) -> None:
+        if role == "admin" and not actor_is_admin:
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "confirmation requires an admin")
+        if role == "app_owner" and not (actor_is_admin or actor_user_id == int(row.owner_user_id)):
+            raise OctopError(ErrorCode.APP_FORBIDDEN, "confirmation requires the app owner")
+        # ``run_owner`` is enforced by the extension, which knows the run owner.
+
+    @staticmethod
+    def _hash_confirmation_token(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _issue_confirmation(
+        self,
+        op: LightAppServiceOperationRow,
+        *,
+        now: int,
+    ) -> ServiceInvokeResult:
+        if self._service_operation_repo is None:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "operations are not configured")
+        issued = secrets.token_urlsafe(32)
+        expires_at = now + SERVICE_CONFIRMATION_TTL_SECONDS
+        if not self._service_operation_repo.refresh_confirmation(
+            op.op_id,
+            token_hash=self._hash_confirmation_token(issued),
+            expires_at=expires_at,
+        ):
+            raise OctopError(
+                ErrorCode.APP_CONFLICT,
+                f"operation {op.op_id} is no longer awaiting confirmation",
+            )
+        return ServiceInvokeResult(
+            op_id=op.op_id,
+            status=OP_PENDING_CONFIRMATION,
+            confirmation_required=True,
+            confirmation_token=issued,
+            expires_at=expires_at,
+            args_hash=op.args_hash,
+        )
+
+    async def _run_extension_operation(
+        self,
+        row: AppRecord,
+        declaration: LightAppServiceRow,
+        tool_def: Mapping[str, Any],
+        args: Mapping[str, Any],
+        *,
+        op_id: str,
+        idempotency_key: str,
+        actor_user_id: int,
+        args_hash: str,
+    ) -> ServiceInvokeResult:
+        if self._service_operation_repo is None:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "operations are not configured")
+        try:
+            result = await self._execute_extension_call(
+                declaration,
+                tool_def,
+                args,
+                app_id=row.app_id,
+                actor_user_id=actor_user_id,
+                idempotency_key=idempotency_key or op_id,
+            )
+        except OctopError as exc:
+            unknown = bool(exc.details.get("unknown"))
+            self._service_operation_repo.finish(
+                op_id,
+                status=OP_UNKNOWN if unknown else OP_FAILED,
+                error_code=str(exc.code),
+                error_message=exc.message[:2000],
+            )
+            if unknown:
+                return ServiceInvokeResult(
+                    op_id=op_id,
+                    status=OP_UNKNOWN,
+                    error_code=str(exc.code),
+                    error_message=exc.message[:2000],
+                    args_hash=args_hash,
+                )
+            raise
+        except httpx.TimeoutException:
+            message = "extension call timed out; submission state is unknown"
+            self._service_operation_repo.finish(
+                op_id,
+                status=OP_UNKNOWN,
+                error_code=str(ErrorCode.APP_SOURCE_INVALID),
+                error_message=message,
+            )
+            return ServiceInvokeResult(
+                op_id=op_id,
+                status=OP_UNKNOWN,
+                error_code=str(ErrorCode.APP_SOURCE_INVALID),
+                error_message=message,
+                args_hash=args_hash,
+            )
+        except httpx.TransportError as exc:
+            message = f"extension transport failed; submission state is unknown: {exc}"[:2000]
+            self._service_operation_repo.finish(
+                op_id,
+                status=OP_UNKNOWN,
+                error_code=str(ErrorCode.APP_SOURCE_INVALID),
+                error_message=message,
+            )
+            return ServiceInvokeResult(
+                op_id=op_id,
+                status=OP_UNKNOWN,
+                error_code=str(ErrorCode.APP_SOURCE_INVALID),
+                error_message=message,
+                args_hash=args_hash,
+            )
+        except Exception as exc:  # pragma: no cover - defensive transport boundary
+            message = f"extension call failed: {exc}"[:2000]
+            self._service_operation_repo.finish(
+                op_id,
+                status=OP_FAILED,
+                error_code=str(ErrorCode.APP_SOURCE_INVALID),
+                error_message=message,
+            )
+            raise OctopError(ErrorCode.APP_SOURCE_INVALID, message) from None
+        result_json = json.dumps(result, ensure_ascii=False)
+        if len(result_json.encode("utf-8")) > declaration.max_response_bytes:
+            self._service_operation_repo.finish(
+                op_id,
+                status=OP_FAILED,
+                error_code=str(ErrorCode.APP_SOURCE_INVALID),
+                error_message="extension response is too large",
+            )
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "extension response is too large")
+        self._service_operation_repo.finish(
+            op_id,
+            status=OP_SUCCEEDED,
+            result_json=result_json,
+        )
+        self._service_operation_repo.delete_expired(now=int(time.time()))
+        return ServiceInvokeResult(
+            op_id=op_id,
+            status=OP_SUCCEEDED,
+            result=result,
+            args_hash=args_hash,
+        )
+
+    async def _execute_extension_call(
+        self,
+        declaration: LightAppServiceRow,
+        tool_def: Mapping[str, Any],
+        args: Mapping[str, Any],
+        *,
+        app_id: str,
+        actor_user_id: int,
+        idempotency_key: str,
+    ) -> Any:
+        await self._validate_extension_url(
+            declaration.base_url,
+            allow_private=declaration.allow_private_network,
+        )
+        path, remaining = self._extension_tool_path(tool_def, args)
+        url = declaration.base_url.rstrip("/") + path
+        method = str(tool_def.get("method") or "POST").upper()
+        headers = {
+            "Accept": "application/json",
+            "X-Octop-App-Id": app_id,
+        }
+        if actor_user_id:
+            headers["X-Octop-Actor-Id"] = str(actor_user_id)
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        token = self._extension_service_token(declaration)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        body = None if method in {"GET", "HEAD"} else remaining
+        params = remaining if method in {"GET", "HEAD"} else None
+        if body is not None:
+            encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            if len(encoded) > declaration.max_request_bytes:
+                raise _invalid(ErrorCode.APP_SOURCE_INVALID, "extension request body is too large")
+        timeout = httpx.Timeout(float(declaration.timeout_seconds))
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            transport=self._extension_http_transport,
+        ) as client:
+            response = await client.request(
+                method,
+                url,
+                headers=headers,
+                json=body,
+                params=params,
+            )
+        content = response.content
+        if len(content) > declaration.max_response_bytes:
+            raise _invalid(ErrorCode.APP_SOURCE_INVALID, "extension response is too large")
+        if response.status_code >= 500:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"extension returned {response.status_code}: {_extension_error_message(response)}",
+                unknown=True,
+            )
+        if response.status_code >= 400:
+            raise _invalid(
+                ErrorCode.APP_SOURCE_INVALID,
+                f"extension returned {response.status_code}: {_extension_error_message(response)}",
+            )
+        if not content:
+            return None
+        if "json" in response.headers.get("content-type", "").lower():
+            try:
+                return response.json()
+            except ValueError:
+                return response.text
+        return response.text
 
     def read_cached_service(
         self,

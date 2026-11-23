@@ -121,6 +121,7 @@ def test_system_templates_are_shipped_and_valid() -> None:
         "inventory-count",
         "reimbursement",
         "content-review",
+        "video-workbench",
     } <= set(templates)
     assert templates["customer-followup"].name == "客户跟进台账"
     assert templates["customer-followup"].scope == "global"
@@ -137,6 +138,12 @@ def test_system_templates_are_shipped_and_valid() -> None:
         "asset.write",
         "ai.agent_task",
     }
+
+    video_schema, video_html = read_system_template("video-workbench")
+    assert "reference_asset_id" in parse_schema_payload(video_schema).names
+    assert 'service("video")' in video_html
+    assert "runs.create" in video_html
+    assert "review.decide" in video_html
 
 
 def test_template_id_rejects_traversal() -> None:

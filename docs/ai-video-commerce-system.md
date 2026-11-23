@@ -7,6 +7,12 @@
 > 技术底座：Octop（octop-harness + Agents/Experts + Skills + MCP + Cron/Events + DB + Dashboard/MiniApp）
 >
 > 本文是设计记录，不是当前实现承诺；实现状态以代码与 tests 为准。
+>
+> **2026-11-23 更新**：视频生产的落点已由 `docs/video-workbench-implementation-plan.md` 修订。
+>
+> 本文 §3.2/§3.3/§5 Sprint 2 中「在 Octop 进程内建 `video_jobs` + `VideoPipelineWorker`、直接复用原生 `generate_video`」不再是实施目标；流水线、Job Worker、Asset、FFmpeg 改由外部扩展服务承担。
+>
+> 本文的业务结论（70–90% 自动化、人工终审/发布、代理归因）与合规结论（AIGC 标识、广告法、素材授权）仍然有效。
 
 ## 1. 评审结论
 

@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频工作台</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --accent: #2563eb;
+    --ok: #059669;
+    --warn: #d97706;
+    --bad: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1020;
+      --card: #141a2e;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --line: #263043;
+      --accent: #60a5fa;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 18px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  p { margin: 0; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  input, textarea {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+    padding: 8px 10px;
+    font: inherit;
+  }
+  textarea { min-height: 72px; resize: vertical; }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .banner {
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  main { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 14px; align-items: start; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .list { display: grid; gap: 8px; }
+  .run {
+    text-align: left;
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--card);
+    padding: 10px 12px;
+  }
+  .run.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .run .top { display: flex; justify-content: space-between; gap: 8px; }
+  .run .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 11px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .chip.ok { color: var(--ok); border-color: var(--ok); }
+  .chip.warn { color: var(--warn); border-color: var(--warn); }
+  .chip.bad { color: var(--bad); border-color: var(--bad); }
+  .detail-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12px; margin-bottom: 12px; }
+  .meta div:nth-child(odd) { color: var(--muted); }
+  .media { display: grid; gap: 8px; margin-bottom: 12px; }
+  .media video, .media img { width: 100%; border-radius: 10px; background: #000; max-height: 280px; object-fit: contain; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+  .frames img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 8px; background: #000; }
+  .error { color: var(--bad); font-size: 12px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 18px 0; text-align: center; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="pageTitle">视频工作台</h1>
+    <p class="muted" id="pageHint">创建任务、上传参考视频、查看进度并审片。</p>
+  </div>
+  <div class="row">
+    <button id="refreshBtn" type="button">刷新</button>
+    <button id="newBtn" class="primary" type="button">新建视频</button>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<div id="unknownPanel" class="panel hidden" style="margin-bottom:14px">
+  <h2 id="unknownTitle"></h2>
+  <p id="unknownText" class="muted"></p>
+  <div class="row" style="margin-top:8px">
+    <button id="unknownOk" class="primary" type="button"></button>
+    <button id="unknownFail" class="danger" type="button"></button>
+  </div>
+</div>
+
+<section id="newPanel" class="panel hidden" style="margin-bottom:14px">
+  <h2 id="newTitle">新建视频</h2>
+  <div class="field">
+    <label id="titleLabel" for="titleInput">标题 / 商品名</label>
+    <input id="titleInput" maxlength="120" autocomplete="off">
+  </div>
+  <div class="field">
+    <label id="fileLabel" for="fileInput">参考视频</label>
+    <input id="fileInput" type="file" accept="video/*">
+  </div>
+  <div class="row">
+    <button id="submitBtn" class="primary" type="button">提交</button>
+    <button id="cancelNewBtn" type="button">取消</button>
+    <span id="newStatus" class="muted"></span>
+  </div>
+</section>
+
+<main>
+  <section>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <h2 id="listTitle" style="margin:0">任务</h2>
+      <span id="listStatus" class="muted"></span>
+    </div>
+    <div id="list" class="list"></div>
+  </section>
+  <aside id="detail" class="panel hidden"></aside>
+</main>
+
+<script>
+(function () {
+  var locale = String(window.__OCTOP_LOCALE__ || navigator.language || "en");
+  var zh = locale.toLowerCase().indexOf("zh") === 0;
+  var T = zh ? {
+    pageTitle: "视频工作台",
+    pageHint: "创建任务、上传参考视频、查看进度并审片。",
+    refresh: "刷新",
+    newRun: "新建视频",
+    title: "标题 / 商品名",
+    file: "参考视频",
+    submit: "提交",
+    cancel: "取消",
+    list: "任务",
+    empty: "还没有任务。",
+    loading: "加载中…",
+    detail: "任务详情",
+    close: "关闭",
+    status: "状态",
+    updated: "更新",
+    creative: "创意摘要",
+    reference: "参考视频",
+    frames: "首帧候选",
+    video: "成片",
+    review: "审片",
+    approve: "通过",
+    reject: "驳回",
+    needsReview: "需修改",
+    note: "审片意见",
+    reviewDone: "审片已提交",
+    createOk: "已提交，正在生成。",
+    upload: "上传中…",
+    noVideo: "还没有成片。",
+    noFrames: "还没有首帧。",
+    noService: "视频服务未配置：请在应用详情配置 provider=extension 的 video 服务。",
+    noCapability: "当前应用未开启 external.write，页面只能查看。",
+    unknownStatus: "未知状态",
+    error: "操作失败",
+    confirmRequired: "该操作需要再次确认。",
+    unknownTitle: "待对账",
+    unknownHint: "请求可能已执行，也可能未执行。请先在任务列表确认结果，再标记。",
+    markSucceeded: "标记为已成功",
+    markFailed: "标记为失败",
+    resolved: "已对账"
+  } : {
+    pageTitle: "Video Workbench",
+    pageHint: "Create runs, upload references, follow progress, and review.",
+    refresh: "Refresh",
+    newRun: "New video",
+    title: "Title / product",
+    file: "Reference video",
+    submit: "Submit",
+    cancel: "Cancel",
+    list: "Runs",
+    empty: "No runs yet.",
+    loading: "Loading…",
+    detail: "Run detail",
+    close: "Close",
+    status: "Status",
+    updated: "Updated",
+    creative: "Creative summary",
+    reference: "Reference",
+    frames: "Frame candidates",
+    video: "Video",
+    review: "Review",
+    approve: "Approve",
+    reject: "Reject",
+    needsReview: "Needs changes",
+    note: "Review note",
+    reviewDone: "Review submitted",
+    createOk: "Submitted; generation is running.",
+    upload: "Uploading…",
+    noVideo: "No video yet.",
+    noFrames: "No frames yet.",
+    noService: "Video service is not configured: add a provider=extension service named video.",
+    noCapability: "external.write is not enabled; this page is read-only.",
+    unknownStatus: "Unknown status",
+    error: "Action failed",
+    confirmRequired: "This action needs confirmation.",
+    unknownTitle: "Needs reconciliation",
+    unknownHint: "The request may or may not have executed. Check the run list first, then resolve it.",
+    markSucceeded: "Mark succeeded",
+    markFailed: "Mark failed",
+    resolved: "Reconciled"
+  };
+
+  var svc = null;
+  var runs = [];
+  var selectedId = "";
+  var unknownOpId = "";
+  var pollTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+  function text(node, value) { node.textContent = value == null ? "" : String(value); }
+  function show(id, visible) { $(id).classList.toggle("hidden", !visible); }
+  function runIdOf(run) { return String((run && (run.run_id || run.id)) || ""); }
+  function statusOf(run) { return String((run && (run.status || run.state)) || ""); }
+  function when(ts) {
+    var n = Number(ts || 0);
+    if (!n) return "";
+    var diff = Math.max(0, Math.floor(Date.now() / 1000 - n));
+    if (diff < 60) return zh ? "刚刚" : "just now";
+    if (diff < 3600) return Math.floor(diff / 60) + (zh ? " 分钟前" : "m ago");
+    if (diff < 86400) return Math.floor(diff / 3600) + (zh ? " 小时前" : "h ago");
+    return Math.floor(diff / 86400) + (zh ? " 天前" : "d ago");
+  }
+  function statusLabel(status) {
+    var s = String(status || "").toLowerCase();
+    if (s === "done" || s === "succeeded") return zh ? "已完成" : "Done";
+    if (s === "failed") return zh ? "失败" : "Failed";
+    if (s === "cancelled") return zh ? "已取消" : "Cancelled";
+    if (s === "submission_unknown") return zh ? "待对账" : "Unknown";
+    if (s === "blocked") return zh ? "已拦截" : "Blocked";
+    if (s === "needs_review") return zh ? "待审核" : "Needs review";
+    if (s === "waiting_creative") return zh ? "待确认创意" : "Creative";
+    if (s === "waiting_frame") return zh ? "待选首帧" : "Frame";
+    if (s === "queued") return zh ? "排队中" : "Queued";
+    if (s === "draft") return zh ? "草稿" : "Draft";
+    return status ? status : T.unknownStatus;
+  }
+  function statusClass(status) {
+    var s = String(status || "").toLowerCase();
+    if (s === "done" || s === "succeeded") return "ok";
+    if (s === "failed" || s === "blocked") return "bad";
+    if (s === "needs_review" || s === "waiting_creative" || s === "waiting_frame") return "warn";
+    return "";
+  }
+  function showError(err) {
+    var message = err && err.message ? err.message : String(err || T.error);
+    $("listStatus").textContent = message;
+    $("listStatus").className = "error";
+  }
+  function clearError() {
+    $("listStatus").textContent = "";
+    $("listStatus").className = "muted";
+  }
+  function normalizeList(value) {
+    if (Array.isArray(value)) return value;
+    if (value && Array.isArray(value.runs)) return value.runs;
+    if (value && Array.isArray(value.items)) return value.items;
+    return [];
+  }
+  function assetIdOf(item) {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return "";
+    return String(item.asset_id || item.assetId || item.id || "");
+  }
+  function collectFrameIds(run) {
+    var candidates = run && (run.frame_candidates || run.frames || run.frame_assets);
+    if (!Array.isArray(candidates)) return [];
+    return candidates.map(assetIdOf).filter(Boolean);
+  }
+
+  function renderList() {
+    var list = $("list");
+    list.textContent = "";
+    if (!runs.length) {
+      var empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = T.empty;
+      list.appendChild(empty);
+      return;
+    }
+    runs.forEach(function (run) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "run" + (runIdOf(run) === selectedId ? " active" : "");
+      button.addEventListener("click", function () { openRun(runIdOf(run)); });
+      var top = document.createElement("div");
+      top.className = "top";
+      var title = document.createElement("span");
+      title.className = "title";
+      text(title, run.title || runIdOf(run));
+      var chip = document.createElement("span");
+      chip.className = "chip " + statusClass(statusOf(run));
+      text(chip, statusLabel(statusOf(run)));
+      top.appendChild(title);
+      top.appendChild(chip);
+      button.appendChild(top);
+      var meta = document.createElement("div");
+      meta.className = "muted";
+      meta.style.marginTop = "4px";
+      text(meta, when(run.updated_at || run.updatedAt));
+      button.appendChild(meta);
+      list.appendChild(button);
+    });
+  }
+
+  async function loadRuns() {
+    if (!svc) return;
+    try {
+      clearError();
+      var value = await svc.call("runs.list", {});
+      runs = normalizeList(value);
+      renderList();
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  function mediaNode(assetId, kind) {
+    var wrap = document.createElement("div");
+    wrap.className = "media";
+    var media = document.createElement(kind === "video" ? "video" : "img");
+    if (kind === "video") {
+      media.controls = true;
+      media.preload = "metadata";
+    }
+    media.alt = "";
+    wrap.appendChild(media);
+    svc.mediaUrl(assetId).then(function (url) {
+      if (!url) throw new Error(T.noVideo);
+      media.src = new URL(url, location.origin).toString();
+    }).catch(function (err) {
+      wrap.textContent = err && err.message ? err.message : T.noVideo;
+    });
+    return wrap;
+  }
+
+  function sectionLabel(value) {
+    var h = document.createElement("h2");
+    text(h, value);
+    return h;
+  }
+
+  function renderDetail(run) {
+    var detail = $("detail");
+    detail.textContent = "";
+    if (!run) {
+      show("detail", false);
+      return;
+    }
+    show("detail", true);
+    var head = document.createElement("div");
+    head.className = "detail-head";
+    var title = document.createElement("h2");
+    title.style.margin = "0";
+    text(title, run.title || runIdOf(run));
+    var close = document.createElement("button");
+    close.type = "button";
+    text(close, T.close);
+    close.addEventListener("click", function () {
+      selectedId = "";
+      show("detail", false);
+      renderList();
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    });
+    head.appendChild(title);
+    head.appendChild(close);
+    detail.appendChild(head);
+
+    var meta = document.createElement("div");
+    meta.className = "meta";
+    [T.status, statusLabel(statusOf(run)), T.updated, when(run.updated_at || run.updatedAt)].forEach(function (value) {
+      var node = document.createElement("div");
+      text(node, value);
+      meta.appendChild(node);
+    });
+    detail.appendChild(meta);
+
+    if (run.creative_summary) {
+      detail.appendChild(sectionLabel(T.creative));
+      var creative = document.createElement("p");
+      creative.className = "muted";
+      text(creative, run.creative_summary);
+      detail.appendChild(creative);
+    }
+
+    if (run.reference_asset_id) {
+      detail.appendChild(sectionLabel(T.reference));
+      detail.appendChild(mediaNode(run.reference_asset_id, "video"));
+    }
+
+    var frames = collectFrameIds(run);
+    detail.appendChild(sectionLabel(T.frames));
+    if (!frames.length) {
+      var noFrames = document.createElement("p");
+      noFrames.className = "muted";
+      noFrames.textContent = T.noFrames;
+      detail.appendChild(noFrames);
+    } else {
+      var grid = document.createElement("div");
+      grid.className = "frames";
+      frames.forEach(function (assetId) {
+        grid.appendChild(mediaNode(assetId, "image").firstChild);
+      });
+      detail.appendChild(grid);
+    }
+
+    detail.appendChild(sectionLabel(T.video));
+    if (run.video_asset_id) {
+      detail.appendChild(mediaNode(run.video_asset_id, "video"));
+    } else {
+      var noVideo = document.createElement("p");
+      noVideo.className = "muted";
+      noVideo.textContent = T.noVideo;
+      detail.appendChild(noVideo);
+    }
+
+    if (run.error) {
+      var error = document.createElement("p");
+      error.className = "error";
+      text(error, run.error);
+      detail.appendChild(error);
+    }
+
+    detail.appendChild(sectionLabel(T.review));
+    var note = document.createElement("textarea");
+    note.placeholder = T.note;
+    detail.appendChild(note);
+    var buttons = document.createElement("div");
+    buttons.className = "row";
+    buttons.style.marginTop = "8px";
+    [["approve", T.approve, "primary"], ["reject", T.reject, "danger"], ["needs_review", T.needsReview, ""]].forEach(function (item) {
+      var button = document.createElement("button");
+      button.type = "button";
+      if (item[2]) button.className = item[2];
+      text(button, item[1]);
+      button.addEventListener("click", function () {
+        review(runIdOf(run), item[0], note.value, button);
+      });
+      buttons.appendChild(button);
+    });
+    detail.appendChild(buttons);
+  }
+
+  async function openRun(runId) {
+    if (!runId) return;
+    selectedId = runId;
+    renderList();
+    try {
+      var value = await svc.call("runs.get", { run_id: runId });
+      renderDetail(value && value.run ? value.run : value);
+    } catch (err) {
+      showError(err);
+    }
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(function () {
+      if (!selectedId) return;
+      svc.call("runs.get", { run_id: selectedId })
+        .then(function (value) { renderDetail(value && value.run ? value.run : value); })
+        .catch(function () {});
+    }, 5000);
+  }
+
+  function showUnknown(result) {
+    if (!result || result.status !== "submission_unknown" || !result.op_id) {
+      return false;
+    }
+    unknownOpId = String(result.op_id);
+    show("unknownPanel", true);
+    text($("unknownTitle"), T.unknownTitle);
+    text(
+      $("unknownText"),
+      T.unknownHint + " · " + unknownOpId
+    );
+    text($("unknownOk"), T.markSucceeded);
+    text($("unknownFail"), T.markFailed);
+    return true;
+  }
+
+  async function resolveUnknown(status) {
+    if (!svc || !unknownOpId) return;
+    try {
+      await svc.resolveOperation(unknownOpId, status, {
+        errorMessage: status === "failed" ? T.unknownHint : ""
+      });
+      unknownOpId = "";
+      show("unknownPanel", false);
+      $("listStatus").textContent = T.resolved;
+      $("listStatus").className = "muted";
+      await loadRuns();
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  async function markDraft(runId, decision, note) {
+    try {
+      var page = await window.octopApp.rows({ limit: 200 });
+      var rows = page && Array.isArray(page.rows) ? page.rows : [];
+      var found = rows.find(function (row) {
+        var values = row && row.values ? row.values : row;
+        return values && String(values.run_id || "") === runId;
+      });
+      if (!found) return;
+      var rowId = found.row_id || found.id;
+      if (!rowId) return;
+      await window.octopApp.update(rowId, { review_decision: decision, review_note: note || "" });
+    } catch (err) {
+      // Local draft bookkeeping is best-effort; the extension is authoritative.
+    }
+  }
+
+  async function review(runId, decision, note, button) {
+    if (!svc || !runId) return;
+    button.disabled = true;
+    try {
+      var result = await svc.invoke("review.decide", {
+        run_id: runId,
+        decision: decision,
+        note: note || ""
+      }, { idempotencyKey: "review:" + runId + ":" + decision });
+      if (result && result.confirmation_required) {
+        throw new Error(T.confirmRequired);
+      }
+      if (result && result.status === "submission_unknown") {
+        showUnknown(result);
+        return;
+      }
+      if (result && result.ok === false) {
+        throw new Error(result.error_message || T.error);
+      }
+      await markDraft(runId, decision, note);
+      $("listStatus").textContent = T.reviewDone;
+      $("listStatus").className = "muted";
+      openRun(runId);
+    } catch (err) {
+      showError(err);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function submitNew() {
+    if (!svc) return;
+    var title = $("titleInput").value.trim();
+    if (!title) {
+      $("newStatus").textContent = T.title;
+      return;
+    }
+    var fileInput = $("fileInput");
+    var file = fileInput.files && fileInput.files[0];
+    var submit = $("submitBtn");
+    submit.disabled = true;
+    try {
+      var assetId = "";
+      if (file) {
+        $("newStatus").textContent = T.upload;
+        var uploaded = await svc.upload(file, { purpose: "reference_video" });
+        assetId = String((uploaded && (uploaded.asset_id || (uploaded.asset && uploaded.asset.asset_id))) || "");
+      }
+      var runId = "run_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      try {
+        var draft = await window.octopApp.append({
+          title: title,
+          reference_asset_id: assetId
+        });
+        var draftId = draft && (draft.row_id || draft.id);
+        if (draftId) window.__videoDraftId = draftId;
+      } catch (err) {
+        // The extension run is the source of truth; a draft row is optional.
+      }
+      var result = await svc.invoke("runs.create", {
+        run_id: runId,
+        title: title,
+        reference_asset_id: assetId
+      }, { idempotencyKey: runId });
+      if (result && result.confirmation_required) {
+        throw new Error(T.confirmRequired);
+      }
+      if (result && result.status === "submission_unknown") {
+        showUnknown(result);
+        await loadRuns();
+        return;
+      }
+      if (result && result.ok === false) {
+        throw new Error(result.error_message || T.error);
+      }
+      if (window.__videoDraftId) {
+        try {
+          await window.octopApp.update(window.__videoDraftId, { run_id: runId });
+        } catch (err) {}
+        window.__videoDraftId = "";
+      }
+      $("newStatus").textContent = T.createOk;
+      $("titleInput").value = "";
+      fileInput.value = "";
+      show("newPanel", false);
+      await loadRuns();
+      openRun(runId);
+    } catch (err) {
+      $("newStatus").textContent = err && err.message ? err.message : T.error;
+    } finally {
+      submit.disabled = false;
+    }
+  }
+
+  async function boot() {
+    text($("pageTitle"), T.pageTitle);
+    text($("pageHint"), T.pageHint);
+    text($("refreshBtn"), T.refresh);
+    text($("newBtn"), T.newRun);
+    text($("newTitle"), T.newRun);
+    text($("titleLabel"), T.title);
+    text($("fileLabel"), T.file);
+    text($("submitBtn"), T.submit);
+    text($("cancelNewBtn"), T.cancel);
+    text($("listTitle"), T.list);
+    $("refreshBtn").addEventListener("click", loadRuns);
+    $("newBtn").addEventListener("click", function () {
+      show("newPanel", true);
+      $("titleInput").focus();
+    });
+    $("cancelNewBtn").addEventListener("click", function () { show("newPanel", false); });
+    $("submitBtn").addEventListener("click", submitNew);
+    $("unknownOk").addEventListener("click", function () { resolveUnknown("succeeded"); });
+    $("unknownFail").addEventListener("click", function () { resolveUnknown("failed"); });
+
+    try {
+      var me = await window.octopApp.me();
+      var caps = me && Array.isArray(me.capabilities) ? me.capabilities : [];
+      if (!caps.includes("external.write")) {
+        show("banner", true);
+        text($("banner"), T.noCapability);
+        $("newBtn").disabled = true;
+      }
+    } catch (err) {}
+
+    svc = window.octopApp.service("video");
+    try {
+      await loadRuns();
+    } catch (err) {
+      show("banner", true);
+      text($("banner"), T.noService);
+    }
+    setInterval(loadRuns, 15000);
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import {
 import { buildSrcDoc, hasEmbeddedFrame } from "./sdk";
 import { buildWrapperDoc } from "./wrapper";
 import { attachBridge, type AppViolation, type BridgeParams } from "./bridge";
+import { buildAppCsp, buildWrapperCsp } from "./appCsp";
 import { effectiveCapabilities } from "./capabilities";
 import {
   MINIAPP_DATA_VERSION_BACKGROUND_POLL_MS,
@@ -73,6 +74,7 @@ export default function MiniAppFrame({
   const { t } = useTranslation();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [html, setHtml] = useState("");
+  const [mediaPaths, setMediaPaths] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [escaped, setEscaped] = useState(false);
@@ -94,9 +96,8 @@ export default function MiniAppFrame({
     // Drop the current document so a refresh always starts from a clean frame,
     // even when the HTML bytes did not change.
     setHtml("");
-    appsApi
-      .getHtml(appId)
-      .then((text) => {
+    Promise.all([appsApi.getHtml(appId), appsApi.get(appId).catch(() => null)])
+      .then(([text, detail]) => {
         if (!alive) return;
         if (!text.trim()) {
           setError(t("apps.create.cardNoHtml"));
@@ -106,6 +107,7 @@ export default function MiniAppFrame({
           setError(t("apps.sandboxEmbeddedFrame"));
           return;
         }
+        setMediaPaths(detail?.media_paths ?? []);
         setHtml(text);
       })
       .catch((err) => {
@@ -388,6 +390,87 @@ export default function MiniAppFrame({
             const result = await appsApi.serviceImage(appId, name, url);
             return result.asset;
           }
+          if (method === "serviceInvoke") {
+            return await appsApi.invokeService(
+              appId,
+              String(params.name ?? "").trim(),
+              {
+                tool: String(params.tool ?? "").trim(),
+                args:
+                  params.args &&
+                  typeof params.args === "object" &&
+                  !Array.isArray(params.args)
+                    ? params.args
+                    : {},
+                idempotency_key: String(params.idempotencyKey ?? ""),
+                confirmation_token: String(params.confirmationToken ?? ""),
+              },
+            );
+          }
+          if (method === "serviceOperation") {
+            return await appsApi.getServiceOperation(
+              appId,
+              String(params.name ?? "").trim(),
+              String(params.opId ?? "").trim(),
+            );
+          }
+          if (method === "serviceResolveOperation") {
+            return await appsApi.resolveServiceOperation(
+              appId,
+              String(params.name ?? "").trim(),
+              String(params.opId ?? "").trim(),
+              {
+                status: String(params.status ?? "failed") as
+                  | "succeeded"
+                  | "failed"
+                  | "cancelled",
+                result: params.result,
+                error_message: String(params.errorMessage ?? ""),
+              },
+            );
+          }
+          if (method === "serviceUploadStart") {
+            return await appsApi.startServiceUpload(
+              appId,
+              String(params.name ?? "").trim(),
+              {
+                filename: String(params.fileName || "upload"),
+                content_type: String(
+                  params.fileType || "application/octet-stream",
+                ),
+                size: Number(params.size ?? 0),
+                purpose: String(params.purpose ?? ""),
+              },
+            );
+          }
+          if (method === "serviceUploadChunk") {
+            const bytes = params.bytes;
+            if (!(bytes instanceof ArrayBuffer)) {
+              throw new Error("serviceUploadChunk requires file bytes");
+            }
+            return await appsApi.uploadServiceChunk(
+              appId,
+              String(params.name ?? "").trim(),
+              String(params.uploadId ?? "").trim(),
+              Number(params.index ?? 0),
+              new Uint8Array(bytes),
+            );
+          }
+          if (method === "serviceUploadFinish") {
+            const result = await appsApi.finishServiceUpload(
+              appId,
+              String(params.name ?? "").trim(),
+              String(params.uploadId ?? "").trim(),
+            );
+            return result.value;
+          }
+          if (method === "serviceMediaToken") {
+            return await appsApi.issueServiceMediaToken(
+              appId,
+              String(params.name ?? "").trim(),
+              String(params.assetId ?? "").trim(),
+            );
+          }
           if (method === "asset") {
             const name = String(params.name ?? "").trim();
             const blob = await appsApi.asset(appId, name);
@@ -418,8 +501,11 @@ export default function MiniAppFrame({
 
   const srcDoc = useMemo(() => {
     if (!html) return "";
-    return buildWrapperDoc(buildSrcDoc(html));
-  }, [html]);
+    return buildWrapperDoc(
+      buildSrcDoc(html, { csp: buildAppCsp(mediaPaths) }),
+      buildWrapperCsp(mediaPaths),
+    );
+  }, [html, mediaPaths]);
 
   if (loading) {
     return (

@@ -33,3 +33,32 @@ export const APP_CSP =
  * free to load it.
  */
 export const WRAPPER_CSP = `${APP_CSP}; frame-src 'none'`;
+
+/**
+ * Extend the app CSP with same-origin media path prefixes.
+ *
+ * The sandbox iframe is an opaque origin, so `'self'` never matches; each
+ * prefix must be written as a full origin + path. Invalid paths are dropped
+ * rather than broadening the policy.
+ */
+export function buildAppCsp(mediaPaths: readonly string[] = []): string {
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  const sources = mediaPaths
+    .filter((path) => {
+      if (!path.startsWith("/") || !path.endsWith("/")) return false;
+      if (path.includes("..") || path.includes(";") || /\s/.test(path))
+        return false;
+      return true;
+    })
+    .map((path) => `${origin}${path}`);
+  if (sources.length === 0) return APP_CSP;
+  const joined = sources.join(" ");
+  return APP_CSP.replace(
+    "img-src data: blob:;",
+    `img-src data: blob: ${joined};`,
+  ).replace("media-src data: blob:;", `media-src data: blob: ${joined};`);
+}
+
+export function buildWrapperCsp(mediaPaths: readonly string[] = []): string {
+  return `${buildAppCsp(mediaPaths)}; frame-src 'none'`;
+}

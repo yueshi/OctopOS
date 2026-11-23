@@ -28,6 +28,19 @@ describe("bridge request checks", () => {
       true,
     );
     expect(checkMethodAllowed("serviceDetailed", [CAP.DATA_READ])).toBe(false);
+    for (const method of [
+      "serviceInvoke",
+      "serviceOperation",
+      "serviceResolveOperation",
+      "serviceUploadStart",
+      "serviceUploadChunk",
+      "serviceUploadFinish",
+      "serviceMediaToken",
+    ]) {
+      expect(checkMethodAllowed(method, [CAP.EXTERNAL_WRITE])).toBe(true);
+      expect(checkMethodAllowed(method, [CAP.EXTERNAL_FETCH])).toBe(false);
+      expect(checkMethodAllowed(method, [])).toBe(false);
+    }
   });
 
   it("gates page uploads behind asset.write", () => {

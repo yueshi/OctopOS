@@ -31,12 +31,15 @@ import { WRAPPER_CSP } from "./appCsp";
  * `appHtml` is injected as a JSON string so the app can never terminate the
  * wrapper's own script block; `</` is escaped for the same reason.
  */
-export function buildWrapperDoc(appHtml: string): string {
+export function buildWrapperDoc(
+  appHtml: string,
+  csp: string = WRAPPER_CSP,
+): string {
   const payload = JSON.stringify(appHtml).replace(/<\//g, "<\\/");
   return `<!doctype html>
 <html>
 <head>
-<meta http-equiv="Content-Security-Policy" content="${WRAPPER_CSP}">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: transparent; }
