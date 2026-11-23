@@ -468,20 +468,47 @@ cron、主动专家、团队 autopilot、事件触发的 `app.agent_turn`、后�
 
 ---
 
-## 14. 进度（2026-11-22）
+## 14. 进度（2026-11-23）
 
 | 阶段 | 状态 | 已落地 |
 |---|---|---|
 | **P0 地基硬化** | ✅ | 调度必修 #2–#4；备份仅 owner/admin；能力覆盖测试（SDK 调用 ↔ 能力映射）；迁移 049 |
-| **P1a AI 运行时核心** | ✅ | `light_app_tasks`（050）；`summarize_row` Tier 1；任务 API/SDK（`runTask` / `getTask` / `cancelTask`）；`usage_log.app_id/task_id`（051）；任务审计、幂等、过期租约回收 |
+| **P1a AI 运行时核心** | ✅ | `light_app_tasks`（050）；`summarize_row` Tier 1；任务 API/SDK（`runTask` / `getTask` / `cancelTask`）；`usage_log.app_id/task_id`（051）；任务审计、幂等、过期租约回收；任务写回合并原行，保留非目标列 |
 | **P1b 受限 Agent** | ✅ | `table_digest` Tier 2；只读 `query_rows` / `aggregate` 工具（per-table 重新鉴权、PII 脱敏、行 scope）；max rounds / tool calls；每应用每日 AI token 上限（200k，简单闸门，非预扣） |
 | **P2a 任务 UI** | ✅ | 应用详情新增「AI 任务」页签：列表、状态、结果、取消、活动任务 3 秒轮询；i18n 双语 |
 | **P2b-1 创建入口** | ✅ | 4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）；`GET /apps/{id}/task-types`；数据页行操作「AI 任务」+ `RunTaskModal`（选类型/写列），创建后跳到任务页签 |
 | **P2b-2a 页面上传** | ✅ | `asset.write` 能力位；`octopApp.upload(file)` → 宿主桥 → `POST /assets?page=true`；PNG/JPEG/WebP/GIF，≤5MB；服务端魔数校验 + ACL + 能力位 |
 | **P2b-2b 查询下推** | ✅ | SQLite `json_extract` / PG `values_json::jsonb->>` 过滤、排序、计数与分页；2 万行实测 ~47ms（目标 ≤50ms）；空数值排序、大小写不敏感、稳定 id tie-breaker；聚合仍为 Python 分组 |
 | **P2b-3a 任务通知** | ✅ | 任务成功/失败写 `notifications`（kind=`app_task`），按用户 locale 生成标题/正文，WS 推送；点击打开 `/apps/{id}?tab=tasks`；桌面通知中心新增 `app_task` 图标 |
-| **P1b / P2 余量** | 未开始 | `usage_budgets` / `usage_reservations` 预扣；任务 HITL；审核参考应用；聚合下推；per-app 模型/profile 版本 |
+| **P2b-3b 审核参考应用** | ✅ | `pre_review` Tier 1：文本 + 可选图片（`media` 资产列）输入，`approve/reject/needs_review` 枚举输出，固定写回 `ai_summary/ai_verdict/ai_confidence`；系统模板「内容审核台」（上传、列表筛选、AI 初审轮询、人工通过/驳回、原图预览），模板 manifest 可声明首次创建所需能力 |
+| **后续任务** | 见 §14.1 | 不再按原 P1b/P2 余量平铺，改按风险与依赖重排（阶段划分仍以 §5 为准） |
 
-**验证（P0 + P1a + P1b + P2）**：`make lint`、`make typecheck` 通过；`tests/unit/apps` 527 passed；`tests/unit/db` 245 passed；`tests/unit/agents/test_agent_manager.py` 155 passed + 1 skipped；`tests/integration/test_apps_api.py` 80 passed（通知接线后 2 个 server-start 冒烟用例复验）；前端任务相关 6 passed、`desktopNotifications` 7 passed、`MiniAppFrame` 62 passed；`tsc -b`、ESLint 通过。完整 `make all` 仍待 CI/停服窗口补跑。
+### 14.1 后续优先级（2026-11-23 重排）
 
-**当前限制**：Tier 1 单次模型调用；Tier 2 是应用内只读工具循环，不是完整 owner expert；任务按单车道串行执行，超时（Tier 1 60s / Tier 2 120s）短于租约（300s），尚无心跳；每日 token 上限是 check-then-run，不是预扣；任务结果写回使用行 CAS，冲突即失败，不自动重试。
+排序原则：先消除会放大风险的生产缺口，再补可观察性与演进能力；分发类工作只在外部需求验证后启动。
+
+| 优先级 | 任务 | 关键交付 / 完成标准 | 依赖或触发条件 |
+|---|---|---|---|
+| **S0 立即收口** | 当前改动完成验证、提交、构建与部署；修复或隔离前端 `DesktopChatWindow` 的 `matchMedia` 失败 | 完整 `make all` 一次全绿；写回数据丢失修复进入运行实例；审核模板可用 | 无。与设计伙伴验收并行 |
+| **S1 预算治理** | `usage_budgets` / `usage_reservations`；per-task `max_tokens`、per-app 日/月预算、per-user/app 日预算；原子预扣、结算、释放；kill switch；无人值守任务预算感知 | 并发创建任务不能超卖；预算不足在模型调用前拒绝；超时/取消正确释放；check-then-spend 被移除 | S0；需要 052+ 双库迁移 |
+| **S2 成本与任务可观察性** | 应用详情「用量与成本」页签：任务数、tokens、成本、失败率、p95；补 `cost_micros`、`funding_source`、`billing_subject`、`price_version`；页面异常/任务失败进入诊断事件 | 审核场景可看到每任务成本与 p95；未定价模型标 `unpriced`，不按 0 成本处理 | S1（复用量化账本） |
+| **S3 任务契约与模型治理** | Task profile 版本化与 app pin；`light_apps.agent_model_ref`；任务类型可覆盖模型；变更可追溯 | 同一应用可复现同一 profile 版本；改 prompt/模型不影响未升级的应用 | S1/S2（成本与行为可比较） |
+| **S4 运行硬化** | 任务并发、心跳、多实例租约；10× 压测；队列深度与执行器并发上限 | 多实例不重复执行/不丢租约；压测达标；cron/事件/autopilot 不放大成本 | S1；真实流量或后台任务接入时前置 |
+| **S5 任务体验余量** | 任务重试、结果 diff、`onTaskChange` 主动推送；失败原因展示完善 | 用户无需手动刷新；失败可重试且幂等 | 真实使用反馈 |
+| **S6 聚合下推** | `aggregate` 从 Python 分组改为 SQLite/PostgreSQL 一致下推 | 大表聚合性能达标，语义与现有实现一致 | 出现大表聚合性能问题 |
+| **S7 条件触发治理** | Tier 3 / HITL（`waiting_approval`、checkpoint 恢复）；prepared operation（删列/清 PII/`include_pii`/公开分享绑定 payload hash）；发布历史；`CAPABILITIES_VERSION`；per-app+user 记忆 | 外部副作用可暂停、批准、恢复；破坏性操作不可被偷换；发布可追溯 | 接入发消息/发布/花钱/删数据等外部动作，或进入多用户生产 |
+| **S8 分发与互操作（可选）** | 公开看板、Bundle v2、MCP Apps 门面 | 有已验证的外部需求；匿名/短时 token 方案批准 | 核心治理稳定后 |
+
+**为什么这样排**
+
+- **预算先于 HITL**：当前任务只写 AI 派生列，没有外部副作用；真正的风险是 check-then-run 与未生效的 per-task token 上限导致超支。
+- **Showback 先于 profile 版本**：没有成本、失败率和 p95，无法判断预算默认值和哪个任务值得保留。
+- **HITL 后移但不删除**：接入外部动作（发消息、发布、扣款、删数据）前必须补，否则不能把任务执行权交给 Agent。
+- **聚合下推和任务 UI 后移**：前者是性能优化，后者是体验优化，都不阻塞安全与成本闭环。
+- **分发继续后置**：公开看板、Bundle v2、MCP Apps 门面在核心闭环稳定前不做。
+
+**并行建议**：S0 与设计伙伴验收同时进行（20 条真实内容、p95、人工审核耗时、失败原因）；验收数据用于确定 S1 的预算默认值和 S2 的指标口径。
+
+**验证（P0 + P1a + P1b + P2）**：`make lint`、`make typecheck` 通过；`tests/unit/apps` 530 passed；`tests/unit/i18n` 82 passed；`tests/integration/test_apps_api.py` 80 passed（新增模板能力/`write_mode` 后模板与任务生命周期用例复验）；`RunTaskModal` 2 passed、`AppTasksPanel` 2 passed；`tsc -b`、ESLint 通过。Apps 页面前端全量 261/262，`DesktopChatWindow` 的 `matchMedia` 用例仍失败，待单独修复；完整 `make all` 仍待 CI/停服窗口补跑。
+
+**当前限制**：Tier 1 单次模型调用；Tier 2 是应用内只读工具循环，不是完整 owner expert；任务按单车道串行执行，超时（Tier 1 60s / Tier 2 120s）短于租约（300s），尚无心跳；每日 token 上限是 check-then-run，不是预扣；`TaskType.max_tokens` 目前只定义未传给模型，per-task token 上限未生效；任务结果写回使用行 CAS，冲突即失败，不自动重试。

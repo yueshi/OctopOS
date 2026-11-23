@@ -2139,8 +2139,9 @@ def build_app_tools(
             str,
             Field(
                 description=(
-                    "Registered task type: summarize_row (Tier 1) or table_digest "
-                    "(Tier 2, bounded read-only tools)."
+                    "Registered task type: summarize_row (Tier 1), table_digest "
+                    "(Tier 2, bounded read-only tools), or pre_review (text/image "
+                    "pre-review with fixed write-back)."
                 )
             ),
         ],
@@ -2149,8 +2150,9 @@ def build_app_tools(
             str | None,
             Field(
                 description=(
-                    "Optional non-PII string column that receives the summary. "
-                    "Omit to keep the result on the task only."
+                    "Optional non-PII string or text column that receives the summary. "
+                    "Omit to keep the result on the task only; task types with fixed "
+                    "write-back (pre_review) reject this field."
                 )
             ),
         ] = None,

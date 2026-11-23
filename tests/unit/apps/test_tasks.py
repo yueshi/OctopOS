@@ -156,6 +156,7 @@ async def test_task_executes_and_writes_summary(world: World) -> None:  # noqa: 
     }
     _, rows, total = await world.service.read_rows(row)  # type: ignore[arg-type]
     assert total == 1 and rows[0]["ai_summary"] == "A ceramic mug."
+    assert rows[0]["title"] == "Mug"
 
     with world.db.connect() as conn:
         usage = conn.execute(
@@ -165,6 +166,75 @@ async def test_task_executes_and_writes_summary(world: World) -> None:  # noqa: 
     assert usage is not None
     assert usage["app_id"] == row.app_id  # type: ignore[attr-defined]
     assert usage["source"] == "app_task"
+
+
+async def test_pre_review_writes_fixed_columns_and_attaches_image(world: World) -> None:  # noqa: F811
+    row = await world.service.create(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        name="Review",
+        columns=[
+            {"name": "title", "type": "string"},
+            {"name": "media", "type": "string"},
+            {"name": "ai_summary", "type": "text"},
+            {"name": "ai_verdict", "type": "string"},
+            {"name": "ai_confidence", "type": "string"},
+        ],
+        capabilities={"data.read", "data.write", "asset.read", "ai.agent_task"},
+    )
+    asset = await world.service.save_asset(
+        row,  # type: ignore[arg-type]
+        "review.png",
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 32,
+    )
+    await world.service.append_row(
+        row,  # type: ignore[arg-type]
+        {
+            "title": "Poster",
+            "media": asset,
+            "ai_summary": "",
+            "ai_verdict": "",
+            "ai_confidence": "",
+        },
+    )
+    data_row = world.repo.list_all_data_rows(row.app_id, "main")[0]  # type: ignore[attr-defined]
+    model = _FakeModel('{"summary": "A poster.", "verdict": "NEEDS_REVIEW", "confidence": "0.64"}')
+    service, task_repo = _task_service(world, model)
+
+    task = await service.create(
+        row,  # type: ignore[arg-type]
+        user_id=world.alice_id,
+        task_type="pre_review",
+        row_id=data_row.row_id,  # type: ignore[attr-defined]
+    )
+    assert await AppTaskRunner(task_repo=task_repo, service=service, clock=lambda: 1000).tick() == 1
+
+    updated = task_repo.get(task.task_id)
+    assert updated is not None and updated.status == TASK_SUCCEEDED
+    _, rows, _ = await world.service.read_rows(row)  # type: ignore[arg-type]
+    assert rows[0]["title"] == "Poster"
+    assert rows[0]["media"] == asset
+    assert rows[0]["ai_summary"] == "A poster."
+    assert rows[0]["ai_verdict"] == "needs_review"
+    assert rows[0]["ai_confidence"] == "0.64"
+
+    messages = model.calls[0]
+    human = messages[1]  # type: ignore[attr-defined]
+    assert isinstance(human.content, list)
+    assert human.content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+async def test_pre_review_rejects_missing_fixed_columns(world: World) -> None:  # noqa: F811
+    row, data_row = await _app_with_row(world)
+    service, _task_repo = _task_service(world, _FakeModel("{}"))
+    with pytest.raises(OctopError) as exc:
+        await service.create(
+            row,  # type: ignore[arg-type]
+            user_id=world.alice_id,
+            task_type="pre_review",
+            row_id=data_row.row_id,  # type: ignore[attr-defined]
+        )
+    assert exc.value.code is ErrorCode.APP_CAPABILITY_INVALID
 
 
 async def test_table_digest_uses_bounded_read_tools(world: World) -> None:  # noqa: F811
@@ -426,3 +496,19 @@ def test_parse_output_accepts_fences_and_rejects_empty_fields() -> None:
         parse_output(spec, '{"summary": ""}')
     with pytest.raises(ValueError):
         parse_output(spec, "not json")
+
+
+def test_pre_review_output_choices_are_normalized_and_enforced() -> None:
+    spec = get_task_type("pre_review")
+    assert spec is not None
+    assert spec.write_mode == "fixed"
+    parsed = parse_output(
+        spec,
+        '{"summary": "ok", "verdict": " APPROVE ", "confidence": "0.9"}',
+    )
+    assert parsed["verdict"] == "approve"
+    with pytest.raises(ValueError):
+        parse_output(
+            spec,
+            '{"summary": "ok", "verdict": "maybe", "confidence": "0.9"}',
+        )

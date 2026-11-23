@@ -1856,6 +1856,21 @@ async def test_system_templates_are_listed_and_creatable(
     assert "customer" in [column["name"] for column in detail["columns"]]
     assert detail["has_html"] is True
 
+    r = await client.post(
+        "/api/apps/from-template",
+        headers=alice_auth,
+        json={
+            "agent_id": agent_id,
+            "template": "content-review",
+            "source": "system",
+            "name": "我的审核台",
+        },
+    )
+    assert r.status_code == 201
+    review = r.json()
+    assert {"ai.agent_task", "asset.write"} <= set(review["capabilities"])
+    assert "ai_verdict" in [column["name"] for column in review["columns"]]
+
 
 async def test_quick_inspect_and_create_flow(
     env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
@@ -4469,7 +4484,9 @@ async def test_ai_task_api_lifecycle(
     assert r.status_code == 200
     types = {item["name"]: item for item in r.json()}
     assert types["summarize_row"]["tier"] == 1
+    assert types["summarize_row"]["write_mode"] == "column"
     assert types["table_digest"]["tier"] == 2
+    assert types["pre_review"]["write_mode"] == "fixed"
     r = await client.get(f"/api/apps/{app_id}/task-types", headers=bob_auth)
     assert r.status_code == 403
 

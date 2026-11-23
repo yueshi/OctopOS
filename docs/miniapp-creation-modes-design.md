@@ -301,7 +301,7 @@ GET /api/apps/templates?agent_id=...&source=all|system|agent|cloud&q=&category=
 ### 5.4 系统模板运营
 
 - 随 wheel 发布，版本号跟产品版本走；
-- 首批已内置 5 个：客户跟进台账、月度开支记账、项目任务看板、库存盘点表、费用报销台账（均带 `preview.svg`）；
+- 首批已内置 6 个：客户跟进台账、月度开支记账、项目任务看板、库存盘点表、费用报销台账、内容审核台（均带 `preview.svg`）；
 - 新增/修改走代码评审和 HTML 沙箱校验；
 - 后续若需要管理员在线编辑，再加 DB overlay，不改包内文件。
 

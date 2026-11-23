@@ -12,7 +12,7 @@
 >
 > **AI-native 增强开发计划见 [MiniApp AI-native 增强开发计划](./miniapp-ai-native-plan.md)。**
 >
-> **P1a/P1b/P2 已落地（2026-11-22）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`、页面图片上传（`asset.write` + `octopApp.upload`）、行查询下推（SQLite `json_extract` / PG `jsonb->>`，2 万行约 47ms）、AI 任务完成/失败通知（`notifications` kind=`app_task`，点击进入应用任务页）。预算预扣、任务 HITL、审核参考应用仍按计划进行。
+> **P1a/P1b/P2 已落地（2026-11-23）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、`pre_review`（图文初审 + 固定列写回）与「内容审核台」系统模板、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`、页面图片上传（`asset.write` + `octopApp.upload`）、行查询下推（SQLite `json_extract` / PG `jsonb->>`，2 万行约 47ms）、AI 任务完成/失败通知（`notifications` kind=`app_task`，点击进入应用任务页）。后续优先级见计划 §14.1：预算预扣/结算优先，任务 HITL 改为接入外部副作用时触发。
 >
 > **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现并部署。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 
@@ -91,7 +91,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 |---|---|---|
 | Agent 工具 | `app_create` 定义字段并建主表；`app_write_html` 写界面；`app_append_row` 灌数据 | ✅ |
 | 快速模式 | 工作台「创建」→ 上传 xlsx/xls/csv/tsv/json → 服务端 inspect → 用户确认字段 → 选视图 → 确定性渲染 HTML | ✅ |
-| 本地模板 | 系统模板（包内 5 个）+ Agent 工作区 `app_templates/<id>/` | ✅ |
+| 本地模板 | 系统模板（包内 6 个）+ Agent 工作区 `app_templates/<id>/` | ✅ |
 | 从模板创建 | `POST /api/apps/from-template`、`app_create_from_template`（`source` 为 `system` 或 `agent`） | ✅ |
 | 云端市场 | 前端「云端市场」页签只有占位文案 | ⛔ |
 
@@ -749,7 +749,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 |---|---|---|---|
 | 创建 | Agent 工具创建 | ✅ | `app_create` + `app_write_html` |
 | 创建 | Excel 快速模式 | ✅ | 确定性渲染，不打 LLM |
-| 创建 | 系统模板 | ✅ | 5 个：客户跟进、月度开支、库存盘点、项目任务、费用报销 |
+| 创建 | 系统模板 | ✅ | 6 个：客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核 |
 | 创建 | 专家模板 | ✅ | `app_templates/<id>/`，随专家发布/安装 |
 | 创建 | 云端市场 | ⛔ | 前端占位 |
 | 数据 | 多表 | ✅ | 最多 12 张 |
@@ -842,7 +842,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | `app_integration_delete_webhook` | owner/admin | 删除出站 Webhook 及其 source/subscription（**强制 HITL**） |
 | `app_integration_test_webhook` | owner/admin | 发送出站测试事件并交给 worker（**强制 HITL**） |
 | `app_delete` | owner/admin | 删除应用（**强制 HITL**） |
-| `app_run_task` | `view` + 任务内行级授权 | 发起 `summarize_row` / `table_digest` AI 任务；需 `ai.agent_task` 能力位 |
+| `app_run_task` | `view` + 任务内行级授权 | 发起 `summarize_row` / `table_digest` / `pre_review` AI 任务；需 `ai.agent_task` 能力位 |
 | `app_get_task` | `view` | 读取 AI 任务状态、结果与错误 |
 | `app_list_tasks` | `view` | 列出应用最近的 AI 任务 |
 | `app_cancel_task` | 创建者/owner | 取消排队任务，或标记运行中任务 |
@@ -925,7 +925,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | GET | `/apps/{id}/source-tools` | 可用的只读连接器工具 |
 | GET/POST | `/apps/{id}/schedules` | 列出/创建应用级调度 |
 | PATCH/DELETE | `/apps/{id}/schedules/{schedule_id}` | 修改/删除调度 |
-| GET | `/apps/{id}/task-types` | 已注册的 AI 任务类型 |
+| GET | `/apps/{id}/task-types` | 已注册的 AI 任务类型（tier / write_mode） |
 | GET/POST | `/apps/{id}/tasks` | 列出/创建 AI 任务 |
 | GET | `/apps/{id}/tasks/{task_id}` | AI 任务状态与结果 |
 | POST | `/apps/{id}/tasks/{task_id}/cancel` | 取消 AI 任务 |

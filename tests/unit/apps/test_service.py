@@ -2470,6 +2470,26 @@ async def test_system_templates_are_global_and_create_apps(world: World) -> None
     html = await world.service.read_html(row)
     assert html and "octopApp" in html
 
+    review = await world.service.create_from_template(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        template="content-review",
+        source="system",
+        name="我的审核台",
+        grant_template_capabilities=True,
+    )
+    assert {"ai.agent_task", "asset.write"} <= world.service.capabilities(review)
+
+    # The agent-facing path must not silently grant high-risk capabilities.
+    agent_created = await world.service.create_from_template(
+        agent_id=world.agent_id,
+        owner_user_id=world.alice_id,
+        template="content-review",
+        source="system",
+        name="Agent 创建",
+    )
+    assert not {"ai.agent_task", "asset.write"} & world.service.capabilities(agent_created)
+
 
 async def test_agent_templates_keep_their_manifest_name(world: World) -> None:
     await world.workspace.awrite_text(

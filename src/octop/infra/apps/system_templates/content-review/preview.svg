@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="内容审核台">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ffffff"/><stop offset="100%" stop-color="#EEF0FF"/></linearGradient>
+<linearGradient id="photo-a" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#c7d2fe"/><stop offset="100%" stop-color="#818cf8"/></linearGradient>
+<linearGradient id="photo-b" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fbcfe8"/><stop offset="100%" stop-color="#f472b6"/></linearGradient>
+</defs>
+<rect width="1200" height="630" fill="url(#bg)"/>
+<rect width="1200" height="6" fill="#4F46E5"/>
+<circle cx="1070" cy="90" r="190" fill="#4F46E5" opacity="0.05"/>
+<text x="72" y="112" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="46" font-weight="700" fill="#111827">内容审核台</text>
+<text x="72" y="158" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="22" fill="#4b5563">上传图片素材，AI 先做初审，人工再通过或驳回</text>
+<rect x="72" y="206" width="248" height="100" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/><text x="96" y="244" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#6b7280">全部素材</text><text x="96" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#4338CA">24</text>
+<rect x="348" y="206" width="248" height="100" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/><text x="372" y="244" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#6b7280">待审核</text><text x="372" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#111827">9</text>
+<rect x="624" y="206" width="248" height="100" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/><text x="648" y="244" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#6b7280">AI 建议复核</text><text x="648" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#B45309">3</text>
+<rect x="900" y="206" width="248" height="100" rx="14" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/><text x="924" y="244" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="17" fill="#6b7280">已通过</text><text x="924" y="286" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" fill="#15803D">15</text>
+<rect x="72" y="336" width="504" height="242" rx="16" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+<rect x="90" y="354" width="468" height="132" rx="10" fill="url(#photo-a)"/>
+<circle cx="260" cy="414" r="34" fill="#ffffff" opacity="0.45"/><path d="M300 486 L376 400 L440 486 Z" fill="#ffffff" opacity="0.5"/>
+<rect x="394" y="368" width="102" height="26" rx="13" fill="#DCFCE7"/><text x="414" y="386" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="600" fill="#15803D">已通过</text>
+<text x="90" y="518" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="19" font-weight="600" fill="#111827">春季新品主视觉</text>
+<rect x="90" y="536" width="86" height="26" rx="13" fill="#DCFCE7"/><text x="104" y="554" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" font-weight="600" fill="#15803D">AI · 建议通过</text>
+<text x="188" y="554" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#6b7280">置信度 0.92</text>
+<rect x="624" y="336" width="504" height="242" rx="16" fill="#ffffff" stroke="#e5e7eb" stroke-width="1.5"/>
+<rect x="642" y="354" width="468" height="132" rx="10" fill="url(#photo-b)"/>
+<circle cx="860" cy="410" r="34" fill="#ffffff" opacity="0.45"/><path d="M820 486 L906 394 L1000 486 Z" fill="#ffffff" opacity="0.5"/>
+<rect x="938" y="368" width="102" height="26" rx="13" fill="#FEF3C7"/><text x="958" y="386" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="14" font-weight="600" fill="#B45309">待审核</text>
+<text x="642" y="518" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="19" font-weight="600" fill="#111827">夏季活动海报</text>
+<rect x="642" y="536" width="102" height="26" rx="13" fill="#FEF3C7"/><text x="656" y="554" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" font-weight="600" fill="#B45309">AI · 建议复核</text>
+<text x="754" y="554" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="13" fill="#6b7280">置信度 0.64</text>
+</svg>

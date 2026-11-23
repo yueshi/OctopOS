@@ -1,0 +1,20 @@
+{
+  "id": "content-review",
+  "version": 1,
+  "name": { "zh": "内容审核台", "en": "Content Review" },
+  "description": {
+    "zh": "上传图片素材，AI 先做初审，人工再通过或驳回。",
+    "en": "Upload image assets, get an AI pre-review, then approve or reject."
+  },
+  "category": "operations",
+  "tags": ["review", "content", "moderation", "ai"],
+  "capabilities": [
+    "data.read",
+    "data.write",
+    "asset.read",
+    "asset.write",
+    "ai.agent_task"
+  ],
+  "schema": "schema.json",
+  "html": "app.html"
+}

@@ -70,6 +70,7 @@ describe("RunTaskModal", () => {
         tier: 1,
         output_fields: ["summary"],
         supports_write: true,
+        write_mode: "column",
       },
       {
         name: "table_digest",
@@ -77,6 +78,7 @@ describe("RunTaskModal", () => {
         tier: 2,
         output_fields: ["summary"],
         supports_write: true,
+        write_mode: "column",
       },
     ]);
     vi.mocked(appsApi.createTask).mockResolvedValue({
@@ -125,5 +127,60 @@ describe("RunTaskModal", () => {
     );
     expect(onCreated).toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("hides the write column for fixed-write task types", async () => {
+    vi.mocked(appsApi.listTaskTypes).mockResolvedValue([
+      {
+        name: "pre_review",
+        label: "内容初审",
+        tier: 1,
+        output_fields: ["summary", "verdict", "confidence"],
+        supports_write: true,
+        write_mode: "fixed",
+      },
+    ]);
+    vi.mocked(appsApi.createTask).mockResolvedValue({
+      task_id: "tsk_2",
+      app_id: "app_1",
+      table: "main",
+      row_id: "row_1",
+      task_type: "pre_review",
+      status: "queued",
+      result: null,
+      error: "",
+      created_at: 1,
+      started_at: null,
+      finished_at: null,
+    });
+
+    render(
+      <AntdApp>
+        <RunTaskModal
+          open
+          appId="app_1"
+          tableKey="main"
+          rowId="row_1"
+          columns={columns}
+          onClose={vi.fn()}
+          onCreated={vi.fn()}
+        />
+      </AntdApp>,
+    );
+
+    expect(
+      await screen.findByText("该任务类型会将结果写入应用预设的列。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("结果写入列（可选）")).not.toBeInTheDocument();
+    (await screen.findByRole("button", { name: "加入队列" })).click();
+
+    await waitFor(() =>
+      expect(appsApi.createTask).toHaveBeenCalledWith("app_1", {
+        task_type: "pre_review",
+        table: "main",
+        row_id: "row_1",
+        input: {},
+      }),
+    );
   });
 });

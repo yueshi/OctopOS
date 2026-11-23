@@ -1707,6 +1707,7 @@ async def create_app_from_template(
         source=body.source,
         name=body.name,
         description=body.description,
+        grant_template_capabilities=True,
     )
     return await _app_detail(service, row)
 
@@ -4820,14 +4821,22 @@ class AppTaskTypeOut(BaseModel):
     label: str = Field(description="Human-readable label.")
     tier: int = Field(description="Execution tier: 1 = single model call, 2 = bounded tools.")
     output_fields: list[str] = Field(description="Structured result fields.")
-    supports_write: bool = Field(description="Whether a write_column may receive the result.")
+    supports_write: bool = Field(description="Whether the task writes result columns.")
+    write_mode: Literal["column", "fixed", "none"] = Field(
+        description=(
+            "How results are written: `column` accepts an optional write_column, "
+            "`fixed` writes task-defined columns, and `none` keeps the result on "
+            "the task only."
+        )
+    )
 
 
 class AppTaskCreateBody(BaseModel):
     task_type: str = Field(
         description=(
-            "Registered task type: ``summarize_row`` (Tier 1) or "
-            "``table_digest`` (Tier 2, bounded read-only tools)."
+            "Registered task type: ``summarize_row`` (Tier 1), "
+            "``table_digest`` (Tier 2, bounded read-only tools), or "
+            "``pre_review`` (Tier 1 text/image pre-review with fixed write-back)."
         )
     )
     table: str = Field(
@@ -4839,7 +4848,8 @@ class AppTaskCreateBody(BaseModel):
         default_factory=dict,
         description=(
             "Task-type-specific input. ``summarize_row`` accepts an optional "
-            "``write_column`` naming a non-PII string column to receive the summary."
+            "``write_column`` naming a non-PII string or text column to receive "
+            "the summary; task types with fixed write-back (``pre_review``) reject it."
         ),
     )
     idempotency_key: str = Field(
@@ -4901,7 +4911,8 @@ async def list_app_task_types(
             label=spec.label,
             tier=spec.tier,
             output_fields=list(spec.output_fields),
-            supports_write=bool(spec.write_key),
+            supports_write=spec.write_mode != "none",
+            write_mode=spec.write_mode,
         )
         for spec in list_task_types()
     ]

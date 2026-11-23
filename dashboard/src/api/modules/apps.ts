@@ -226,6 +226,7 @@ export interface AppTaskType {
   tier: number;
   output_fields: string[];
   supports_write: boolean;
+  write_mode: "column" | "fixed" | "none";
 }
 
 export interface AppTask {

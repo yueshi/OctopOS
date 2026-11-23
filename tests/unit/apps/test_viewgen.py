@@ -9,6 +9,7 @@ from octop.infra.apps.templates import (
     clean_template_id,
     list_system_templates,
     read_system_template,
+    read_system_template_capabilities,
 )
 from octop.infra.apps.viewgen import render_html, render_multi_html, suggest_view
 from octop.infra.errors import ErrorCode, OctopError
@@ -119,6 +120,7 @@ def test_system_templates_are_shipped_and_valid() -> None:
         "project-tasks",
         "inventory-count",
         "reimbursement",
+        "content-review",
     } <= set(templates)
     assert templates["customer-followup"].name == "客户跟进台账"
     assert templates["customer-followup"].scope == "global"
@@ -127,6 +129,14 @@ def test_system_templates_are_shipped_and_valid() -> None:
     schema_text, html_text = read_system_template("customer-followup")
     parse_schema_payload(schema_text)
     assert html_text and "octopApp" in html_text
+
+    review_schema, review_html = read_system_template("content-review")
+    assert "ai_verdict" in parse_schema_payload(review_schema).names
+    assert review_html and "pre_review" in review_html
+    assert set(read_system_template_capabilities("content-review") or ()) >= {
+        "asset.write",
+        "ai.agent_task",
+    }
 
 
 def test_template_id_rejects_traversal() -> None:

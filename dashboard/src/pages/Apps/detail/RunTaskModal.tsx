@@ -65,10 +65,11 @@ export default function RunTaskModal({
     [columns],
   );
   const selected = types.find((item) => item.name === selectedType);
-  const supportsWrite = selected?.supports_write !== false;
+  const writeMode = selected?.write_mode ?? "none";
   const typeLabel = (item: AppTaskType) => {
     if (item.name === "summarize_row") return t("apps.taskTypeSummarize");
     if (item.name === "table_digest") return t("apps.taskTypeDigest");
+    if (item.name === "pre_review") return t("apps.taskTypePreReview");
     return item.label;
   };
 
@@ -127,17 +128,26 @@ export default function RunTaskModal({
             }))}
           />
         </Form.Item>
-        <Form.Item name="write_column" label={t("apps.runTaskWriteColumn")}>
-          <Select
-            allowClear
-            disabled={!supportsWrite}
-            placeholder={t("apps.runTaskWriteColumnNone")}
-            options={writableColumns.map((column) => ({
-              value: column.name,
-              label: column.label,
-            }))}
+        {writeMode === "column" ? (
+          <Form.Item name="write_column" label={t("apps.runTaskWriteColumn")}>
+            <Select
+              allowClear
+              placeholder={t("apps.runTaskWriteColumnNone")}
+              options={writableColumns.map((column) => ({
+                value: column.name,
+                label: column.label,
+              }))}
+            />
+          </Form.Item>
+        ) : null}
+        {writeMode === "fixed" ? (
+          <Alert
+            type="info"
+            showIcon
+            message={t("apps.runTaskFixedWrite")}
+            style={{ marginBottom: 16 }}
           />
-        </Form.Item>
+        ) : null}
         <Typography.Text type="secondary">
           {t("apps.runTaskRow", { row: rowId })}
         </Typography.Text>

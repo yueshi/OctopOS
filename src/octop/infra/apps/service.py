@@ -79,6 +79,7 @@ from octop.infra.apps.templates import (
     clean_template_id,
     list_system_templates,
     read_system_template,
+    read_system_template_capabilities,
     read_system_template_services,
 )
 from octop.infra.apps.viewgen import render_html as render_view_html
@@ -2230,9 +2231,22 @@ class AppService:
         name: str | None = None,
         description: str = "",
         capabilities: Iterable[str] | None = None,
+        grant_template_capabilities: bool = False,
     ) -> LightAppRow:
-        """Create an empty app from a system or workspace shell (schema + HTML)."""
+        """Create an empty app from a system or workspace shell (schema + HTML).
+
+        ``grant_template_capabilities`` is for the dashboard's owner-initiated
+        creation path. Agent tools leave it false so a bundled template cannot
+        silently grant high-risk page capabilities.
+        """
         clean = clean_template_id(template)
+        selected_capabilities = capabilities
+        if (
+            selected_capabilities is None
+            and grant_template_capabilities
+            and source == SYSTEM_SOURCE
+        ):
+            selected_capabilities = read_system_template_capabilities(clean)
         schema_text: str
         html: str | None
         services_text: str | None = None
@@ -2255,7 +2269,7 @@ class AppService:
             name=(name or clean).strip() or clean,
             description=description,
             columns=schema_text,
-            capabilities=capabilities,
+            capabilities=selected_capabilities,
         )
         if html:
             try:

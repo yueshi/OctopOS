@@ -7,6 +7,7 @@ model call; later tiers can add bounded agent turns behind the same contract.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -79,6 +80,20 @@ def _invalid(message: str) -> OctopError:
     return OctopError(ErrorCode.APP_CAPABILITY_INVALID, message)
 
 
+def _write_plan(spec: TaskType, task_input: Mapping[str, Any]) -> dict[str, str]:
+    """Map output fields to columns: fixed by the task type, or the page's choice."""
+    if spec.write_targets:
+        return dict(spec.write_targets)
+    write_column = str(task_input.get("write_column") or "").strip()
+    if not write_column or not spec.write_key:
+        return {}
+    return {spec.write_key: write_column}
+
+
+def _is_writable_column(column: Any) -> bool:
+    return column is not None and column.type in {"string", "text"} and not column.pii
+
+
 class AppTaskService:
     def __init__(
         self,
@@ -131,14 +146,17 @@ class AppTaskService:
         if unknown_input:
             raise _invalid("unsupported task input: " + ", ".join(sorted(unknown_input)))
         write_column = str(raw_input.get("write_column") or "").strip()
+        if spec.write_targets and write_column:
+            raise _invalid(f"{spec.name} writes fixed columns; write_column is not accepted")
         clean_key = idempotency_key.strip()
         if len(clean_key) > 128:
             raise _invalid("idempotency_key must be at most 128 characters")
-        if write_column:
+        write_plan = _write_plan(spec, raw_input)
+        if write_plan:
             schema = await self._app_service.read_schema(row, table_key)
-            column = schema.column(write_column)
-            if column is None or column.type != "string" or column.pii:
-                raise _invalid("write_column must be a non-PII string column")
+            for target in write_plan.values():
+                if not _is_writable_column(schema.column(target)):
+                    raise _invalid(f"task writes to a non-writable column: {target}")
             decision = self._app_service.authorize_actor(
                 user_id,
                 row,
@@ -232,11 +250,11 @@ class AppTaskService:
         if task.cancel_requested:
             raise AppTaskCancelled(task.task_id)
 
-        write_column = str(task.input.get("write_column") or "").strip()
+        write_plan = _write_plan(spec, task.input)
         decision = self._app_service.authorize_actor(
             task.actor_user_id,
             row,
-            app_access.Action.UPDATE_ROW if write_column else app_access.Action.VIEW_ROW,
+            app_access.Action.UPDATE_ROW if write_plan else app_access.Action.VIEW_ROW,
             table_key=task.table_key,
             row_record=row_record,
         )
@@ -247,10 +265,10 @@ class AppTaskService:
         visible = [column for column in schema.columns if not column.pii]
         prompt = build_prompt(spec, visible, row_record.values)
         llm, model_ref = resolve_app_model(self._agents, row.agent_id)
-        base_messages = [SystemMessage(content=spec.system_prompt), HumanMessage(content=prompt)]
+        base_messages = await self._build_messages(spec, row, row_record, prompt)
 
         if spec.tier >= 2:
-            parsed, usage = await self._run_bounded_agent(llm, task, spec, row, prompt)
+            parsed, usage = await self._run_bounded_agent(llm, task, spec, row, base_messages)
         else:
             parsed, usage = await self._ask_json(llm, spec, base_messages)
 
@@ -260,6 +278,37 @@ class AppTaskService:
 
         written = await self._write_back(task, spec, row, row_record, schema, parsed, decision)
         return AppTaskResult(result=parsed, model_ref=model_ref, written=written)
+
+    async def _build_messages(
+        self,
+        spec: TaskType,
+        row: AppRecord,
+        row_record: Any,
+        prompt: str,
+    ) -> MessageList:
+        messages: MessageList = [
+            SystemMessage(content=spec.system_prompt),
+            HumanMessage(content=prompt),
+        ]
+        if not spec.image_column:
+            return messages
+        asset_name = str(row_record.values.get(spec.image_column) or "").strip()
+        if not asset_name:
+            return messages
+        mime, data = await self._app_service.read_asset(row, asset_name)
+        if not mime.startswith("image/"):
+            raise _invalid(f"{spec.image_column} must name an image asset")
+        encoded = base64.b64encode(data).decode("ascii")
+        messages[1] = HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{encoded}"},
+                },
+            ]
+        )
+        return messages
 
     async def _ask_json(
         self,
@@ -299,16 +348,13 @@ class AppTaskService:
         task: AppTaskRow,
         spec: TaskType,
         row: AppRecord,
-        prompt: str,
+        base_messages: MessageList,
     ) -> tuple[dict[str, Any], dict[str, int]]:
         """Tier 2: a bounded, read-only tool loop over the app's own tables."""
         tools = self._build_tier2_tools(task, row)
         tools_by_name = {tool.name: tool for tool in tools}
         bound = llm.bind_tools(tools)
-        messages: MessageList = [
-            SystemMessage(content=spec.system_prompt),
-            HumanMessage(content=prompt),
-        ]
+        messages: MessageList = list(base_messages)
         usage_in = usage_out = 0
         tool_calls = 0
 
@@ -484,17 +530,20 @@ class AppTaskService:
         parsed: dict[str, Any],
         decision: app_access.Decision,
     ) -> bool:
-        write_column = str(task.input.get("write_column") or "").strip()
-        if not write_column:
+        write_plan = _write_plan(spec, task.input)
+        if not write_plan:
             return False
-        column = schema.column(write_column)
-        if column is None or column.type != "string" or column.pii:
-            raise _invalid("write_column is no longer writable")
-        value = str(parsed[spec.write_key])[:MAX_WRITE_CHARS]
+        updates: dict[str, str] = {}
+        for field, target in write_plan.items():
+            if not _is_writable_column(schema.column(target)):
+                raise _invalid(f"task writes to a non-writable column: {target}")
+            updates[target] = str(parsed[field])[:MAX_WRITE_CHARS]
+        # update_row validates and stores a complete row; merge the task output
+        # over the row as read so unrelated columns are preserved.
         await self._app_service.update_row(
             row,
             task.row_id,
-            {write_column: value},
+            {**row_record.values, **updates},
             table=task.table_key,
             expected_version=row_record.version,
             viewer_user_id=task.actor_user_id,

@@ -147,6 +147,18 @@ def read_system_template(template_id: str) -> tuple[str, str | None]:
     return schema_text, html_text
 
 
+def read_system_template_capabilities(template_id: str) -> list[str] | None:
+    """Return the page capabilities a system template explicitly requests."""
+    clean = clean_template_id(template_id)
+    directory = SYSTEM_TEMPLATE_ROOT / clean
+    if not (directory / MANIFEST_NAME).is_file():
+        raise OctopError(ErrorCode.APP_NOT_FOUND, f"unknown app template: {template_id!r}")
+    raw = _read_manifest(directory).get("capabilities")
+    if not isinstance(raw, list):
+        return None
+    return [str(item).strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
 def read_system_template_services(template_id: str) -> str | None:
     """Return the optional ``services.json`` declaration for a system template."""
     clean = clean_template_id(template_id)

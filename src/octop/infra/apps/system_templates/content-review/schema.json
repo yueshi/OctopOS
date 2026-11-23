@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "columns": [
+    { "name": "title", "label": "标题", "type": "string", "required": true },
+    { "name": "media", "label": "图片素材", "type": "string" },
+    { "name": "notes", "label": "说明", "type": "text" },
+    {
+      "name": "status",
+      "label": "审核状态",
+      "type": "enum",
+      "values": ["pending", "approved", "rejected"]
+    },
+    { "name": "ai_summary", "label": "AI 摘要", "type": "text" },
+    { "name": "ai_verdict", "label": "AI 结论", "type": "string" },
+    { "name": "ai_confidence", "label": "AI 置信度", "type": "string" },
+    { "name": "reviewed_at", "label": "审核时间", "type": "datetime" }
+  ]
+}
