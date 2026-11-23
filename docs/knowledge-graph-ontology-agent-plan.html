@@ -1,0 +1,1701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Octop 知识图谱、Ontology 与主动式 Agent 的落地规划：架构、90 天路线图、里程碑、验收标准与治理边界。">
+<title>Octop 知识图谱 · Ontology · 主动式 Agent 落地规划</title>
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --paper: #ffffff;
+    --ink: #1f2328;
+    --muted: #57606a;
+    --line: #d8dee4;
+    --accent: #0969da;
+    --accent-soft: #ddf4ff;
+    --ok: #1a7f37;
+    --ok-soft: #dafbe1;
+    --warn: #9a6700;
+    --warn-soft: #fff8c5;
+    --bad: #cf222e;
+    --bad-soft: #ffebe9;
+    --code-bg: #f6f8fa;
+    --code-ink: #cf222e;
+    --tile: #fbfcfd;
+    --shadow: 0 1px 2px rgba(31, 35, 40, .04), 0 8px 24px rgba(31, 35, 40, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --paper: #161b22;
+      --ink: #e6edf3;
+      --muted: #8b949e;
+      --line: #30363d;
+      --accent: #58a6ff;
+      --accent-soft: #121d2f;
+      --ok: #3fb950;
+      --ok-soft: #12261e;
+      --warn: #d29922;
+      --warn-soft: #282214;
+      --bad: #f85149;
+      --bad-soft: #2d1517;
+      --code-bg: #1c2129;
+      --code-ink: #ff7b72;
+      --tile: #1b222c;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.78 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+          "Noto Sans CJK SC", -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .layout {
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr);
+    max-width: 1400px;
+    margin: 0 auto;
+    align-items: start;
+  }
+
+  /* ---------- 目录 ---------- */
+  .toc {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 16px 40px;
+    border-right: 1px solid var(--line);
+    background: color-mix(in srgb, var(--paper) 72%, var(--bg));
+  }
+  .toc-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    color: var(--muted);
+    text-transform: uppercase;
+    padding: 0 10px 10px;
+  }
+  .toc a {
+    display: block;
+    padding: 4px 10px;
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.5;
+    text-decoration: none;
+    transition: background .15s, color .15s;
+  }
+  .toc a:hover { background: var(--accent-soft); color: var(--accent); }
+  .toc a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .toc a.sub { padding-left: 22px; font-size: 12.5px; }
+  .toc .divider { height: 1px; background: var(--line); margin: 12px 8px; }
+
+  /* ---------- 正文 ---------- */
+  .paper {
+    width: 100%;
+    max-width: 1040px;
+    min-height: 100vh;
+    padding: 48px 56px 96px;
+    background: var(--paper);
+  }
+  header.doc-head { margin-bottom: 30px; }
+  .eyebrow {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 2px 10px;
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-size: 32px;
+    line-height: 1.28;
+    letter-spacing: -.02em;
+    margin: 0 0 8px;
+  }
+  .subtitle {
+    margin: 0 0 14px;
+    font-size: 17px;
+    color: var(--muted);
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .chip {
+    display: inline-block;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-size: 12.5px;
+    color: var(--muted);
+    background: var(--paper);
+  }
+  .doc-actions { margin: 12px 0 0; }
+  .print-btn {
+    border: 1px solid var(--line);
+    background: var(--tile);
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .print-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  h2 {
+    font-size: 23px;
+    line-height: 1.4;
+    margin: 64px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+    scroll-margin-top: 20px;
+  }
+  h3 {
+    font-size: 18px;
+    margin: 34px 0 10px;
+    scroll-margin-top: 20px;
+  }
+  h4 {
+    font-size: 15px;
+    margin: 22px 0 8px;
+    color: var(--muted);
+  }
+  p { margin: 10px 0; }
+  ul, ol { padding-left: 1.55em; }
+  li { margin: 5px 0; }
+  strong { font-weight: 650; }
+  code {
+    font-family: "SF Mono", ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    font-size: .86em;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 2px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  td code, li code { white-space: normal; word-break: break-word; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.62;
+    margin: 14px 0;
+  }
+  pre code {
+    background: none;
+    color: var(--ink);
+    padding: 0;
+    white-space: pre;
+    font-size: inherit;
+  }
+  blockquote {
+    border-left: 4px solid var(--line);
+    margin: 14px 0;
+    padding: 6px 18px;
+    color: var(--muted);
+    background: color-mix(in srgb, var(--code-bg) 55%, transparent);
+  }
+
+  /* ---------- 组件 ---------- */
+  .lead {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 16px 20px;
+    border-radius: 0 8px 8px 0;
+    font-size: 15.5px;
+    margin: 0 0 6px;
+  }
+  .lead b { color: var(--ink); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 22px 0 8px;
+  }
+  .tile {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    background: var(--tile);
+  }
+  .tile .lab { font-size: 12.5px; color: var(--muted); }
+  .tile .val { font-size: 28px; font-weight: 650; line-height: 1.25; margin-top: 2px; }
+  .tile .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    background: var(--tile);
+  }
+  .card h3, .card h4 { margin-top: 0; }
+  .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+  .card .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+    margin-right: 8px;
+  }
+
+  .table-wrap { width: 100%; overflow-x: auto; margin: 14px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 650; white-space: nowrap; }
+  tr:nth-child(even) td { background: color-mix(in srgb, var(--code-bg) 42%, transparent); }
+  caption {
+    caption-side: top;
+    text-align: left;
+    font-size: 12.5px;
+    color: var(--muted);
+    padding-bottom: 6px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 999px;
+    padding: 1px 9px;
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge-ok { color: var(--ok); background: var(--ok-soft); }
+  .badge-warn { color: var(--warn); background: var(--warn-soft); }
+  .badge-bad { color: var(--bad); background: var(--bad-soft); }
+  .badge-info { color: var(--accent); background: var(--accent-soft); }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 14.5px;
+  }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .callout b { color: var(--ink); }
+
+  /* ---------- 架构图 ---------- */
+  .arch {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 18px 0;
+    background: var(--paper);
+  }
+  .arch-layer {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr);
+    border-top: 1px solid var(--line);
+  }
+  .arch-layer:first-child { border-top: 0; }
+  .arch-label {
+    padding: 13px 16px;
+    font-weight: 650;
+    font-size: 13.5px;
+    background: var(--code-bg);
+    border-right: 1px solid var(--line);
+  }
+  .arch-items {
+    padding: 10px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    align-items: center;
+  }
+  .arch-item {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 13px;
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .arch-layer.consumer .arch-label { color: var(--accent); }
+  .arch-layer.govern .arch-label { color: var(--warn); }
+  .arch-layer.data .arch-label { color: var(--ok); }
+
+  /* ---------- 流程 ---------- */
+  .flow { display: grid; gap: 6px; margin: 16px 0; }
+  .flow-step {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    background: var(--tile);
+    font-size: 14.5px;
+  }
+  .flow-step b { color: var(--accent); }
+  .flow-arrow { text-align: center; color: var(--muted); font-size: 15px; line-height: 1; }
+
+  /* ---------- 时间线 ---------- */
+  .timeline {
+    position: relative;
+    margin: 20px 0 8px;
+    padding-left: 24px;
+    border-left: 2px solid var(--line);
+  }
+  .ms { position: relative; margin: 0 0 20px; }
+  .ms::before {
+    content: "";
+    position: absolute;
+    left: -31px;
+    top: 6px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--paper);
+  }
+  .ms-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .ms-head h3 { margin: 0; font-size: 17px; }
+  .ms-week { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  .ms-body { margin-top: 6px; }
+  .ms-body p { margin: 6px 0; }
+  .ms-body ul { margin: 6px 0; }
+
+  /* ---------- 清单 ---------- */
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { display: flex; gap: 8px; align-items: flex-start; margin: 7px 0; }
+  .checklist li::before {
+    content: "✓";
+    color: var(--ok);
+    font-weight: 700;
+    flex: none;
+    margin-top: 1px;
+  }
+  .checklist.cross li::before { content: "×"; color: var(--bad); }
+
+  /* ---------- 决策卡 ---------- */
+  .decision {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px 18px;
+    background: var(--tile);
+    margin: 12px 0;
+  }
+  .decision .q { font-weight: 650; margin: 0 0 6px; }
+  .decision .rec { margin: 6px 0 0; }
+  .decision .rec b { color: var(--ok); }
+
+  .footer {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .footer p { margin: 4px 0; }
+
+  @media (max-width: 1000px) {
+    .layout { display: block; }
+    .toc {
+      position: static;
+      height: auto;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+      padding: 18px 16px;
+    }
+    .toc a { display: inline-block; margin: 2px 4px 2px 0; }
+    .toc a.sub { padding-left: 10px; }
+    .paper { padding: 32px 22px 72px; }
+    .grid-2, .grid-3, .stats { grid-template-columns: 1fr; }
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .arch-layer { grid-template-columns: 96px minmax(0, 1fr); }
+    h2 { margin-top: 48px; }
+  }
+  @media (max-width: 560px) {
+    .stats { grid-template-columns: 1fr; }
+    h1 { font-size: 26px; }
+    .paper { padding: 26px 16px 64px; }
+  }
+  @media print {
+    body { background: #fff; }
+    .layout { display: block; max-width: none; }
+    .toc, .print-btn { display: none !important; }
+    .paper { max-width: none; padding: 0; box-shadow: none; }
+    h2 { break-after: avoid; }
+    h3 { break-after: avoid; }
+    table, .card, .callout, .arch, pre { break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <nav class="toc" aria-label="文档目录">
+    <div class="toc-title">目录</div>
+    <a href="#summary">1. 结论摘要</a>
+    <a href="#architecture">2. 总体架构</a>
+    <a href="#lines">3. 三条技术线</a>
+    <a href="#lines-ontology" class="sub">3.1 Ontology</a>
+    <a href="#lines-graph" class="sub">3.2 知识图谱</a>
+    <a href="#lines-agent" class="sub">3.3 主动式 Agent</a>
+    <a href="#llm">4. LLM 的直接参与</a>
+    <a href="#principles">5. 落地原则</a>
+    <a href="#roadmap">6. 90 天路线图</a>
+    <a href="#slice">7. 第一条垂直切片</a>
+    <a href="#octop">8. Octop 复用与新建</a>
+    <a href="#productization">9. 产品化与多项目复用</a>
+    <a href="#metrics">10. 指标与治理</a>
+    <a href="#risks">11. 风险与不做</a>
+    <a href="#decisions">12. 决策点</a>
+    <a href="#next">13. 下一步</a>
+    <div class="divider"></div>
+    <a href="#appendix-a">附录 A：数据模型</a>
+    <a href="#appendix-b">附录 B：API 契约</a>
+    <a href="#appendix-c">附录 C：代码索引</a>
+    <a href="#appendix-d">附录 D：术语表</a>
+  </nav>
+
+  <main class="paper">
+    <header class="doc-head">
+      <div class="eyebrow">Octop · 设计稿</div>
+      <h1>知识图谱 · Ontology · 主动式 Agent</h1>
+      <p class="subtitle">从契约到闭环：架构、90 天路线图与验收标准</p>
+      <div class="meta">
+        <span class="chip">v1.0</span>
+        <span class="chip">2026-11-22</span>
+        <span class="chip">分支 feature/miniapp-capabilities</span>
+        <span class="chip">适用 Octop / MiniApp / 知识库 / Agent</span>
+        <span class="chip">状态：设计稿，待评审</span>
+      </div>
+      <div class="doc-actions">
+        <button class="print-btn" type="button" onclick="window.print()">打印 / 导出 PDF</button>
+      </div>
+    </header>
+
+    <div class="lead">
+      <b>一句话方案：</b>先用 Ontology 定契约，用知识图谱存事实与证据，用 LLM 做理解与生成，用 Agent 做发现与行动，用 HITL / 预算 / 评测做治理。第一条垂直切片从 <b>MiniApp 确定性业务图谱</b>开始，先只读、再建议、再审批、最后低风险自治。
+    </div>
+
+    <div class="stats" aria-label="关键数字">
+      <div class="tile">
+        <div class="lab">落地周期</div>
+        <div class="val">90 天</div>
+        <div class="sub">M0–M5 可交付</div>
+      </div>
+      <div class="tile">
+        <div class="lab">技术线</div>
+        <div class="val">3 条</div>
+        <div class="sub">Ontology · KG · Agent</div>
+      </div>
+      <div class="tile">
+        <div class="lab">LLM 必需环节</div>
+        <div class="val">3 个</div>
+        <div class="sub">抽取 · 查询理解 · 答案生成</div>
+      </div>
+      <div class="tile">
+        <div class="lab">主动性分级</div>
+        <div class="val">L0–L4</div>
+        <div class="sub">先观察，后自治</div>
+      </div>
+    </div>
+
+    <!-- ==================== 1 ==================== -->
+    <h2 id="summary">1. 结论摘要</h2>
+
+    <p>这套方案的核心不是“再做一个知识库”，而是把三件原本分散的事接成一条闭环：</p>
+
+    <div class="flow" aria-label="方案闭环">
+      <div class="flow-step"><b>Ontology（契约）</b>：定义对象、关系、动作、约束与版本。</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>知识图谱（事实与证据）</b>：存节点、边、别名、来源、置信度。</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>LLM（理解与生成）</b>：抽取、查询理解、答案生成、实体消歧、动作提议。</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>主动式 Agent（发现与行动）</b>：触发器、策略、上下文、规划、执行、交付、反馈。</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>治理（HITL / 预算 / 审计 / 评测）</b>：保证不越权、不失控、不骚扰。</div>
+    </div>
+
+    <h3>四条核心判断</h3>
+    <ol>
+      <li><strong>图 / 本体是基座，LLM 是入口和出口，Agent 是行动者。</strong>不要让 LLM 当数据库、权限或真相源。</li>
+      <li><strong>结构化数据确定性建图，非结构化数据 LLM 抽取。</strong>MiniApp 的 <code>reference</code> 列已经是边，不需要 LLM 再抽；文档 / 对话才需要。</li>
+      <li><strong>主动性分级：观察 → 建议 → 审批执行 → 低风险自动 → 自治。</strong>第一版只做 L0/L1，不要一上来做自治。</li>
+      <li><strong>产品化 = 内核 + 上层本体 + 行业 Pack + 项目映射。</strong>不要做万能本体，也不要先做市场。</li>
+    </ol>
+
+    <h3>三条技术线</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">技术线</th>
+            <th scope="col">解决什么问题</th>
+            <th scope="col">关键产物</th>
+            <th scope="col">成功标准</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Ontology</strong></td>
+            <td>业务语言如何变成可执行契约</td>
+            <td><code>ontology.json</code> + 校验器 + Pack 规范</td>
+            <td>非法写入被拒；类型可跨项目复用</td>
+          </tr>
+          <tr>
+            <td><strong>知识图谱</strong></td>
+            <td>事实、关系、证据如何存和查</td>
+            <td><code>graph_*</code> 表 + 查询引擎 + provenance</td>
+            <td>2–3 跳查询 p95 达标；回答可举证</td>
+          </tr>
+          <tr>
+            <td><strong>主动 Agent</strong></td>
+            <td>谁发现问题、推进任务</td>
+            <td>Trigger Registry + 策略 + 规划 + 交付</td>
+            <td>告警准确率、建议接受率、动作成功率</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <b>阅读建议：</b>产品 / 业务重点看 §1、§6、§12；架构 / 研发重点看 §2–§4、§8–§9；交付 / 实施重点看 §6–§7、§11。
+    </div>
+
+    <!-- ==================== 2 ==================== -->
+    <h2 id="architecture">2. 总体架构</h2>
+
+    <div class="arch" aria-label="总体架构分层">
+      <div class="arch-layer consumer">
+        <div class="arch-label">消费层</div>
+        <div class="arch-items">
+          <span class="arch-item">Dashboard 关系浏览器</span>
+          <span class="arch-item">MiniApp SDK / 助手</span>
+          <span class="arch-item">Agent 工具</span>
+          <span class="arch-item">主动 Agent</span>
+          <span class="arch-item">通知 / IM / 看板</span>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-label">智能层</div>
+        <div class="arch-items">
+          <span class="arch-item">NL2Graph</span>
+          <span class="arch-item">GraphRAG</span>
+          <span class="arch-item">实体 360</span>
+          <span class="arch-item">动作 Copilot</span>
+          <span class="arch-item">分诊 / 规划</span>
+          <span class="arch-item">实体消歧</span>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-label">图谱层</div>
+        <div class="arch-items">
+          <span class="arch-item">Ontology Registry</span>
+          <span class="arch-item">Nodes / Edges</span>
+          <span class="arch-item">Aliases</span>
+          <span class="arch-item">Provenance</span>
+          <span class="arch-item">版本 / 状态</span>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-label">映射层</div>
+        <div class="arch-items">
+          <span class="arch-item">MiniApp 确定性映射</span>
+          <span class="arch-item">文档 LLM 抽取</span>
+          <span class="arch-item">Memory 关联</span>
+          <span class="arch-item">连接器适配</span>
+        </div>
+      </div>
+      <div class="arch-layer data">
+        <div class="arch-label">数据层</div>
+        <div class="arch-items">
+          <span class="arch-item">light_app_rows</span>
+          <span class="arch-item">knowledge_documents</span>
+          <span class="arch-item">octop-memory</span>
+          <span class="arch-item">外部 API / Webhook</span>
+        </div>
+      </div>
+      <div class="arch-layer govern">
+        <div class="arch-label">治理层</div>
+        <div class="arch-items">
+          <span class="arch-item">ACL / PII</span>
+          <span class="arch-item">Pack 版本</span>
+          <span class="arch-item">预算 / 频率</span>
+          <span class="arch-item">HITL / 审计</span>
+          <span class="arch-item">评测 / 指标</span>
+          <span class="arch-item">Kill switch</span>
+        </div>
+      </div>
+    </div>
+
+    <p><strong>为什么这样分层：</strong></p>
+    <ul>
+      <li><strong>LLM 不在最底层，也不在最高层。</strong>它属于智能层，向上服务消费层，向下受图谱层和治理层约束。</li>
+      <li><strong>图谱层不直接依赖 LLM。</strong>确定性映射、查询执行、权限判定都不经过模型，保证可复现、可审计。</li>
+      <li><strong>治理层是横切的。</strong>任何一层产生写操作、外发消息、成本消耗，都要经过 ACL、HITL、预算与审计。</li>
+      <li><strong>数据层不重建。</strong>复用现有 MiniApp、知识库、memory、连接器，不另造一套存储。</li>
+    </ul>
+
+    <div class="callout warn">
+      <b>边界提醒：</b>Octop 当前是单实例产品（<code>docs/miniapp-overview.md:69</code>），不是多租户隔离载体。本文所有“多项目复用”默认指同一实例内多 Agent / 多 MiniApp / 多知识库，或“每客户一套部署”；多租户 SaaS 需要单独的架构改造。
+    </div>
+
+    <!-- ==================== 3 ==================== -->
+    <h2 id="lines">3. 三条技术线</h2>
+
+    <h3 id="lines-ontology">3.1 Ontology：可执行的类型契约</h3>
+    <p>本体不是 ER 图，也不是 OWL 文件。它必须被写入校验、查询、Agent 工具、页面和动作消费，否则一定腐化。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">层</th>
+            <th scope="col">内容</th>
+            <th scope="col">不做的后果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>类型层</strong></td>
+            <td>对象类型、关系类型、动作类型</td>
+            <td>图只是一堆没有语义的节点 / 边</td>
+          </tr>
+          <tr>
+            <td><strong>约束层</strong></td>
+            <td>属性类型、必填、枚举、基数、from/to、唯一键</td>
+            <td>脏数据直接进图，查询不可信</td>
+          </tr>
+          <tr>
+            <td><strong>映射层</strong></td>
+            <td>源表 / 文档 / 记忆实体 → 节点 / 边</td>
+            <td>图和业务数据脱节，很快过期</td>
+          </tr>
+          <tr>
+            <td><strong>消费层</strong></td>
+            <td>写入校验、查询、Agent、UI、动作、权限</td>
+            <td>本体只存在于文档里，没人使用</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>最小本体示例</h4>
+    <pre><code>{
+  "version": 1,
+  "node_types": {
+    "customer": {
+      "label": { "zh": "客户", "en": "Customer" },
+      "key": "customer_id",
+      "properties": {
+        "name":   { "type": "string", "required": true, "pii": "name" },
+        "level":  { "type": "enum", "values": ["A", "B", "C"] },
+        "region": { "type": "string" }
+      }
+    },
+    "order": {
+      "label": { "zh": "订单", "en": "Order" },
+      "key": "order_no",
+      "properties": {
+        "order_date": { "type": "date", "required": true },
+        "status": {
+          "type": "enum",
+          "values": ["pending", "paid", "shipped", "completed", "cancelled"]
+        },
+        "amount": { "type": "decimal", "required": true }
+      }
+    }
+  },
+  "edge_types": {
+    "placed_by": {
+      "label": { "zh": "下单人", "en": "Placed by" },
+      "from": ["order"],
+      "to": ["customer"],
+      "cardinality": "many_to_one"
+    }
+  },
+  "action_types": {
+    "approve_refund": {
+      "label": { "zh": "同意退款", "en": "Approve refund" },
+      "from": ["after_sale"],
+      "preconditions": ["status == 'pending'", "order.status != 'cancelled'"],
+      "effects": ["status = 'approved'", "emit after_sale.approved"],
+      "requires_hitl": true
+    }
+  }
+}</code></pre>
+
+    <h4>写入校验规则</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">场景</th>
+            <th scope="col">结果</th>
+            <th scope="col">错误码示例</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>status='refunded'</code> 不在枚举内</td>
+            <td>拒绝</td>
+            <td><code>ONTOLOGY_ENUM_INVALID</code></td>
+          </tr>
+          <tr>
+            <td><code>store_id='S999'</code> 目标节点不存在</td>
+            <td>拒绝或标 draft</td>
+            <td><code>ONTOLOGY_EDGE_TARGET_MISSING</code></td>
+          </tr>
+          <tr>
+            <td><code>qty=0</code> 违反属性约束</td>
+            <td>拒绝</td>
+            <td><code>ONTOLOGY_PROPERTY_INVALID</code></td>
+          </tr>
+          <tr>
+            <td>边端点类型不匹配</td>
+            <td>拒绝</td>
+            <td><code>ONTOLOGY_EDGE_TYPE_MISMATCH</code></td>
+          </tr>
+          <tr>
+            <td>新增类型未升版本</td>
+            <td>拒绝</td>
+            <td><code>ONTOLOGY_VERSION_CONFLICT</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 id="lines-graph">3.2 知识图谱：事实、关系与证据</h3>
+
+    <h4>数据模型</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">表</th>
+            <th scope="col">职责</th>
+            <th scope="col">关键字段</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>graph_ontologies</code></td>
+            <td>本体注册与版本</td>
+            <td><code>graph_id</code>, <code>schema_json</code>, <code>version</code>, <code>status</code>, <code>owner_user_id</code></td>
+          </tr>
+          <tr>
+            <td><code>graph_nodes</code></td>
+            <td>节点实例</td>
+            <td><code>node_id</code>, <code>node_type</code>, <code>canonical_name</code>, <code>properties_json</code>, <code>confidence</code></td>
+          </tr>
+          <tr>
+            <td><code>graph_edges</code></td>
+            <td>边实例</td>
+            <td><code>edge_id</code>, <code>edge_type</code>, <code>src_node_id</code>, <code>dst_node_id</code>, <code>valid_from/to</code></td>
+          </tr>
+          <tr>
+            <td><code>graph_aliases</code></td>
+            <td>实体别名</td>
+            <td><code>node_id</code>, <code>alias</code>, <code>normalized_alias</code>, <code>source</code></td>
+          </tr>
+          <tr>
+            <td><code>graph_sources</code></td>
+            <td>来源与同步状态</td>
+            <td><code>kind</code>, <code>ref</code>, <code>source_hash</code>, <code>last_synced_at</code>, <code>status</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4>两条建图路线</h4>
+    <div class="grid-2">
+      <div class="card">
+        <h4>路线 A：结构化数据（确定性）</h4>
+        <p><code>light_app_rows</code> + <code>reference</code> 列 → 节点 / 边。LLM 不参与建图，只参与查询理解、答案解释、动作提议。</p>
+        <p><strong>优点：</strong>零抽取误差、可复现、成本低。</p>
+        <p><strong>落点：</strong><code>src/octop/infra/apps/models.py:291</code> 的引用列校验。</p>
+      </div>
+      <div class="card">
+        <h4>路线 B：非结构化数据（LLM）</h4>
+        <p>文档 / 对话 → LLM 抽取候选节点 / 边 → 本体校验 → 实体消歧 → 入图。</p>
+        <p><strong>护栏：</strong>类型必须在 ontology 内；每条边必须有 <code>evidence</code>；低置信度进人工复核。</p>
+        <p><strong>落点：</strong><code>src/octop/infra/knowledge/jobs.py:35</code> 的索引任务旁新增抽取 job。</p>
+      </div>
+    </div>
+
+    <h4>Provenance：每条边都要能回答“你凭什么”</h4>
+    <pre><code>{
+  "source_kind": "kb_chunk",
+  "source_ref": "kb_01:doc_18:3",
+  "confidence": 0.92,
+  "status": "active",
+  "valid_from": "2026-01-01",
+  "valid_to": null
+}</code></pre>
+
+    <h4>查询能力</h4>
+    <ul>
+      <li><strong>neighbors</strong>：1–3 跳邻域，支持边类型 / 方向过滤，递归 CTE + 深度上限。</li>
+      <li><strong>path</strong>：两个节点之间的路径，双向 BFS，最多 4 跳。</li>
+      <li><strong>search</strong>：按类型、名称、别名搜索；SQLite FTS5 / PG 前缀索引可选。</li>
+      <li><strong>subgraph</strong>：给 UI 的紧凑子图，节点 / 边数量有上限。</li>
+    </ul>
+
+    <h3 id="lines-agent">3.3 主动式 Agent：发现、建议、执行、验收</h3>
+
+    <div class="flow" aria-label="主动 Agent 闭环">
+      <div class="flow-step"><b>触发器</b>：cron / 外部事件 / 数据变化 / Webhook / 连接器轮询 / 图变化</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>策略过滤</b>：免打扰、频率、预算、去重、优先级</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>LLM 分诊</b>：值得行动吗？多紧急？影响谁？</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>上下文构建</b>：子图 + MiniApp 行 + 知识库 chunk + memory</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>LLM 规划</b>：步骤、工具、预期结果</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>执行</b>：只读 / HITL 审批 / 低风险写</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>交付</b>：通知中心 / IM / MiniApp 卡片 / 看板</div>
+      <div class="flow-arrow">↓</div>
+      <div class="flow-step"><b>反馈与验收</b>：接受 / 拒绝、动作结果、记忆</div>
+    </div>
+
+    <h4>主动性分级</h4>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">级别</th>
+            <th scope="col">行为</th>
+            <th scope="col">例子</th>
+            <th scope="col">门槛</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge badge-info">L0 观察</span></td>
+            <td>只记录 / 告警，不改数据</td>
+            <td>退款异常日报</td>
+            <td>证据、去重、免打扰</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-info">L1 建议</span></td>
+            <td>给出建议动作，不执行</td>
+            <td>“建议暂停 V001”</td>
+            <td>建议准确率、可解释</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-warn">L2 审批执行</span></td>
+            <td>准备好动作，等人批准</td>
+            <td>“一键批准退款”</td>
+            <td>HITL、幂等、审计</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-warn">L3 低风险自动</span></td>
+            <td>可逆、低风险动作自动执行</td>
+            <td>补别名、重建图、发提醒</td>
+            <td>预算、回滚、kill switch</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge-bad">L4 自治</span></td>
+            <td>多步任务自主闭环</td>
+            <td>自动处理售后工单</td>
+            <td>预算、Verifier、异常收件箱、SLA</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout ok">
+      <b>建议：</b>第一个版本只做 L0/L1；跑 2–4 周，测告警准确率和接受率，再进 L2。L3/L4 需要先补预算闸门、无人值守 HITL、独立验收（<code>docs/team-l3-roadmap.md</code> 的 A1/A2/A3）。
+    </div>
+
+    <!-- ==================== 4 ==================== -->
+    <h2 id="llm">4. LLM 的直接参与</h2>
+
+    <p>“直接参与”的定义：<strong>LLM 实际被调用，并且它的输出直接进入下一步。</strong>按这个标准，LLM 直接参与 6 个环节，其中 3 个必需、3 个增强。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">环节</th>
+            <th scope="col">LLM 做什么</th>
+            <th scope="col">是否必需</th>
+            <th scope="col">护栏</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>文档实体 / 关系抽取</strong></td>
+            <td>从 chunk 输出受本体约束的 JSON + 证据</td>
+            <td><span class="badge badge-bad">必需</span></td>
+            <td>类型校验、证据必填、低置信复核</td>
+          </tr>
+          <tr>
+            <td><strong>查询理解</strong></td>
+            <td>自然语言 → Query DSL（实体 / 路径 / 过滤 / 聚合）</td>
+            <td><span class="badge badge-bad">必需</span></td>
+            <td>后端校验类型 / 边；不生成裸 SQL</td>
+          </tr>
+          <tr>
+            <td><strong>答案生成</strong></td>
+            <td>读子图 + 证据，生成带引用回答</td>
+            <td><span class="badge badge-bad">必需</span></td>
+            <td>只引用返回证据；证据不足说“不知道”</td>
+          </tr>
+          <tr>
+            <td><strong>实体消歧</strong></td>
+            <td>判断别名 / 重名是否同一实体，给置信度</td>
+            <td><span class="badge badge-warn">增强</span></td>
+            <td>阈值 + 人工复核，不自动静默合并</td>
+          </tr>
+          <tr>
+            <td><strong>Agent 规划</strong></td>
+            <td>选择 graph / knowledge / app 工具，多步执行</td>
+            <td><span class="badge badge-warn">增强</span></td>
+            <td>工具 schema + 轮次 / 预算上限</td>
+          </tr>
+          <tr>
+            <td><strong>动作提议</strong></td>
+            <td>提议动作、参数、前置条件</td>
+            <td><span class="badge badge-warn">增强</span></td>
+            <td>本体 action + HITL + 审计</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>LLM 不直接参与的环节</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">环节</th>
+            <th scope="col">谁做</th>
+            <th scope="col">为什么不用 LLM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>MiniApp 行 → 图</td>
+            <td>确定性映射</td>
+            <td><code>reference</code> 列已经是结构化边</td>
+          </tr>
+          <tr>
+            <td>图查询执行</td>
+            <td>SQL / CTE / 双向 BFS</td>
+            <td>需要可复现、可审计、可优化</td>
+          </tr>
+          <tr>
+            <td>计数 / 求和 / 排序</td>
+            <td>数据库</td>
+            <td>LLM 算术不可靠</td>
+          </tr>
+          <tr>
+            <td>权限判定 / PII 脱敏</td>
+            <td>ACL / 规则</td>
+            <td>安全不能靠概率</td>
+          </tr>
+          <tr>
+            <td>事务 / 审计</td>
+            <td>DB + <code>audit_log</code></td>
+            <td>必须原子、可追溯</td>
+          </tr>
+          <tr>
+            <td>图渲染</td>
+            <td>Cytoscape / G6</td>
+            <td>前端确定性渲染</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <b>一句话：</b>LLM 直接参与“从文本到图”和“从问题到答案”的两端；中间的事实层是确定性的。它的输出永远是“提议”，由校验器、查询编译器、ACL 和 HITL 决定是否采纳。
+    </div>
+
+    <!-- ==================== 5 ==================== -->
+    <h2 id="principles">5. 落地原则</h2>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3><span class="num">1</span>本体先行，但只做最小可用本体</h3>
+        <p>5–8 个对象、5–8 个关系、1–2 个动作，围绕 20 条能力问题。只在一个场景出现的概念，不进 <code>core.*</code>。</p>
+      </div>
+      <div class="card">
+        <h3><span class="num">2</span>图是派生 / 证据层，不是第二真相</h3>
+        <p>每条边带 <code>source_kind</code> / <code>source_ref</code> / <code>confidence</code>；派生边可按 <code>source_hash</code> 重建，手工边单独标记。</p>
+      </div>
+      <div class="card">
+        <h3><span class="num">3</span>结构化数据确定性建图</h3>
+        <p>MiniApp <code>reference</code> → 边；LLM 只在查询 / 回答 / 动作层。不让 LLM 对结构化数据再抽一遍。</p>
+      </div>
+      <div class="card">
+        <h3><span class="num">4</span>非结构化数据 LLM 抽取</h3>
+        <p>文档 / 对话 → 候选节点 / 边 → 本体校验 → 消歧 → 入图；没有证据的抽取直接拒绝。</p>
+      </div>
+      <div class="card">
+        <h3><span class="num">5</span>LLM 只做理解 / 生成 / 提议</h3>
+        <p>不做 ID、权限、聚合、裸 SQL、自动合并。事实、权限、聚合、审计由确定性系统负责。</p>
+      </div>
+      <div class="card">
+        <h3><span class="num">6</span>主动性分级</h3>
+        <p>先只读观察，再建议，再审批执行；L3/L4 需要预算、HITL、Verifier、kill switch。</p>
+      </div>
+      <div class="card">
+        <h3><span class="num">7</span>先关系库，后图数据库；先 Pack，后市场；先单 Agent，后多 Agent</h3>
+        <p>不要第一版就引入 Neo4j / 多 Agent / 市场。先用现有 SQLite/PostgreSQL 跑通闭环，再按规模与需求演进。</p>
+      </div>
+    </div>
+
+    <!-- ==================== 6 ==================== -->
+    <h2 id="roadmap">6. 90 天路线图</h2>
+
+    <div class="timeline" aria-label="90 天里程碑">
+      <div class="ms">
+        <div class="ms-head"><h3>M0 · 契约与准备</h3><span class="ms-week">第 1–2 周</span></div>
+        <div class="ms-body">
+          <p><strong>目标：</strong>把“以后改起来很贵”的契约定下来。</p>
+          <ul>
+            <li><code>docs/ontology-kernel-adr.md</code>：属性图 vs RDF、存储、Pack 边界、版本、安全。</li>
+            <li><code>docs/ontology-pack-spec.md</code>：manifest、目录、install/upgrade、校验规则。</li>
+            <li><code>ontology/core.v0.json</code>：8–12 个上层类型，标 <code>draft</code>。</li>
+            <li><code>048_graph_*.sql</code> + <code>.pg.sql</code>；<code>test_db_pool.py</code> v47→48。</li>
+            <li>10 万边基准脚本。</li>
+          </ul>
+          <p><strong>验收：</strong>空 Pack 可 <code>validate</code>；3 跳邻居 SQLite p95 &lt; 100ms；PG 同用例通过。</p>
+        </div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><h3>M1 · MiniApp 业务图谱</h3><span class="ms-week">第 3–5 周</span></div>
+        <div class="ms-body">
+          <p><strong>目标：</strong>跑通第一个端到端垂直切片。</p>
+          <ul>
+            <li><code>infra/graph/</code> 内核：ontology、service、query、extract/app_rows。</li>
+            <li>MiniApp <code>reference</code> → 节点 / 边；写后 / 查询时派生。</li>
+            <li><code>api/routers/graph.py</code> + Dashboard 关系 Tab。</li>
+            <li><code>graph.enabled</code> 默认关；关闭时行为不变。</li>
+          </ul>
+          <p><strong>验收：</strong>三表应用自动出图；2 跳查询带证据；ACL/PII 测试通过；<code>make all</code> 绿。</p>
+        </div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><h3>M2 · 知识库 GraphRAG</h3><span class="ms-week">第 6–9 周</span></div>
+        <div class="ms-body">
+          <p><strong>目标：</strong>让非结构化文档变成可查询的图。</p>
+          <ul>
+            <li><code>graph_extract</code> job：parse/chunk → LLM 抽取 → 本体校验 → 入图。</li>
+            <li>实体消歧：alias + 向量 + LLM 裁决 + 人工复核。</li>
+            <li>混合检索：向量召回 → 实体链接 → 1–2 跳扩展 → 重排 → 引用。</li>
+            <li>20–30 条多跳问答评测集。</li>
+          </ul>
+          <p><strong>验收：</strong>多跳问答相对纯向量提升 ≥10–15%；引用准确率不降；关闭图时回退纯向量。</p>
+        </div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><h3>M3 · 主动 Agent L0/L1</h3><span class="ms-week">第 10–12 周</span></div>
+        <div class="ms-body">
+          <p><strong>目标：</strong>先做“只读观察 + 建议”，不写数据。</p>
+          <ul>
+            <li>Trigger Registry：cron / 外部事件 / app schedule / data_version / webhook。</li>
+            <li>三个 watchdog：数据质量、退款异常、合同到期。</li>
+            <li>每日 / 每周摘要 + 通知 + 建议账本。</li>
+            <li>反馈按钮：有用 / 无用 / 稍后 / 不再提醒。</li>
+          </ul>
+          <p><strong>验收：</strong>每天 1 份摘要；告警准确率 &gt; 80%；零写入；每用户每日告警数可控。</p>
+        </div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><h3>M4 · 动作 Copilot L2</h3><span class="ms-week">第 13–16 周</span></div>
+        <div class="ms-body">
+          <p><strong>目标：</strong>Agent 准备动作，人审批后执行。</p>
+          <ul>
+            <li>Action types：<code>approve_refund</code> / <code>publish_video</code> / <code>create_followup_task</code>。</li>
+            <li>前置条件 + 幂等键 + HITL + 审计 + 结果验收。</li>
+            <li>动作建议卡（MiniApp / IM / 通知）。</li>
+          </ul>
+          <p><strong>验收：</strong>建议接受率 &gt; 40%；零未审批写入；动作可回滚 / 可追溯。</p>
+        </div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><h3>M5 · Pack 产品化</h3><span class="ms-week">第 17–20 周</span></div>
+        <div class="ms-body">
+          <p><strong>目标：</strong>第二个项目只写 Pack 和映射，不改内核。</p>
+          <ul>
+            <li>第二个参考 Pack（合同审查或客户跟进）。</li>
+            <li>Pack install / upgrade / uninstall + dry-run + 兼容检查。</li>
+            <li>专家 manifest / MiniApp 模板挂载 <code>ontology_pack</code>。</li>
+            <li>Pack 作者指南 + 升级指南。</li>
+          </ul>
+          <p><strong>验收：</strong>第二个 Pack 对内核改动 &lt; 10%；两个 Pack 的能力问题通过；安装 / 升级 / 回滚可审计。</p>
+        </div>
+      </div>
+
+      <div class="ms">
+        <div class="ms-head"><h3>M6 · 低风险自治 L3（条件触发）</h3><span class="ms-week">M4 之后</span></div>
+        <div class="ms-body">
+          <p><strong>前置：</strong>预算闸门、kill switch、无人值守 HITL、Verifier、异常收件箱。</p>
+          <p>只在这些都就绪后做：自动补别名、重建图、发提醒等可逆动作；每动作预算 / 频率上限；失败自动回滚 / 升级。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== 7 ==================== -->
+    <h2 id="slice">7. 第一条垂直切片</h2>
+
+    <p>不要一开始铺满所有工具。用一条“走通全链路”的切片证明价值：</p>
+
+    <div class="card">
+      <h3>Walking Skeleton</h3>
+      <ul class="checklist">
+        <li>1 个 MiniApp：客户 / 订单 / 商品 / 售后</li>
+        <li>1 套 ontology：6 类型 / 6 边 / 1 动作</li>
+        <li>1 个图查询 API：neighbors / path / search</li>
+        <li>1 个只读关系 Tab：类型筛选、1–2 跳展开、实体卡片</li>
+        <li>3 个 Agent 工具：<code>graph_search</code> / <code>graph_neighbors</code> / <code>graph_path</code></li>
+        <li>20 条能力问题：每条有期望答案与证据</li>
+        <li>1 个每日摘要：数据质量 + 退款异常（L0）</li>
+      </ul>
+    </div>
+
+    <h3>验收口径</h3>
+    <ol>
+      <li>问 20 个问题，Agent 能带证据回答；证据不足时明确说“不知道”。</li>
+      <li>2 跳邻居查询 10 万边 p95 &lt; 100ms（SQLite）；PG 同用例通过。</li>
+      <li>非法写入被拒，错误码本地化；PII 脱敏；应用 ACL 生效。</li>
+      <li>关闭 <code>graph.enabled</code> 时，现有 MiniApp / 知识库行为不变。</li>
+      <li><code>make all</code> 绿；Windows / PG parity 覆盖。</li>
+    </ol>
+
+    <!-- ==================== 8 ==================== -->
+    <h2 id="octop">8. Octop 复用与新建</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">层</th>
+            <th scope="col">直接复用</th>
+            <th scope="col">需要新建</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>认证 / 权限</strong></td>
+            <td>用户、角色、agent ownership、app ACL、KB shared</td>
+            <td>图级 ACL / 跨项目共享</td>
+          </tr>
+          <tr>
+            <td><strong>数据库</strong></td>
+            <td>SQLite/PG 双栈、迁移、<code>RepoBundle</code>/<code>SharedServices</code></td>
+            <td><code>048_graph_*</code>、graph repo/service</td>
+          </tr>
+          <tr>
+            <td><strong>MiniApp</strong></td>
+            <td>表 / 行、<code>reference</code>、schema、行历史、<code>data_version</code></td>
+            <td>确定性映射、graph API/SDK</td>
+          </tr>
+          <tr>
+            <td><strong>知识库</strong></td>
+            <td>parse/chunk/embed/index/retrieve/citations/jobs</td>
+            <td>LLM 图抽取、实体消歧、混合检索</td>
+          </tr>
+          <tr>
+            <td><strong>Agent</strong></td>
+            <td><code>HarnessAgentConfig.tools</code>、知识库工具模式、HITL</td>
+            <td><code>graph_*</code> 工具、动作执行器</td>
+          </tr>
+          <tr>
+            <td><strong>Memory</strong></td>
+            <td>Entity / Alias / Atom / EntityPage</td>
+            <td>类型化关系 / 时序边（或关联层）</td>
+          </tr>
+          <tr>
+            <td><strong>主动能力</strong></td>
+            <td>主动关怀调度、cron、外部事件、app schedule、通知</td>
+            <td>Trigger Registry、策略引擎、建议账本</td>
+          </tr>
+          <tr>
+            <td><strong>分发</strong></td>
+            <td>专家 manifest、MiniApp 模板、<code>published_experts</code></td>
+            <td>Pack 注册 / 安装 / 升级 / 校验</td>
+          </tr>
+          <tr>
+            <td><strong>前端</strong></td>
+            <td>React/antd、mermaid、recharts</td>
+            <td>Cytoscape/G6 关系浏览器</td>
+          </tr>
+          <tr>
+            <td><strong>治理</strong></td>
+            <td>audit、usage、metrics</td>
+            <td>预算闸门、kill switch、评测集</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <b>明确不要重造：</b>认证、DB、MiniApp 数据层、知识库摄取、Agent 工具装配、通知、审计、备份。缺的是一层“图 / 本体内核”和“Pack 产品化”，不是平台本身。
+    </div>
+
+    <!-- ==================== 9 ==================== -->
+    <h2 id="productization">9. 产品化与多项目复用</h2>
+
+    <h3>四层复用模型</h3>
+    <div class="arch" aria-label="复用分层">
+      <div class="arch-layer">
+        <div class="arch-label">内核</div>
+        <div class="arch-items">
+          <span class="arch-item">类型系统</span>
+          <span class="arch-item">校验</span>
+          <span class="arch-item">查询</span>
+          <span class="arch-item">API</span>
+          <span class="arch-item">工具</span>
+          <span class="arch-item">版本</span>
+          <span class="arch-item">证据</span>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-label">上层本体</div>
+        <div class="arch-items">
+          <span class="arch-item">party</span>
+          <span class="arch-item">product</span>
+          <span class="arch-item">order</span>
+          <span class="arch-item">document</span>
+          <span class="arch-item">event</span>
+          <span class="arch-item">task</span>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-label">行业 Pack</div>
+        <div class="arch-items">
+          <span class="arch-item">ecommerce.douyin</span>
+          <span class="arch-item">contract.review</span>
+          <span class="arch-item">crm.followup</span>
+        </div>
+      </div>
+      <div class="arch-layer">
+        <div class="arch-label">项目映射</div>
+        <div class="arch-items">
+          <span class="arch-item">表名 / 字段</span>
+          <span class="arch-item">枚举</span>
+          <span class="arch-item">权限 / PII</span>
+          <span class="arch-item">种子数据</span>
+        </div>
+      </div>
+    </div>
+
+    <h3>Pack 目录</h3>
+    <pre><code>packs/ecommerce.douyin/
+  manifest.json      # id / version / kernel 兼容 / 依赖 / owner
+  ontology.json      # 节点 / 边 / 动作
+  mappings.json      # 源表 → 图
+  actions.json       # 前置条件 / 效果 / HITL
+  questions.json     # 20 条能力问题
+  ui.json            # 标签 / 颜色 / 图标
+  migrations/        # 本体版本迁移
+  README.md</code></pre>
+
+    <h3>Pack Manifest</h3>
+    <pre><code>{
+  "id": "ecommerce.douyin",
+  "version": "1.2.0",
+  "kernel": "&gt;=1.0 &lt;2.0",
+  "extends": ["core.business"],
+  "label": { "zh": "抖音电商多店经营", "en": "Douyin Commerce" },
+  "owner": "octop",
+  "status": "published",
+  "files": {
+    "ontology": "ontology.json",
+    "mappings": "mappings.json",
+    "actions": "actions.json",
+    "questions": "questions.json",
+    "ui": "ui.json"
+  },
+  "migrations": ["migrations/001_init.sql", "migrations/002_add_attribution.sql"]
+}</code></pre>
+
+    <h3>分发渠道</h3>
+    <ul>
+      <li><strong>专家包</strong>：<code>src/octop/infra/agents/experts/library/&lt;id&gt;/manifest.json</code> 增加 <code>"ontology_pack"</code>；安装专家时初始化图类型。</li>
+      <li><strong>MiniApp 模板</strong>：<code>src/octop/infra/apps/system_templates/&lt;id&gt;/manifest.json</code> 增加 <code>"ontology"</code> / <code>"mappings"</code>；从模板建应用时建图。</li>
+      <li><strong>已发布专家</strong>：<code>published_experts</code> 携带 Pack；安装时校验版本。</li>
+      <li><strong>CLI / Dashboard</strong>：<code>octop ontology pack validate/install/upgrade</code>；设置页“本体包”管理。</li>
+    </ul>
+
+    <div class="callout">
+      <b>产品化顺序：</b>L0 项目定制 → L1 内核复用 → L2 Pack 规范 → L3 市场 / 认证。不要先做市场；等 3–5 个真实 Pack 和外部作者需求后再做。
+    </div>
+
+    <!-- ==================== 10 ==================== -->
+    <h2 id="metrics">10. 指标与治理</h2>
+
+    <h3>指标</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">类别</th>
+            <th scope="col">指标</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>图质量</strong></td>
+            <td>3 跳 p95、孤儿率、重复实体率、覆盖率</td>
+          </tr>
+          <tr>
+            <td><strong>AI 质量</strong></td>
+            <td>抽取准确率 / 召回率、Query DSL 正确率、引用准确率、幻觉率</td>
+          </tr>
+          <tr>
+            <td><strong>主动质量</strong></td>
+            <td>告警准确率、建议接受率、动作成功率、误报率、每用户每日告警数</td>
+          </tr>
+          <tr>
+            <td><strong>成本</strong></td>
+            <td>单文档抽取 token、单问题延迟、每活跃用户成本</td>
+          </tr>
+          <tr>
+            <td><strong>产品化</strong></td>
+            <td>新项目接入时间、复用类型比例、Pack 安装 / 升级成功率</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>治理</h3>
+    <ul>
+      <li><strong>ACL / PII</strong>：图查询按源资源 ACL 过滤；属性级 PII 标记；公开链接不暴露图。</li>
+      <li><strong>HITL</strong>：删除、低置信合并、业务动作走审批；<code>MANDATORY_HITL_TOOLS</code> 不可绕过。</li>
+      <li><strong>预算</strong>：按 Agent / 用户 / 项目归集 token；超限暂停 + 通知。</li>
+      <li><strong>频率 / 免打扰</strong>：复用主动关怀的 active hours、随机频控、去重。</li>
+      <li><strong>版本</strong>：Pack SemVer；内核兼容范围；破坏性变更 + 迁移。</li>
+      <li><strong>审计</strong>：本体变更、图重建、动作执行、Pack 安装 / 升级全部进 <code>audit_log</code>。</li>
+      <li><strong>评测</strong>：每个 Pack 至少 20 条能力问题；CI 不通过不允许发布。</li>
+    </ul>
+
+    <h3>防骚扰</h3>
+    <ul>
+      <li>相关性评分：规则 + LLM 打分，低于阈值不打扰。</li>
+      <li>分级交付：紧急即时通知；普通日报 / 周报；低优先级进看板。</li>
+      <li>“为什么现在告诉我”：每条主动消息带触发原因 + 证据 + 影响。</li>
+      <li>反馈按钮：有用 / 无用 / 稍后 / 不再提醒；反馈进 memory。</li>
+      <li>每用户每日告警上限；mute 率可观测。</li>
+    </ul>
+
+    <!-- ==================== 11 ==================== -->
+    <h2 id="risks">11. 风险与不做</h2>
+
+    <div class="grid-2">
+      <div class="card">
+        <h3>最大风险</h3>
+        <ol>
+          <li>本体过度设计，业务不用。</li>
+          <li>抽取质量差，图变垃圾场。</li>
+          <li>主动 Agent 变骚扰，用户关掉。</li>
+          <li>没有证据，回答不可信。</li>
+          <li>没有预算，成本失控。</li>
+          <li>没有 HITL，动作越权。</li>
+        </ol>
+      </div>
+      <div class="card">
+        <h3>明确不做</h3>
+        <ul class="checklist cross">
+          <li>万能本体 / 50+ 类型（等 2–3 个项目再抽）。</li>
+          <li>第一版做 Pack 市场 / 计费 / 认证。</li>
+          <li>OWL 推理机 / SPARQL 端点（需要时导出 RDF）。</li>
+          <li>默认引入 Neo4j（先用关系库 + 递归 CTE）。</li>
+          <li>自动静默合并实体。</li>
+          <li>让 LLM 直接写 SQL / 做聚合 / 决定权限。</li>
+          <li>每个事件都唤醒 LLM。</li>
+          <li>没有预算 / HITL / kill switch 就做自治。</li>
+          <li>先做多 Agent 再单 Agent。</li>
+          <li>把多租户塞进当前单实例架构。</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ==================== 12 ==================== -->
+    <h2 id="decisions">12. 决策点</h2>
+
+    <div class="decision">
+      <p class="q">1. 第一个垂直切片选哪个？</p>
+      <p>MiniApp 业务图谱 / 知识库 GraphRAG / 主动 watchdog。</p>
+      <p class="rec"><b>建议：</b>MiniApp 业务图谱。数据已结构化、边确定、价值可见。</p>
+    </div>
+
+    <div class="decision">
+      <p class="q">2. 图的范围怎么定？</p>
+      <p>每个应用 / Agent 一个 <code>graph_id</code>，还是团队共享？</p>
+      <p class="rec"><b>建议：</b>默认按项目隔离，显式共享；跨项目图必须走 ACL。</p>
+    </div>
+
+    <div class="decision">
+      <p class="q">3. 部署形态：SQLite 单机优先，还是 PG 优先？</p>
+      <p class="rec"><b>建议：</b>双栈同 schema，SQLite 先跑基准，PG 用同一组用例做 parity。</p>
+    </div>
+
+    <div class="decision">
+      <p class="q">4. 主动性目标：第一版只做 L0/L1，还是直接 L2？</p>
+      <p class="rec"><b>建议：</b>L0/L1 先跑 2–4 周，测准确率再进 L2。</p>
+    </div>
+
+    <div class="decision">
+      <p class="q">5. 是否改 <code>octop-memory</code> 上游补类型化关系？</p>
+      <p class="rec"><b>建议：</b>先做 Octop 侧关联层，不改上游；等记忆图谱成为核心需求再推动。</p>
+    </div>
+
+    <!-- ==================== 13 ==================== -->
+    <h2 id="next">13. 下一步</h2>
+
+    <h3>本周就能做</h3>
+    <ol>
+      <li>选一个真实 MiniApp（客户 / 订单 / 商品 / 售后），写 20 条能力问题。</li>
+      <li>写 <code>ontology v0</code>：6 个类型、6 条边、1 个动作。</li>
+      <li>跑 10 万边基准，确认 SQLite 递归 CTE 够用。</li>
+      <li>建 <code>048_graph_*</code> 迁移 + <code>infra/graph/</code> 骨架。</li>
+      <li>做只读关系 Tab + 3 个 Agent 图工具。</li>
+      <li>用第一条垂直切片验收：<strong>问 20 个问题，Agent 能带证据回答</strong>。</li>
+    </ol>
+
+    <div class="callout ok">
+      <b>完成标准：</b>1 个 MiniApp 自动出图；20 条能力问题通过；2 跳查询 p95 达标；ACL/PII 测试通过；<code>make all</code> 绿；关闭开关时现有行为不变。
+    </div>
+
+    <!-- ==================== 附录 ==================== -->
+    <h2 id="appendix-a">附录 A：数据模型（DDL 草图）</h2>
+    <p>仅示意，正式实现按 <code>AGENTS.md</code> §7 的资源表约定：整数 <code>id</code> + 公开字符串 id，子表 FK 引用公开字符串；SQLite / PG 各一份迁移。</p>
+    <pre><code>CREATE TABLE graph_ontologies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  graph_id TEXT NOT NULL UNIQUE,
+  owner_user_id INTEGER NOT NULL,
+  agent_id TEXT,
+  name TEXT NOT NULL,
+  schema_json TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE graph_nodes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id TEXT NOT NULL UNIQUE,
+  graph_id TEXT NOT NULL REFERENCES graph_ontologies(graph_id) ON DELETE CASCADE,
+  node_type TEXT NOT NULL,
+  canonical_name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  properties_json TEXT NOT NULL DEFAULT '{}',
+  confidence REAL NOT NULL DEFAULT 1.0,
+  status TEXT NOT NULL DEFAULT 'active',
+  source_kind TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_graph_nodes_lookup
+  ON graph_nodes(graph_id, node_type, normalized_name);
+
+CREATE TABLE graph_edges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  edge_id TEXT NOT NULL UNIQUE,
+  graph_id TEXT NOT NULL REFERENCES graph_ontologies(graph_id) ON DELETE CASCADE,
+  edge_type TEXT NOT NULL,
+  src_node_id TEXT NOT NULL,
+  dst_node_id TEXT NOT NULL,
+  properties_json TEXT NOT NULL DEFAULT '{}',
+  confidence REAL NOT NULL DEFAULT 1.0,
+  status TEXT NOT NULL DEFAULT 'active',
+  source_kind TEXT NOT NULL,
+  source_ref TEXT NOT NULL,
+  valid_from INTEGER,
+  valid_to INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_graph_edges_out
+  ON graph_edges(graph_id, src_node_id, edge_type);
+CREATE INDEX idx_graph_edges_in
+  ON graph_edges(graph_id, dst_node_id, edge_type);
+
+CREATE TABLE graph_aliases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  alias_id TEXT NOT NULL UNIQUE,
+  graph_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  normalized_alias TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_graph_aliases_lookup
+  ON graph_aliases(graph_id, normalized_alias);
+
+CREATE TABLE graph_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id TEXT NOT NULL UNIQUE,
+  graph_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  source_hash TEXT NOT NULL DEFAULT '',
+  last_synced_at INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error TEXT NOT NULL DEFAULT ''
+);</code></pre>
+
+    <h2 id="appendix-b">附录 B：API 契约</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">方法</th>
+            <th scope="col">路径</th>
+            <th scope="col">用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>POST</td><td><code>/api/graphs</code></td><td>创建图 / 挂载本体</td></tr>
+          <tr><td>GET</td><td><code>/api/graphs/{graph_id}/ontology</code></td><td>读取本体</td></tr>
+          <tr><td>PUT</td><td><code>/api/graphs/{graph_id}/ontology</code></td><td>更新本体（版本 + 校验）</td></tr>
+          <tr><td>POST</td><td><code>/api/graphs/{graph_id}/nodes</code></td><td>写入节点（校验）</td></tr>
+          <tr><td>POST</td><td><code>/api/graphs/{graph_id}/edges</code></td><td>写入边（校验）</td></tr>
+          <tr><td>GET</td><td><code>/api/graphs/{graph_id}/neighbors</code></td><td>邻域查询（depth ≤ 3）</td></tr>
+          <tr><td>POST</td><td><code>/api/graphs/{graph_id}/query</code></td><td>Query DSL 查询</td></tr>
+          <tr><td>POST</td><td><code>/api/graphs/{graph_id}/actions/{action_type}</code></td><td>动作执行（HITL）</td></tr>
+          <tr><td>GET</td><td><code>/api/apps/{app_id}/graph</code></td><td>MiniApp 派生图</td></tr>
+          <tr><td>POST</td><td><code>/api/apps/{app_id}/graph/rebuild</code></td><td>重建派生图</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Agent 工具</h3>
+    <pre><code>graph_search(query, node_type?, limit?)
+graph_neighbors(node_id, depth=1, edge_types?)
+graph_path(src, dst, max_hops=3)
+graph_upsert_node(...)   # 写，校验 + 权限
+graph_upsert_edge(...)   # 写，校验 + 权限
+graph_delete(...)        # MANDATORY_HITL</code></pre>
+
+    <h2 id="appendix-c">附录 C：代码索引</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">主题</th>
+            <th scope="col">位置</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>知识库向量索引</td><td><code>src/octop/infra/knowledge/index.py:26</code></td></tr>
+          <tr><td>知识库检索</td><td><code>src/octop/infra/knowledge/retrieve.py:22</code></td></tr>
+          <tr><td>知识库索引 job</td><td><code>src/octop/infra/knowledge/jobs.py:35</code></td></tr>
+          <tr><td>知识库 Agent 工具</td><td><code>src/octop/infra/knowledge/tools.py:71</code></td></tr>
+          <tr><td>MiniApp 引用列</td><td><code>src/octop/infra/apps/models.py:291</code></td></tr>
+          <tr><td>MiniApp 助手 tool loop</td><td><code>src/octop/infra/apps/assistant.py:202</code></td></tr>
+          <tr><td>Memory 辅助模型档位</td><td><code>src/octop/infra/agents/manager.py:192</code></td></tr>
+          <tr><td>主动关怀调度</td><td><code>src/octop/infra/proactive/scheduler.py:134</code></td></tr>
+          <tr><td>Cron 管理</td><td><code>src/octop/infra/cron/manager.py:66</code></td></tr>
+          <tr><td>外部事件</td><td><code>src/octop/infra/events/service.py:127</code></td></tr>
+          <tr><td>通知</td><td><code>src/octop/infra/notifications.py:29</code></td></tr>
+          <tr><td>DI 容器</td><td><code>src/octop/infra/db/services.py</code></td></tr>
+          <tr><td>服务接线</td><td><code>src/octop/infra/server.py:507</code></td></tr>
+          <tr><td>迁移版本断言</td><td><code>tests/unit/db/test_db_pool.py:116</code>（v47）</td></tr>
+          <tr><td>MiniApp 现状</td><td><code>docs/miniapp-overview.md:69,92,119</code></td></tr>
+          <tr><td>派生副本规则</td><td><code>docs/miniapp-product-plan.md:485</code></td></tr>
+          <tr><td>团队 L3 路线</td><td><code>docs/team-l3-roadmap.md</code></td></tr>
+          <tr><td>主动专家差距</td><td><code>docs/proactive-expert-design.md</code></td></tr>
+          <tr><td>工程规范</td><td><code>AGENTS.md</code> §2、§5、§7</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="appendix-d">附录 D：术语表</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">术语</th>
+            <th scope="col">含义</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Ontology</strong></td><td>对象类型、关系类型、动作类型、属性约束组成的可执行契约。</td></tr>
+          <tr><td><strong>知识图谱（KG）</strong></td><td>按本体约束存储的节点、边、属性、别名与证据。</td></tr>
+          <tr><td><strong>LPG</strong></td><td>Labeled Property Graph，带标签和属性的属性图；与 RDF 三元组相对。</td></tr>
+          <tr><td><strong>GraphRAG</strong></td><td>用图结构增强检索：实体链接、图扩展、证据重排、带引用回答。</td></tr>
+          <tr><td><strong>Pack</strong></td><td>可安装/升级的本体包：类型、映射、动作、问题、UI 配置。</td></tr>
+          <tr><td><strong>Provenance</strong></td><td>节点/边的来源与证据：源表行、知识库 chunk、置信度、时间。</td></tr>
+          <tr><td><strong>Query DSL</strong></td><td>受本体约束的结构化查询描述，由 LLM 生成、后端校验并编译执行。</td></tr>
+          <tr><td><strong>HITL</strong></td><td>Human-in-the-loop，关键动作需人工审批。</td></tr>
+          <tr><td><strong>L0–L4</strong></td><td>主动性分级：观察、建议、审批执行、低风险自动、自治。</td></tr>
+          <tr><td><strong>Walking Skeleton</strong></td><td>走通全链路的最小垂直切片，用来验证架构而不是堆功能。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer class="footer">
+      <p>文档：<strong>Octop 知识图谱 · Ontology · 主动式 Agent 落地规划</strong> · v1.0 · 2026-11-22</p>
+      <p>分支：<code>feature/miniapp-capabilities</code> · 状态：设计稿，待评审 · 本文档不改变任何运行时行为。</p>
+      <p>建议评审顺序：产品定位（§1）→ 架构（§2–§4）→ 路线图（§6）→ 决策点（§12）。</p>
+    </footer>
+  </main>
+</div>
+
+<script>
+(() => {
+  const links = Array.from(document.querySelectorAll('.toc a[href^="#"]'));
+  const map = new Map();
+  for (const a of links) {
+    const id = a.getAttribute('href').slice(1);
+    if (id) map.set(id, a);
+  }
+  const sections = Array.from(map.keys())
+    .map((id) => document.getElementById(id))
+    .filter(Boolean);
+  if (!('IntersectionObserver' in window) || sections.length === 0) return;
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      for (const a of links) a.classList.remove('active');
+      const link = map.get(entry.target.id);
+      if (link) link.classList.add('active');
+    }
+  }, { rootMargin: '-8% 0px -82% 0px', threshold: 0 });
+  for (const section of sections) observer.observe(section);
+})();
+</script>
+</body>
+</html>
