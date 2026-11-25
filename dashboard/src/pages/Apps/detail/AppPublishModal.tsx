@@ -19,6 +19,7 @@ import type {
   AppTable,
 } from "../../../api/modules/apps";
 import { message } from "../../../utils/antdMessage";
+import { copyText } from "../../../utils/copyText";
 import { formatServerDateTime } from "../../../utils/formatMessageTime";
 
 const { Text } = Typography;
@@ -247,8 +248,10 @@ export default function AppPublishModal({
                   type="link"
                   size="small"
                   onClick={() => {
-                    void navigator.clipboard?.writeText(publishUrl);
-                    message.success(t("apps.publishCopy"));
+                    void copyText(publishUrl).then((ok) => {
+                      if (ok) message.success(t("common.copied"));
+                      else message.error(t("common.copyFailed"));
+                    });
                   }}
                 >
                   {t("apps.publishCopy")}

@@ -192,6 +192,27 @@ describe("app detail header actions", () => {
     expect(screen.queryByText("恢复上一版")).not.toBeInTheDocument();
   });
 
+  it("shows and copies the current public link after reopening", async () => {
+    api.publication.mockResolvedValue({ active: true, url: "/p/tok_current" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "分享与发布" }));
+    fireEvent.click(
+      await screen.findByText("公开链接", {
+        selector: ".ant-dropdown-menu-title-content",
+      }),
+    );
+
+    expect(
+      await screen.findByDisplayValue(
+        `${window.location.origin}/p/tok_current`,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "复制链接" }),
+    ).toBeInTheDocument();
+  });
+
   it("returns to the all-MiniApps gallery from the back button", async () => {
     render(
       <AntdApp>

@@ -8,12 +8,16 @@ iframe the dashboard uses, with a bridge that only supports reads.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from collections.abc import AsyncIterator
+from functools import lru_cache
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from PIL import Image, ImageDraw, ImageOps
 from pydantic import BaseModel, Field
 
 from octop.api.common.client_ip import resolve_client_ip
@@ -32,6 +36,32 @@ _NO_STORE = {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
+
+_SHARE_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "public, max-age=300",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+}
+_SHARE_IMAGE_SIZE = 300
+# Bump when the rendered share image changes so WeChat re-fetches the URL.
+_SHARE_IMAGE_REVISION = "4"
+_SHARE_ASSET_NAMES = (
+    "share.png",
+    "share.jpg",
+    "share.jpeg",
+    "cover.png",
+    "cover.jpg",
+    "cover.jpeg",
+    "preview.png",
+    "preview.jpg",
+    "preview.jpeg",
+)
+_SHARE_ASSET_PREFIXES = ("share", "cover", "preview")
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+# The 40px header uses a dedicated small-size icon when the app provides one.
+_PREVIEW_ASSET_NAMES = ("icon.png", "icon.jpg", "icon.jpeg", "icon.webp")
 
 
 class PublicAppOut(BaseModel):
@@ -260,6 +290,21 @@ async def get_public_asset(
     return Response(content=data, media_type=media_type, headers=_NO_STORE)
 
 
+@router.get(
+    "/{token}/share.png",
+    include_in_schema=False,
+)
+async def get_public_share_image(
+    token: str,
+    _limit: None = Depends(_public_limit),
+    server: Any = Depends(get_server),
+) -> Response:
+    """Public share thumbnail for WeChat/OG cards (PNG, no JWT)."""
+    service, row = _public_app(server, token)
+    data = await _share_image_bytes(service, row)
+    return Response(content=data, media_type="image/png", headers=_SHARE_HEADERS)
+
+
 _SDK = """
 (function () {
   var pending = new Map();
@@ -327,7 +372,110 @@ def _with_head(html: str) -> str:
     return build_app_doc(html, head)
 
 
-def _host_page(token: str, app: PublicAppOut) -> str:
+def _public_origin(server: Any, request: Request) -> str:
+    base = (getattr(getattr(server, "config", None), "public_base_url", "") or "").strip()
+    base = base.rstrip("/")
+    if base.startswith(("http://", "https://")):
+        return base
+    return str(request.base_url).rstrip("/")
+
+
+def _meta_text(value: object, fallback: str = "") -> str:
+    text = " ".join(str(value or fallback).split())
+    return _escape(text)
+
+
+def _pick_share_asset(names: list[str]) -> str:
+    by_lower = {name.lower(): name for name in names}
+    for preferred in _SHARE_ASSET_NAMES:
+        if preferred in by_lower:
+            return by_lower[preferred]
+    for name in names:
+        lower = name.lower()
+        if lower.startswith(_SHARE_ASSET_PREFIXES) and lower.endswith(_IMAGE_SUFFIXES):
+            return name
+    return ""
+
+
+def _pick_preview_asset(names: list[str]) -> str:
+    by_lower = {name.lower(): name for name in names}
+    for preferred in _PREVIEW_ASSET_NAMES:
+        if preferred in by_lower:
+            return by_lower[preferred]
+    return ""
+
+
+def _render_share_image(data: bytes) -> bytes | None:
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            source.load()
+            frame = source.convert("RGB")
+            # Preserve the whole cover. Cropping a 1200x630 cover to a square
+            # can cut away the title and leave a blank center thumbnail.
+            corner = frame.getpixel((0, 0))
+            background = corner if isinstance(corner, tuple) else (255, 255, 255)
+            frame = ImageOps.pad(
+                frame,
+                (_SHARE_IMAGE_SIZE, _SHARE_IMAGE_SIZE),
+                method=Image.Resampling.LANCZOS,
+                color=background,
+            )
+            output = io.BytesIO()
+            frame.save(output, format="PNG")
+            return output.getvalue()
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _default_share_image() -> bytes:
+    size = _SHARE_IMAGE_SIZE
+    canvas = Image.new("RGB", (size, size), (15, 23, 42))
+    draw = ImageDraw.Draw(canvas)
+    for y in range(size):
+        t = y / max(1, size - 1)
+        draw.line(
+            (0, y, size, y),
+            fill=(int(15 + 18 * t), int(23 + 28 * t), int(42 + 36 * t)),
+        )
+    draw.rounded_rectangle(
+        (70, 70, size - 70, size - 70),
+        radius=48,
+        outline=(45, 212, 191),
+        width=6,
+    )
+    draw.polygon([(270, 210), (270, 430), (450, 320)], fill=(45, 212, 191))
+    draw.ellipse((440, 420, 520, 500), fill=(56, 189, 248))
+    output = io.BytesIO()
+    canvas.save(output, format="PNG")
+    return output.getvalue()
+
+
+async def _share_image_bytes(service: Any, row: Any) -> bytes:
+    try:
+        names = await service.list_assets(row)
+    except Exception:
+        names = []
+    asset = _pick_share_asset(names)
+    if asset:
+        try:
+            _mime, data = await service.read_asset(row, asset)
+            rendered = _render_share_image(data)
+            if rendered is not None:
+                return rendered
+        except Exception:
+            pass
+    return _default_share_image()
+
+
+def _host_page(
+    token: str,
+    app: PublicAppOut,
+    *,
+    base_url: str,
+    version: str,
+    preview_asset: str = "",
+) -> str:
     # The app runs inside the wrapper's own frame. The wrapper declares
     # `frame-src 'none'`, which is what stops the app from navigating itself
     # away and taking the bridge with it.
@@ -335,12 +483,60 @@ def _host_page(token: str, app: PublicAppOut) -> str:
     # Escape "</" so a script tag inside the app cannot close the host script.
     wrapper_json = json.dumps(wrapper_doc).replace("</", "<\\/")
     token_json = json.dumps(token)
+    title = _meta_text(app.name, "MiniApp")
+    description = _meta_text(app.description, "Open this MiniApp")
+    share_version = f"{quote(version, safe='')}-{_SHARE_IMAGE_REVISION}"
+    page_url = f"{base_url}/p/{quote(token, safe='')}?v={share_version}"
+    image_url = f"{base_url}/api/public/apps/{quote(token, safe='')}/share.png?v={share_version}"
+    preview_url = (
+        f"{base_url}/api/public/apps/{quote(token, safe='')}/assets/"
+        f"{quote(preview_asset, safe='')}?v={share_version}"
+        if preview_asset
+        else ""
+    )
+    cover_url = preview_url or image_url
+    cover_html = (
+        f'<img src="{_escape(cover_url)}" width="300" height="300" alt="{title}" itemprop="image">'
+    )
     return f"""<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_escape(app.name)}</title>
-<style>html,body{{margin:0;height:100%;background:#fff}}iframe{{border:0;width:100%;height:100%;display:block}}</style>
+<title>{title}</title>
+<meta name="description" content="{description}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Octop">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{description}">
+<meta property="og:url" content="{_escape(page_url)}">
+<meta property="og:image" content="{_escape(image_url)}">
+<meta property="og:image:secure_url" content="{_escape(image_url)}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="{_SHARE_IMAGE_SIZE}">
+<meta property="og:image:height" content="{_SHARE_IMAGE_SIZE}">
+<meta property="og:image:alt" content="{title}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{description}">
+<meta name="twitter:image" content="{_escape(image_url)}">
+<link rel="image_src" href="{_escape(image_url)}">
+<style>
+html,body{{margin:0;height:100%;background:#fff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}}
+body{{display:flex;flex-direction:column}}
+.app-head{{display:flex;align-items:center;gap:10px;flex:0 0 auto;padding:8px 12px;border-bottom:1px solid #e5e7eb;background:#fff}}
+.app-cover{{position:relative;display:block;flex:0 0 auto;width:40px;height:40px;overflow:hidden;border-radius:9px;background:#0f172a}}
+.app-cover img{{display:block;width:300px;height:300px;object-fit:cover;transform:scale(0.133333);transform-origin:top left}}
+.app-meta{{display:flex;flex-direction:column;min-width:0;line-height:1.25}}
+.app-meta strong,.app-meta small{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.app-meta strong{{font-size:14px;color:#0f172a}}
+.app-meta small{{font-size:12px;color:#64748b}}
+iframe{{flex:1 1 auto;width:100%;min-height:0;border:0;display:block}}
+</style>
 </head><body>
+<noscript><img src="{_escape(image_url)}" width="300" height="300" alt="{title}" style="display:block;width:300px;height:300px"></noscript>
+<header class="app-head">
+  <span class="app-cover">{cover_html}</span>
+  <span class="app-meta"><strong>{title}</strong><small>{description}</small></span>
+</header>
 <iframe id="wrapper" sandbox="allow-scripts"></iframe>
 <script>
 const token = {token_json};
@@ -409,6 +605,7 @@ def _escape(text: str) -> str:
 @page_router.get("/p/{token}", response_class=HTMLResponse, include_in_schema=False)
 async def public_app_page(
     token: str,
+    request: Request,
     _limit: None = Depends(_public_limit),
     server: Any = Depends(get_server),
 ) -> HTMLResponse:
@@ -417,6 +614,10 @@ async def public_app_page(
     METRICS.inc("light_app_public_view_total")
     service, row = _public_app(server, token)
     html, tables = await _public_payload(service, row)
+    try:
+        preview_asset = _pick_preview_asset(await service.list_assets(row))
+    except Exception:
+        preview_asset = ""
     app = PublicAppOut(
         app_id=row.app_id,
         name=row.name,
@@ -424,4 +625,13 @@ async def public_app_page(
         html=html,
         tables=tables,
     )
-    return HTMLResponse(_host_page(token, app), headers=_NO_STORE)
+    return HTMLResponse(
+        _host_page(
+            token,
+            app,
+            base_url=_public_origin(server, request),
+            version=str(getattr(row, "updated_at", "") or "1"),
+            preview_asset=preview_asset,
+        ),
+        headers=_NO_STORE,
+    )

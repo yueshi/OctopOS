@@ -1,9 +1,14 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App as AntdApp } from "antd";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AppTable } from "../../../api/modules/apps";
+import { copyText } from "../../../utils/copyText";
 import AppPublishModal from "./AppPublishModal";
+
+vi.mock("../../../utils/copyText", () => ({
+  copyText: vi.fn(async () => true),
+}));
 
 vi.mock("react-i18next", async () => {
   const zh = (await import("../../../locales/zh.json")).default;
@@ -151,5 +156,34 @@ describe("AppPublishModal public preview", () => {
     expect(
       screen.getByText("没有公开表，公开链接只展示应用页面。"),
     ).toBeInTheDocument();
+  });
+
+  it("shows the current link and copies it", async () => {
+    render(
+      <AntdApp>
+        <AppPublishModal
+          open
+          tables={[]}
+          publication={{ active: true, published_at: 1 }}
+          publishUrl="https://octop.example.test/p/tok_current"
+          busy={false}
+          timeZone="UTC"
+          onClose={vi.fn()}
+          onCreate={vi.fn()}
+          onPublishNow={vi.fn()}
+          onRevoke={vi.fn()}
+        />
+      </AntdApp>,
+    );
+
+    expect(
+      screen.getByDisplayValue("https://octop.example.test/p/tok_current"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "复制链接" }));
+    await waitFor(() =>
+      expect(copyText).toHaveBeenCalledWith(
+        "https://octop.example.test/p/tok_current",
+      ),
+    );
   });
 });

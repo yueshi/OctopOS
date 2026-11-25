@@ -7198,6 +7198,32 @@ class AppService:
     def _publication_secret_key(app_id: str) -> str:
         return f"light_app_publication_token:{app_id}"
 
+    def get_publication_token(self, row: AppRecord) -> str | None:
+        """Plaintext token of the active link, or None when unrecoverable.
+
+        The publication row stores only the hash; the plaintext copy in
+        ``secrets`` lets the dashboard show the existing link again without
+        rotating it. Links created before that copy existed cannot be
+        recovered.
+        """
+        publication = self.get_publication(row)
+        if (
+            publication is None
+            or publication.revoked_at is not None
+            or (publication.expires_at is not None and publication.expires_at <= int(time.time()))
+            or self._secret_repo is None
+        ):
+            return None
+        stored = self._secret_repo.get(self._publication_secret_key(row.app_id))
+        if not stored:
+            return None
+        token = stored.decode("utf-8")
+        # A secret left behind by a failed rotation must not be reused; the
+        # hash is the source of truth for the active link.
+        if hashlib.sha256(token.encode("utf-8")).hexdigest() != publication.token_hash:
+            return None
+        return token
+
     def create_publication(
         self,
         row: AppRecord,
@@ -7233,16 +7259,10 @@ class AppService:
         same link to the user again without invalidating the previous message.
         """
         publication = self.get_publication(row)
-        if (
-            publication is not None
-            and publication.revoked_at is None
-            and (publication.expires_at is None or publication.expires_at > int(time.time()))
-            and not rotate
-            and self._secret_repo is not None
-        ):
-            stored = self._secret_repo.get(self._publication_secret_key(row.app_id))
+        if publication is not None and not rotate:
+            stored = self.get_publication_token(row)
             if stored:
-                return stored.decode("utf-8"), publication.expires_at
+                return stored, publication.expires_at
         return self.create_publication(row, user_id=user_id, ttl_days=ttl_days)
 
     async def _snapshot_parts(

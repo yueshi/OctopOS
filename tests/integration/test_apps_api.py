@@ -1504,6 +1504,12 @@ async def test_public_link_is_read_only_and_revocable(
     assert token
     assert r.json()["url"] == f"/p/{token}"
 
+    # Reopening the link dialog returns the same link without rotating it.
+    r = await client.get(f"/api/apps/{app_id}/publication", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["active"] is True
+    assert r.json()["url"] == f"/p/{token}"
+
     # No JWT on the public endpoints.
     r = await client.get(f"/api/public/apps/{token}")
     assert r.status_code == 200, r.text
@@ -1517,12 +1523,166 @@ async def test_public_link_is_read_only_and_revocable(
     r = await client.get(f"/p/{token}")
     assert r.status_code == 200
     assert "octopApp" in r.text
+    assert 'property="og:title"' in r.text
+    assert 'property="og:image"' in r.text
+    assert 'name="description"' in r.text
+    assert f"/api/public/apps/{token}/share.png" in r.text
+    # WeChat's crawler reads the first visible <img>, not just og:image.
+    assert 'class="app-cover"' in r.text
+    assert '<img src="' in r.text
+    assert f"/api/public/apps/{token}/share.png" in r.text
+    assert 'width="300" height="300"' in r.text
+    assert r.text.index("<img") < r.text.index('<iframe id="wrapper"')
+
+    r = await client.get(f"/api/public/apps/{token}/share.png")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.headers["access-control-allow-origin"] == "*"
+    assert r.headers["cross-origin-resource-policy"] == "cross-origin"
+    assert r.content.startswith(b"\x89PNG")
+    from PIL import Image
+
+    with Image.open(io.BytesIO(r.content)) as image:
+        assert image.size == (300, 300)
 
     # Revoking takes effect immediately.
     r = await client.delete(f"/api/apps/{app_id}/publication", headers=alice_auth)
     assert r.status_code == 200
     r = await client.get(f"/api/public/apps/{token}")
     assert r.status_code == 404
+    r = await client.get(f"/api/apps/{app_id}/publication", headers=alice_auth)
+    assert r.json()["active"] is False
+    assert r.json()["url"] is None
+
+
+async def test_publication_status_hides_link_from_collaborators(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    """The link is a management credential; view collaborators keep status only."""
+    client, srv, alice_auth, bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    service = _service(srv)
+    await service.write_html(service.get(app_id), "<!doctype html><html><body>Public</body></html>")
+    r = await client.post(
+        f"/api/apps/{app_id}/publication",
+        headers=alice_auth,
+        json={"ttl_days": 0},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    r = await client.put(
+        f"/api/apps/{app_id}/shares",
+        headers=alice_auth,
+        json={"shares": [{"username": "bob", "permission": "view"}]},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(f"/api/apps/{app_id}/publication", headers=bob_auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["active"] is True
+    assert r.json()["url"] is None
+    assert token not in r.text
+
+
+async def test_public_page_uses_dedicated_icon_for_header(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    service = _service(srv)
+    await service.write_html(service.get(app_id), "<!doctype html><html><body>Icon</body></html>")
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (10, 10), (20, 40, 220)).save(buffer, format="PNG")
+    await service.save_asset(service.get(app_id), "icon.png", buffer.getvalue())
+    r = await client.post(
+        f"/api/apps/{app_id}/publication",
+        headers=alice_auth,
+        json={"ttl_days": 0},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+
+    r = await client.get(f"/p/{token}")
+    assert r.status_code == 200, r.text
+    assert f"/api/public/apps/{token}/assets/icon.png" in r.text
+    assert 'width="300" height="300"' in r.text
+    assert r.text.index("/assets/icon.png") < r.text.index('<iframe id="wrapper"')
+    # No-JS crawlers get a 300x300 fallback image.
+    assert "<noscript>" in r.text
+    # The OG image stays the rendered share card.
+    assert f"/api/public/apps/{token}/share.png" in r.text
+
+    r = await client.get(f"/api/public/apps/{token}/assets/icon.png")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("image/png")
+
+
+async def test_public_share_image_uses_owner_cover_asset(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    service = _service(srv)
+    row = service.get(app_id)
+    await service.write_html(row, "<!doctype html><html><body>Cover</body></html>")
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (10, 10), (220, 20, 30)).save(buffer, format="PNG")
+    await service.save_asset(service.get(app_id), "share.png", buffer.getvalue())
+    r = await client.post(
+        f"/api/apps/{app_id}/publication",
+        headers=alice_auth,
+        json={"ttl_days": 0},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    r = await client.get(f"/api/public/apps/{token}/share.png")
+    assert r.status_code == 200, r.text
+    with Image.open(io.BytesIO(r.content)) as image:
+        assert image.size == (300, 300)
+        red, green, blue = image.getpixel((150, 150))
+        assert red > 180 and green < 80 and blue < 80
+
+
+async def test_public_share_image_keeps_wide_cover_edges(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+) -> None:
+    """A 1200x630 cover must be letterboxed, not center-cropped to a square."""
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+    app_id = await _create_app(srv, agent_id, "alice")
+    service = _service(srv)
+    await service.write_html(
+        service.get(app_id), "<!doctype html><html><body>Wide cover</body></html>"
+    )
+    from PIL import Image, ImageDraw
+
+    cover = Image.new("RGB", (1200, 630), (255, 255, 255))
+    draw = ImageDraw.Draw(cover)
+    draw.rectangle((0, 0, 99, 629), fill=(220, 20, 30))
+    draw.rectangle((100, 0, 1099, 629), fill=(20, 180, 80))
+    draw.rectangle((1100, 0, 1199, 629), fill=(20, 20, 220))
+    buffer = io.BytesIO()
+    cover.save(buffer, format="PNG")
+    await service.save_asset(service.get(app_id), "cover.png", buffer.getvalue())
+
+    r = await client.post(
+        f"/api/apps/{app_id}/publication",
+        headers=alice_auth,
+        json={"ttl_days": 0},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["token"]
+    r = await client.get(f"/api/public/apps/{token}/share.png")
+    assert r.status_code == 200, r.text
+    with Image.open(io.BytesIO(r.content)) as image:
+        assert image.size == (300, 300)
+        left = image.getpixel((6, 150))
+        right = image.getpixel((294, 150))
+        assert left[0] > 150 and left[1] < 100 and left[2] < 100
+        assert right[2] > 150 and right[0] < 100 and right[1] < 100
 
 
 async def test_public_rows_keep_snapshot_pii_after_live_flag_removed(
@@ -1693,6 +1853,13 @@ async def test_publication_url_uses_configured_public_base_url(
     assert r.status_code == 200, r.text
     token = r.json()["token"]
     assert r.json()["url"] == f"https://octop.example.test:8088/p/{token}"
+    r = await client.get(f"/api/apps/{app_id}/publication", headers=alice_auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["url"] == f"https://octop.example.test:8088/p/{token}"
+    r = await client.get(f"/p/{token}")
+    assert r.status_code == 200, r.text
+    assert f'content="https://octop.example.test:8088/p/{token}?v=' in r.text
+    assert f'content="https://octop.example.test:8088/api/public/apps/{token}/share.png' in r.text
 
 
 async def test_backup_download_and_restore_api(

@@ -219,12 +219,14 @@ export default function AppDetailPage({
   const snapshotSchedule =
     schedules.find((item) => item.action === "snapshot_publication") ?? null;
   // The API returns the public origin (scheme/host/port) the server is reached
-  // at; fall back to the browser origin when the server has no public_base_url.
-  const publishUrl =
-    publication?.url ??
-    (publication?.token
-      ? `${window.location.origin}/p/${publication.token}`
-      : "");
+  // at; without public_base_url it returns a relative path, completed here with
+  // the browser origin so the copied link is usable.
+  const publishUrl = useMemo(() => {
+    const raw =
+      publication?.url ?? (publication?.token ? `/p/${publication.token}` : "");
+    if (!raw) return "";
+    return raw.startsWith("/") ? `${window.location.origin}${raw}` : raw;
+  }, [publication]);
   const [shareLoading, setShareLoading] = useState(false);
   const [savingShare, setSavingShare] = useState(false);
   const [shares, setShares] = useState<ShareDraft[]>([]);
@@ -250,7 +252,12 @@ export default function AppDetailPage({
   const [tasksRefreshToken, setTasksRefreshToken] = useState(0);
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab === "ui" || tab === "data" || tab === "tasks" || tab === "members") {
+    if (
+      tab === "ui" ||
+      tab === "data" ||
+      tab === "tasks" ||
+      tab === "members"
+    ) {
       setActiveView(tab);
     }
   }, [searchParams]);

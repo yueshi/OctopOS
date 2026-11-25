@@ -4395,7 +4395,13 @@ async def set_app_shares(
 
 class PublicationOut(BaseModel):
     active: bool = Field(description="Whether a non-revoked, non-expired link exists.")
-    url: str | None = Field(default=None, description="Public URL when a token was just created.")
+    url: str | None = Field(
+        default=None,
+        description=(
+            "Public URL of the active link. Returned to owners/admins so the "
+            "link can be shown and copied again without rotating it."
+        ),
+    )
     token: str | None = Field(
         default=None, description="Plaintext token, returned only on creation."
     )
@@ -4427,7 +4433,10 @@ class CreatePublicationBody(BaseModel):
     "/{app_id}/publication",
     response_model=PublicationOut,
     summary="Get the public link status",
-    description="Read-only public link status. Requires view.",
+    description=(
+        "Read-only public link status. Requires view. The current URL is "
+        "returned only to owners/admins, who may manage the link."
+    ),
 )
 async def get_app_publication(
     app_id: str,
@@ -4441,9 +4450,15 @@ async def get_app_publication(
         and publication.revoked_at is None
         and (publication.expires_at is None or publication.expires_at > int(time.time()))
     )
+    url = None
+    if active and service.authorize(principal_of(user), row, Action.PUBLISH).allowed:
+        token = service.get_publication_token(row)
+        if token:
+            url = _public_link(server, token)
     status = await service.publication_status(row)
     return PublicationOut(
         active=active,
+        url=url,
         expires_at=publication.expires_at if publication else None,
         published_at=status.published_at,
         snapshot_stale=status.stale,
