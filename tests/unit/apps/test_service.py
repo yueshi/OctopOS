@@ -3916,9 +3916,14 @@ async def test_extension_media_token_and_range_stream(
         )
         is None
     )
+    # Tamper with the first signature character. The last one carries only
+    # four significant bits (the trailing base64 padding bits are dropped),
+    # so flipping it can leave the decoded signature untouched.
+    payload_b64, signature_b64 = issued["token"].split(".", 1)
+    tampered = f"{payload_b64}.{'A' if signature_b64[0] != 'A' else 'B'}{signature_b64[1:]}"
     assert (
         world.service.verify_media_token(
-            issued["token"][:-1] + ("a" if issued["token"].endswith("b") else "b"),
+            tampered,
             app_id=app_id,
             service_id=service_id,
             asset_id="asset_1",
