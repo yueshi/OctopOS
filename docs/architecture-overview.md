@@ -1,13 +1,15 @@
 # Octop 架构总览：现状、缺口与路径
 
 Status: reference
-Date: 2026-11-08
+Date: 2026-11-24
 Scope: 面向决策者的全景文档——Octop 现在是什么、能干什么、边界在哪、接下来该补什么。
 技术细节见 `docs/architecture.md`（英文，168 行）；模块边界与改动规则见 `AGENTS.md` §5；
 本文不重复它们。
 
-> **数字说明**：本文的模块规模、表数量、通道数均为 2026-11-08 在本仓库实测，
-> 会随迭代变化。引用时以代码为准。
+> **数字说明**：本文的模块规模、表数量、通道数均为 2026-11-24 在本仓库实测，
+> 会随迭代变化。引用时以代码为准。MiniApp 的完整现状另见
+> [MiniApp 功能与架构现状](./miniapp-overview.md)，事件平面的权威缺口列表见
+> [事件模型与投递契约](./event-model.md) §5。
 
 ---
 
@@ -27,43 +29,44 @@ Scope: 面向决策者的全景文档——Octop 现在是什么、能干什么�
 **一个单进程、自包含、多用户的多 Agent 平台**：`pip install` 之后
 `octop init && octop run` 即可运行，除一个 LLM provider 外不依赖任何外部服务。
 
-| 维度 | 规模（2026-11-08 实测） |
+| 维度 | 规模（2026-11-24 实测） |
 |---|---|
-| `infra/` Python | 约 15 万行，23 个子包 |
-| API 路由模块 | 66 |
+| `infra/` Python | 约 16.5 万行，23 个子包（622 个 `.py`） |
+| API 路由模块 | 96（定义 `APIRouter` 的模块） |
 | CLI 命令模块 | 24 |
-| 数据库表 | 50（SQLite / PostgreSQL 共用一套 schema） |
-| 连接器 | 30 |
+| 数据库表 | 77（SQLite / PostgreSQL 共用一套 schema，v52） |
+| 连接器 | 31 |
 | 专家模板 | 26 |
 | IM 通道 | 10（`dingtalk` `discord` `feishu` `mqtt` `qq` `telegram` `wecom` `weixin` `xiaoyi` `yuanbao`） |
-| Dashboard 页面 | 14 |
+| Dashboard 页面 | 16 |
 
 **最大的子包**（`src/octop/infra/`）：
 
 | 子包 | 文件 | 行数 | 职责 |
 |---|---:|---:|---|
-| `agents/` | 188 | 51,548 | Agent 运行时、专家、团队、插件、记忆、provider |
-| `gateway/` | 59 | 14,274 | IM 消息处理、HITL、slash、steering |
-| `db/` | 51 | 13,380 | 连接池、迁移、repos、SharedServices |
-| `connectors/` | 48 | 9,843 | 目录、OAuth、MCP gateway、凭据加密 |
-| `apps/` | 23 | 9,957 | **MiniApp** |
-| `utils/` | 34 | 4,838 | 纯工具（路径、ULID、locale…） |
-| `bridge/` | 10 | 3,778 | Octop ↔ Octop 实例桥 |
-| `auth/` | 26 | 3,585 | OIDC / LDAP / SSO |
+| `agents/` | 191 | 52,457 | Agent 运行时、专家、团队、插件、记忆、provider |
+| `apps/` | 39 | 23,638 | **MiniApp** |
+| `db/` | 69 | 19,343 | 连接池、迁移、repos、SharedServices |
+| `gateway/` | 59 | 15,399 | IM 消息处理、HITL、slash、steering |
+| `connectors/` | 49 | 10,372 | 目录、OAuth、MCP gateway、凭据加密 |
+| `utils/` | 34 | 4,994 | 纯工具（路径、ULID、locale…） |
+| `auth/` | 28 | 4,044 | OIDC / LDAP / SSO |
+| `bridge/` | 10 | 3,779 | Octop ↔ Octop 实例桥 |
 | `skills/` | 12 | 3,337 | 技能包与 SkillHub |
 | `setup/` | 15 | 3,331 | 首启向导、TLS、服务安装 |
-| `history/` | 17 | 2,683 | 版本化历史、轨迹、投影 |
+| `history/` | 17 | 2,732 | 版本化历史、轨迹、投影 |
+| `users/` | 12 | 2,542 | 用户、角色、密码 |
 | `backup/` | 9 | 2,396 | 手动与自动备份 |
 | `knowledge/` | 17 | 2,325 | 知识库 |
-| `users/` | 11 | 2,292 | 用户、角色、密码 |
 | `backend/` | 12 | 2,091 | 工作区存储适配（本地/远程/COS/S3/Docker） |
+| `events/` | 8 | 2,016 | 外部事件平面 |
 | `desktop/` | 5 | 1,919 | 远程桌面 |
-| `mobile/` | 10 | 1,885 | Android adb 探测与远控 |
-| `events/` | 8 | 1,811 | 外部事件平面 |
-| `cron/` | 7 | 1,592 | 定时任务 |
+| `mobile/` | 10 | 1,887 | Android adb 探测与远控 |
+| `cron/` | 7 | 1,599 | 定时任务 |
 | `voice/` | 5 | 1,113 | STT / TTS |
 | `proactive/` | 4 | 913 | 主动照护 |
 | `browser/` | 2 | 550 | Playwright 会话 |
+| `agent_mcp/` | 3 | 516 | Agent 侧 MCP 装配（2026-10-16 加入，旧表遗漏） |
 
 ---
 
@@ -76,7 +79,7 @@ Scope: 面向决策者的全景文档——Octop 现在是什么、能干什么�
                     └──────┬───────┘  └──────┬───────┘
                            │ HTTP            │
                     ┌──────▼─────────────────▼──────┐
-                    │        api/  (66 routers)      │
+                    │        api/  (96 routers)      │
                     │  FastAPI · JWT · SSE · WS      │
                     └──────────────┬────────────────┘
                                    │
@@ -162,15 +165,18 @@ webhook（HMAC）+ connector_poll（30 秒扫描）；订阅支持过滤/模板/
 
 数据（schema + rows，JSON 列值，CAS 版本，2 万行上限）、视图
 （dashboard / ledger / board，自包含 HTML）、生成（模板 / 无 LLM 快速模式 / LLM）、
-数据源（CSV 导入 + MCP 快照同步）、只读发布链接（token hash + 发布快照）、
-应用内只读问答助手（含图表）、外部游戏接入、个人多 Board、能力清单与双层沙箱、
-35 个 `app_*` agent 工具（3 个只读 + 8 个 HITL 集成运维工具）。
+数据源（CSV 导入 + MCP 快照同步）、只读发布链接（token hash + 发布快照 + OG 分享卡片）、
+应用内只读问答助手（含图表）、AI 任务（`light_app_tasks`：摘要 / 表摘要 / 内容初审）、
+外部写服务（`provider=extension`：幂等账本、两阶段确认、分片上传、媒体 Range 代理）、
+身份与协作（成员 / 邀请 / 加入码 / guest 会话 / host policy / IM `/link` 握手）、
+外部游戏接入、个人多 Board、能力清单（14 位）与双层沙箱、
+42 个 `app_*` agent 工具（含 3 个 setup plan、3 个只读集成诊断、8 个 HITL 集成运维、4 个 AI 任务工具）。
 
 **定位见 §7；完整功能、架构与实现缺口见 [MiniApp 功能与架构现状](./miniapp-overview.md)。**
 
 ### 3.8 技能 · 插件 · 连接器
 
-技能包与 SkillHub 市场；20+ 内置插件 + 上传安装；30 个连接器；
+技能包与 SkillHub 市场；20+ 内置插件 + 上传安装；31 个连接器；
 外部 MCP server 挂载 + 内部 MCP gateway。
 
 ### 3.9 运维与接入
@@ -199,11 +205,11 @@ zh/en 双语、metrics + usage + observability。
 ### 特点 3：一套 schema，两种数据库
 
 SQLite（默认，WAL）与 PostgreSQL 共用 `00N.sql` / `00N.pg.sql` 迁移对，
-版本断言在 `tests/unit/db/test_db_pool.py:113`（当前 v29）。
+版本断言在 `tests/unit/db/test_db_pool.py:116`（当前 v52）。
 
 - **收益**：小机器开箱即用，大客户可迁 PG。**这是分布式的物理前提**——
   中心节点用 PG 是现成的。
-- **代价**：SQLite 不支持的重建要写幂等助手（`migrate.py` 已有 20+ 个 `_ensure_*`）
+- **代价**：SQLite 不支持的重建要写幂等助手（`migrate.py` 已有 53 个 `_ensure_*`）
 
 ### 特点 4：资源表双 ID
 
@@ -256,9 +262,9 @@ Setup 向导、TLS 自动签发、systemd 服务、备份、在线更新、i18n�
 | 多用户与认证 | ★★★★★ | JWT / SSO / LDAP / 邀请码 / 角色 / ACL 齐全 |
 | 通道接入 | ★★★★☆ | 10 个 IM + 插件机制；企微只有扫码绑定 |
 | 团队编排 | ★★★★☆ | 目标/任务/派发/审批/预算齐全；缺独立验收人 |
-| 外部事件 | ★★★★☆ | inbox/outbox/租约/退避/死信完整；缺语义级过滤、顺序保证与投递结果可见性 |
-| MiniApp | ★★★★☆ | 数据+视图+发布+数据源+助手完整；2 万行上限 |
-| 技能/插件/连接器 | ★★★★☆ | 30 连接器 + 市场 + 上传 |
+| 外部事件 | ★★★★☆ | inbox/outbox/租约/退避/死信完整；投递结果已落 `result_json`（v41）；缺语义级过滤与顺序保证 |
+| MiniApp | ★★★★☆ | 数据+视图+发布+数据源+助手+AI 任务+外部写服务完整；2 万行上限 |
+| 技能/插件/连接器 | ★★★★☆ | 31 连接器 + 市场 + 上传 |
 | 运维自托管 | ★★★★☆ | setup / TLS / backup / update 齐全 |
 | 跨实例 | ★★★☆☆ | **Bridge 已实现**（见 §6） |
 | 主动工作 | ★★☆☆☆ | 三条路径并存，无统一决策点，跑在人类 DM 线程 |
@@ -270,7 +276,7 @@ Setup 向导、TLS 自动签发、systemd 服务、备份、在线更新、i18n�
 
 ## 6. 被低估的能力：Bridge
 
-`src/octop/infra/bridge/`（3,778 行）实现了 Octop ↔ Octop 的跨实例连接：
+`src/octop/infra/bridge/`（3,779 行）实现了 Octop ↔ Octop 的跨实例连接：
 
 | 能力 | 实现 |
 |---|---|
@@ -298,9 +304,9 @@ MiniApp 不是一个平级模块，而是一条**穿透三层**的纵向链路�
 
 | 层 | 触点 |
 |---|---|
-| 执行层 | 35 个 `app_*` agent 工具 |
-| 数据层 | `light_apps` / `light_app_rows` / `light_app_tables` / `light_app_sources` / `light_app_publications` / `miniapp_boards` |
-| 交互层 | iframe `srcDoc` 渲染 + publication 只读公开链接 + 个人工作台看板 |
+| 执行层 | 42 个 `app_*` agent 工具 |
+| 数据层 | `light_apps` / `light_app_rows` / `light_app_tables` / `light_app_sources` / `light_app_publications` / `light_app_services` / `light_app_service_operations` / `light_app_tasks` / `miniapp_boards` |
+| 交互层 | iframe `srcDoc` 渲染 + publication 只读公开链接（含 OG 分享卡片）+ 个人工作台看板 + guest 门户 `/join` `/my` |
 
 ### 定位
 
@@ -334,24 +340,33 @@ MiniApp 不是一个平级模块，而是一条**穿透三层**的纵向链路�
 
 ## 8. 已知缺陷（无论做什么都该修）
 
-四条**已存在**的缺陷，与任何新架构无关，修复成本极低：
+四条**已存在**的缺陷，与任何新架构无关，修复成本极低（2026-11-24 复核，位置已重定位）：
 
 | 编号 | 缺陷 | 位置 | 影响 |
 |---|---|---|---|
-| B1 | 照护调度器异常后静默死亡，不重排 | `infra/proactive/scheduler.py:259` | 该 agent 的照护永久消失直到重启 |
-| B2 | 外部投递租约过期后无条件重跑 | `infra/db/repos/external_deliveries.py:146` | 已执行一半的工作可能重复执行外部动作 |
-| B3 | 限流命中静默丢弃事件 | `infra/events/service.py` 限流分支 | 事件在库里但无人知道它被丢掉 |
-| B4 | 主动工作跑在人类 DM 线程 | `infra/cron/manager.py:129`、`infra/agents/teams/runtime.py:376` | 抢 session lock、污染转录 |
+| B1 | 照护调度器异常后静默死亡，不重排 | `infra/proactive/scheduler.py:259`（`_on_task_done` 只记日志） | 该 agent 的照护永久消失直到重启 |
+| B2 | 外部投递租约过期后无条件重跑 | `infra/db/repos/external_deliveries.py:185`（`requeue_expired` → `list_due` 立即再取） | 已执行一半的工作可能重复执行外部动作 |
+| B3 | `expert.turn` 的 cron 投递不按 `cron_id` / `delivery_id` 去重 | `infra/cron/delivery.py:71`（`deliver` 每次新 mint `delivery_id`） | LLM turn 成功但 `finish(delivered)` 前崩溃时，租约过期会再次执行 |
+| B4 | 主动工作跑在人类 DM 线程 | `infra/cron/manager.py:129`、`infra/agents/teams/runtime.py:385`（都用 `ThreadRegistry.dashboard_key`） | 抢 session lock、污染转录 |
 
 合计约 **3–4 人日**（B4 含面板分组）。
 
-事件平面另有已确认缺口（不在上述四条内，详见
-[`docs/event-model.md`](./event-model.md) §5）：
+> **已修复并从本节移除**：原 B3「限流命中静默丢弃事件」已于 2026-11-18 修复——
+> 命中 `max_per_minute` 时累加 `external_event_rate_limited_total`，
+> 并通过 `IngestResult.rate_limited` 暴露到入站 webhook 与 MiniApp emit 响应。
 
-- `light_app_events` 的幂等键没有按 app 作用域；同一事件 fan-out 到两个 app 会串数据。
-- PG 下 `external_events` 去重与 `team_events.seq` 分配有并发竞态；后者会静默丢事件。
-- `app.import` / `app.refresh` 的 `ImportResult` 未写入 delivery；部分失败仍显示 `delivered`。
-- 事件平面使用 6 字符随机 id（约 30 bit）；高频事件下 UNIQUE 冲突概率上升。
+事件平面另有已确认缺口（权威列表见
+[`docs/event-model.md`](./event-model.md) §5，不在上述四条内）：
+
+- `app_event` 的 WS 帧没有消费者——worker 会推送，Dashboard 没有处理分支；当前只能用 `app.inbox` 轮询。
+- 保留期不齐——外部事件 30 天硬编码，`team_events` 没有清理，`light_app_events` 只在写入时 prune。
+- 顺序未定义——外部平面没有 `ordering_key`，同一 app 的并发投递可能乱序；`app.import` 的 `replace` 没有 `snapshot_version` 水位保护。
+- payload 治理未定——完整 payload 存 `external_events.payload_json`（上限 256 KiB），PII 脱敏与保留策略待明确。
+
+> 此前本节列出的另外三条事件缺口（`light_app_events` 幂等键未按 app 作用域、
+> PG 下 `external_events` 去重与 `team_events.seq` 的并发竞态、
+> `app.import` / `app.refresh` 的 `ImportResult` 未写入 delivery）以及
+> 「事件 id 只有 6 字符（约 30 bit）」均已修复，分别见 `event-model.md` §5 第 1–3、5 条。
 
 ---
 
@@ -391,7 +406,7 @@ Super-agent 提供这层的设计模式（`docs/superagent-borrowing-design.md`�
 | 路径 B：目标导向编排 | `TeamAutopilot` 全套 | ✅ **直接可用** | 补策略面板 |
 | 成本硬顶 | `budget_remaining` 已生效 | ✅ **可用**（token 粒度待调） | 加金额维度 |
 | 老板看板 / 门店屏幕 | MiniApp dashboard + publication | ✅ **直接可用** | 验证大屏轮询与断网 |
-| MCP 工具挂载 | 成熟，30 个连接器 | ✅ **直接可用** | — |
+| MCP 工具挂载 | 成熟，31 个连接器 | ✅ **直接可用** | — |
 | 带边界的目标 | `team_goals` 只有 `success_criteria`；预算在 `autonomy_policy` | ⚠️ **缺绑定** | 加 `bounds_json` |
 | 路径 A：确定性工作流 | cron + `team_tasks`，**无工作流引擎** | ⚠️ **缺功能** | 外挂状态机或建模成 task |
 | 能力合约 | `SecurityPolicy` 是**工具级** HITL | ⚠️ **层级不对** | 在其上加合约层 |
@@ -502,7 +517,8 @@ Super-agent 提供这层的设计模式（`docs/superagent-borrowing-design.md`�
 | 事件模型与投递契约（术语、保证、已知缺口） | `docs/event-model.md` |
 | 外部事件平面（实现细节） | `docs/external-events-design.md` |
 | 团队 L3 路线图 | `docs/team-l3-roadmap.md` |
-| MiniApp 功能、架构与实现现状 | `docs/miniapp-overview.md` |
+| MiniApp 功能、架构与实现现状 | `docs/miniapp-overview.md`（**MiniApp 的权威现状**，含 schema v52、42 个 agent 工具、外部写服务） |
+| 外部扩展服务契约实例（V1-B） | `docs/video-workbench-implementation-plan.md` |
 | MiniApp 数据与协作（历史设计） | `docs/light-apps-architecture.md` |
 | MiniApp 增强计划（历史设计） | `docs/light-apps-enhancement-plan.md` |
 | 业务 Agent OS 设计记录（草稿） | `docs/agent-os-overall-plan.md` |

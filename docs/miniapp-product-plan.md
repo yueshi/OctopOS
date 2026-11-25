@@ -1,6 +1,6 @@
 # MiniApp 产品定位与路线图
 
-> 日期：2026-11-15，分支 `feature/miniapp-capabilities`，schema **v34**。
+> 日期：2026-11-15（事实数据同步至 2026-11-24），分支 `feature/miniapp-capabilities`，schema **v34** → 现状 **v52**。
 >
 > 口径：**实现现状以 [MiniApp 功能与架构现状](./miniapp-overview.md) 为准；需求与决策历史见
 > [MiniApp 平台路线图](./miniapp-platform-roadmap.md)；阶段执行细节见
@@ -183,12 +183,14 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | 域 | 状态 | 关键事实 |
 |---|---|---|
 | 数据底座 | ✅ | 多表（≤12）、行级 CAS、幂等、懒迁移、导入/导出、备份/恢复 |
-| 创建 | ✅ | Agent 工具、Excel/CSV 快速模式（确定性、不打 LLM）、6 个系统模板 + 专家模板 |
-| 界面 | ✅ | 单文件 HTML、`window.octopApp`（10 方法）、能力清单、双层沙箱 + CSP + WebRTC 冻结 |
+| 创建 | ✅ | Agent 工具、Excel/CSV 快速模式（确定性、不打 LLM）、7 个系统模板 + 专家模板 |
+| 界面 | ✅ | 单文件 HTML、`window.octopApp`（23 方法）、能力清单（14 位）、双层沙箱 + CSP + WebRTC 冻结 |
 | 协作 | ✅ | view / edit_data / edit_structure、协作者（≤50）、应用交接、删除守卫 |
 | 发布 | ✅ | 只读公开链接、发布快照、公开表可见性、PII 脱敏、限流、撤销、上一版回滚 |
 | AI | ✅ | 应用内只读数据助手（含图表）、一次性文本生成，计入 owner 额度 |
 | 数据源 | ✅ | 工作区文件 + 只读连接器工具；手动/定时、游标增量、upsert、失败退避 |
+| AI 任务 | ✅ | `light_app_tasks`（v50）：`summarize_row` / `table_digest` / `pre_review`、任务 API/SDK、4 个 Agent 工具、每日 token 上限、完成通知 |
+| 外部写服务（V1-B） | ✅ | `provider=extension`（v52）：读写工具契约、幂等账本、两阶段确认、`submission_unknown` 对账、50 MB 分片上传、媒体 Range 代理、动态 CSP |
 | 内置数据集 | ✅ | `builtin.dataset` 只读契约（describe/query）、`light_app_bindings`（v32） |
 | 行级范围 | ✅ | `row_scope` = `app` / `user`（v33），读/写/导出/公开面均生效 |
 | 声明式规则 | ✅ | 状态机（`state_field` + `transitions`）（v34） |
@@ -197,7 +199,7 @@ MiniApp 服务三类人（做台账的、看数的、审内容的），场景收
 | IM | ✅ | `app_share_link` 一次调用交付、纯文本格式化、单轮预算；owner 绑定后返回 app-scoped 免密链接 |
 | 运维 | ✅ | 指标、审计、限流（每进程） |
 
-规模：24 个 `app_*` Agent 工具；约 77 个 HTTP 路由 + 1 个公开宿主页；后端 `infra/apps/` 约 1 万行。
+规模：42 个 `app_*` Agent 工具；约 156 个 MiniApp 相关 HTTP 路由（含 1 个公开宿主页）；后端 `infra/apps/` 39 个模块、约 2.36 万行。
 
 ### 3.2 未落地
 

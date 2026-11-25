@@ -1,6 +1,6 @@
 # MiniApp 功能与架构现状
 
-> 快照：2026-11-22，分支 `feature/miniapp-ai-native`，schema **v51**（049/050/051 已应用）；PR-11/12 已实现并部署（commit `f46f7a1c`）。
+> 快照：2026-11-24，分支 `feature/miniapp-ai-native`，schema **v52**（049–052 已应用）；PR-11/12 已实现并部署（commit `f46f7a1c`）。
 >
 > 口径：**以当前代码与测试为准**。仓库里多份 `light-apps-*` / `miniapp-*` 文档是不同阶段的设计稿，只保留动机与历史记录，并在文首指向本文；本文把已落地的事实和明确未落地的部分分开写。
 >
@@ -13,6 +13,10 @@
 > **AI-native 增强开发计划见 [MiniApp AI-native 增强开发计划](./miniapp-ai-native-plan.md)。**
 >
 > **P1a/P1b/P2 已落地（2026-11-23）**：`light_app_tasks`（050）、Tier 1 `summarize_row`、Tier 2 `table_digest`（只读 `query_rows`/`aggregate` 工具循环）、`pre_review`（图文初审 + 固定列写回）与「内容审核台」系统模板、任务 API/SDK、`usage_log.app_id/task_id`（051）、每应用每日 token 上限、应用详情「AI 任务」页签、行操作「AI 任务」创建入口、4 个 Agent 任务工具（`app_run_task` / `app_get_task` / `app_list_tasks` / `app_cancel_task`）与 `GET /apps/{id}/task-types`、页面图片上传（`asset.write` + `octopApp.upload`）、行查询下推（SQLite `json_extract` / PG `jsonb->>`，2 万行约 47ms）、AI 任务完成/失败通知（`notifications` kind=`app_task`，点击进入应用任务页）。后续优先级见计划 §14.1：预算预扣/结算优先，任务 HITL 改为接入外部副作用时触发。
+>
+> **外部写服务与扩展（V1-B / 2026-11-23，schema v52）**：`light_app_services` 增加 `mode` / `base_url` / `extension_id` / `secret_ref` / `read_tools_json` / `write_tools_json` / 超时与请求响应上限 / 确认声明 / `allow_private_network`；新增 `light_app_service_operations` 薄幂等账本；新增 `external.write` 能力位、`provider=extension` 与 `POST /api/apps/{id}/services/{name}/invoke`、`GET /api/apps/{id}/services/{name}/operations/{op_id}`；幂等键按 `(service, tool, actor)` 作用域，同 key 不同参数返回 409；高风险工具两阶段确认；服务 token 加密存储且不回传页面。配套落地动态 CSP（`media_paths`）、50MB 分片上传、媒体 Range/206/HEAD 代理 + 30 分钟短时 token、admin-only `allow_private_network`，以及 `video-workbench` 系统模板。详见 §2.13 与 [视频审片工作台实施计划](./video-workbench-implementation-plan.md)。
+>
+> **公开链接分享卡片（2026-11-24）**：`/p/{token}` 服务端输出 OG/Twitter 元数据并在宿主页顶部渲染可见首图；新增 `GET /api/public/apps/{token}/share.png`（300×300 PNG）；`GET /api/apps/{id}/publication` 对 owner/admin 返回当前链接，view 协作者只拿到状态。
 >
 > **身份模型（v3）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47，commit `aed36ded`）：`PrincipalDirectory` 与 platform/app/guest 三种 token scope、`authorize()` 授权内核、行归属与行级 PII、成员/邀请/加入码、guest 会话与门户、host policy、Dashboard 成员页与 `/join`。IM sender 身份（`account_key` + `sender_id`、`ToolScope`、app 数据工具收口）与 `/link` 握手（PR-11/12）已实现并部署。设计见 [MiniApp 用户管理与接入方案](./miniapp-identity-access-plan.md)，实施拆解见 [Identity 实施计划](./miniapp-identity-implementation-plan.md)。
 
@@ -37,16 +41,19 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 | 工作台 | ✅ 个人多 Board、12 列网格、缩放/锁定/撤销/全屏/自动排列 |
 | IM | ✅ `app_share_link` 一次调用交付、纯文本格式化、单轮预算 |
 | 集成/分发（R2/R3） | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度、IM 公开链接与 owner 身份绑定（D4-lite）已实现；公开看板、迁移包 v2 未实现 |
+| 外部写服务（V1-B） | ✅ `provider=extension`：读/写工具契约、幂等账本、两阶段确认、分片上传、媒体 Range 代理、动态 CSP；`video-workbench` 模板已随包发布 |
 | 身份与访问（v3） | ✅ P0/P1（PR-01~PR-10）+ P2a（PR-11/12）已实现并部署，schema v48 |
 
 关键数字：
 
-- 42 个 `app_*` Agent 工具（含 3 个 setup plan 工具、3 个只读集成诊断工具、8 个 HITL 集成运维工具、4 个 AI 任务工具）；约 102 个 HTTP 路由 + 1 个公开宿主页（apps / public / boards / game；另有访问申请与认证链接路由）。
+- 42 个 `app_*` Agent 工具（含 3 个 setup plan 工具、3 个只读集成诊断工具、8 个 HITL 集成运维工具、4 个 AI 任务工具）；约 156 个 MiniApp 相关 HTTP 路由（apps 108、成员/邀请/加入码 16、guest 门户 7、公开面 6、访问申请 4、看板 6 等），另含平台级 `external_events` 路由。
 - 每个用户最多 50 个应用；每个应用最多 12 张表、每表 50 列、2 万行、5 MB。
-- 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB。
-- 12 个应用能力位：11 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
-- 后端 `infra/apps/` 约 1.88 万行；应用 API 路由约 4,700 行；前端 MiniApp 页面/宿主约 1.8 万行（不含桌面 Shell；含桌面 Shell 约 3.1 万行）。
-- 最近验证（2026-11-22）：PR-10 已部署（schema v47）；PR-11/12 定向验证——identity/gateway/agents 1879、apps 505、db 245、集成 103、前端 33 个用例，`make lint` / `make typecheck` 通过。线上服务已迁移到 schema v48。全量 `make all` 在本机跑到 88% 因资源被中止，尚未得到一次完整全绿记录。
+- 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB；扩展服务上传上限 50 MB（SDK 4 MB 分片）。
+- 14 个应用能力位：13 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
+- 页面 SDK 23 个顶层方法；`service(name)` 下 8 个子方法（`call` / `callDetailed` / `image` / `invoke` / `operation` / `resolveOperation` / `upload` / `mediaUrl`）。
+- 系统模板 7 个（客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片）。
+- 后端 `infra/apps/` 39 个模块、约 2.36 万行（`service.py` 1.06 万行、`tools.py` 3,017 行）；应用 API 路由约 5,641 行；前端 MiniApp 页面/宿主约 2.5 万行（不含桌面 Shell；含桌面 Shell 约 3.1 万行）。
+- 最近验证（2026-11-24）：schema v52 断言已更新（`tests/unit/db/test_db_pool.py` 全部为 52）；V1-B 外部写服务定向验证——`tests/unit/apps` + `tests/integration/test_apps_api.py` 全绿，`make lint` / `make typecheck` 通过。全量 `make all` 在本机因资源受限未跑完，尚未得到一次完整全绿记录。
 
 选场景、落地路径与验收口径见 §5「应用场景与落地」。
 
@@ -69,7 +76,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - 不是业务数据库的权威源：定位是投影层；任务实体仍落原生表（见 `docs/team-autopilot-design.html`）。
 - 不是实时协同编辑：没有 CRDT、行级/字段级权限、多人同时编辑 HTML。
 - 不是审批系统：审批在 `hitl_pending`；MiniApp 只承载结果。
-- 不是公开填报/公开写入系统：公开链接只读；外部写入必须走签名入站 Webhook，或由登录用户/协作者完成。
+- 不是公开填报/公开写入系统：公开链接只读；往外部系统写入必须走签名入站 Webhook、owner 授权的扩展写服务（`external.write`），或由登录用户/协作者完成。
 - 不是多租户隔离载体：单实例产品，公开链接是 bearer token 语义。
 
 ### 1.3 与相邻概念
@@ -151,8 +158,9 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 
 ### 2.3 界面与宿主
 
-- **单文件 HTML**：CSS/JS 全内联；禁止远程脚本、样式、图片、字体、媒体、`fetch()`、`WebSocket`、`EventSource`、`sendBeacon`、外链 `<a>`、`meta refresh`、`location` 导航、`window.open`、`RTCPeerConnection`、嵌套 frame/object/embed。
-- **SDK**：`me()`、`schema(table)`、`tables()`、`listRows(options)`（支持 `filters` / `sort` / `expandRefs`）、`aggregate(options)`（服务端 group_by/agg）、`appendRow(row, options)`、`updateRow(rowId, values, options)`、`updateRows(rows, options)`、`deleteRow(rowId, options)`、`generate(prompt, options)`、`launchGame(gameId)`、`composeMessage(text)`、`openExternal(url)`、`asset(name)`、`onDataChange(cb)`、`events(options)` / `ackEvents(ids)`、`emitEvent(type, payload, options)`（需 `events.emit` + owner 声明的 Webhook）、`service(name).call(tool, args)` / `.callDetailed(tool, args)`（返回 `value` / `cached` / `expires_at`） / `.image(url)`（需 `external.fetch`）。
+- **单文件 HTML**：CSS/JS 全内联；禁止远程脚本、样式、图片、字体、媒体、`fetch()`、`WebSocket`、`EventSource`、`sendBeacon`、外链 `<a>`、`meta refresh`、`location` 导航、`window.open`、`RTCPeerConnection`、嵌套 frame/object/embed。完整契约（写入校验、双层沙箱、生效 CSP、最小骨架、排查表）见 §2.14。
+- **SDK**：23 个顶层方法——`me()`、`schema(table)`、`tables()`、`listRows(options)`（支持 `filters` / `sort` / `expandRefs`）、`aggregate(options)`（服务端 group_by/agg）、`appendRow(row, options)`、`updateRow(rowId, values, options)`、`updateRows(rows, options)`、`deleteRow(rowId, options)`、`upload(file)`（需 `asset.write`）、`generate(prompt, options)`、`runTask(options)` / `getTask(taskId)` / `cancelTask(taskId)`（需 `ai.agent_task`）、`launchGame(gameId)`、`composeMessage(text)`、`openExternal(url)`、`asset(name)`、`onDataChange(cb)`、`events(options)` / `ackEvents(ids)`、`emitEvent(type, payload, options)`（需 `events.emit` + owner 声明的 Webhook）。
+- **`service(name)` 子 API（8 个）**：`.call(tool, args)` / `.callDetailed(tool, args)`（返回 `value` / `cached` / `expires_at`，需 `external.fetch`）、`.image(url)`（需 `external.fetch`）、`.invoke(tool, args, {idempotencyKey, confirmationToken})`（需 `external.write`）、`.operation(opId)`、`.resolveOperation(opId, status, {result, errorMessage})`、`.upload(file, {purpose})`（4 MB 分片会话，宿主流式转扩展）、`.mediaUrl(assetId)`（换 30 分钟短时同源媒体 URL）。
 - **写行**：`updateRow` / `updateRows` / `deleteRow` 走 `PATCH|DELETE /api/apps/{id}/rows/{row_id}`，支持 `expectedVersion` 做 CAS；状态机规则在更新时校验；`row_scope=user` 的表只能改自己创建的行。`updateRows` 逐行提交，返回 `{updated, failed, failures}`，单行失败不影响其它行。
 - **能力清单**：`light_apps.capabilities_json`；旧应用空值 = R1 全开（后续新增能力不自动继承）；新应用默认安全集；显式 `[]` = 页面不能做任何操作。
 - **宿主页面**：
@@ -184,12 +192,14 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 ### 2.5 发布与公开链接
 
 - **默认关闭**：只有显式创建/分享才产生公开链接。
-- **token**：32 字节随机值，DB 存 SHA-256；明文在 `secrets` 表保留一份，用于 `app_share_link` 复用同一链接；`rotate=true` 才轮换。
+- **token**：32 字节随机值，DB 存 SHA-256；明文在 `secrets` 表保留一份，用于 `app_share_link` 复用同一链接；`rotate=true` 才轮换。owner/admin 重新打开「只读公开链接」弹窗时，`GET /api/apps/{id}/publication` 返回当前 URL 供展示和复制；view 协作者只拿到状态，不返回链接。
 - **发布快照**：发布时冻结当前 HTML + 公开表结构（表清单、列定义、标签、`public_visible`）；数据行仍实时读。
 - **公开表**：主表默认公开，附加表默认私有；隐藏表立即从公开面消失，即使已发布。
 - **行级公开**：`published` row scope 已取消，`public_visible` 是唯一的公开表开关；`row_scope=user` 的表永不公开。只公开部分行时，建独立公开表/投影（内部表保持 `public_visible=false`），由审核动作、事件或调度同步；页面侧过滤不构成访问控制。
 - **PII**：公开读取 `redact_pii=True`；快照列按 **快照 PII ∪ 实时 PII** 脱敏。新增 PII 标记立即生效，解除 PII 标记需重新发布。
-- **路由**：`GET /api/public/apps/{token}`、`GET /api/public/apps/{token}/rows`、`GET /api/public/apps/{token}/assets/{name}`、`POST /api/public/apps/{token}/services/{name}/call`（只读缓存）、`GET /p/{token}`；JWT 豁免，`Cache-Control: no-store`，按 token+IP 限流。
+- **路由**：`GET /api/public/apps/{token}`、`GET /api/public/apps/{token}/rows`、`GET /api/public/apps/{token}/assets/{name}`、`GET /api/public/apps/{token}/share.png`、`POST /api/public/apps/{token}/services/{name}/call`（只读缓存）、`GET /p/{token}`；JWT 豁免，`Cache-Control: no-store`，按 token+IP 限流。
+- **分享卡片**：`GET /p/{token}` 服务端输出 `og:title/description/image/url`、`name="description"`、`link rel="image_src"`，并在 body 顶部渲染一张声明为 300×300 的可见 `<img>` 封面（在应用名 + 简介的窄条 header 中缩略显示），供微信/其他平台抓取；`share.png` 返回 300×300 PNG，带 `Access-Control-Allow-Origin: *`。优先使用应用资产 `share.*` / `cover.*` / `preview.*`（PNG/JPEG/WebP/GIF 完整缩放并居中留边为 300×300 PNG），否则生成默认品牌卡。若应用提供 `icon.png` / `icon.jpg` / `icon.jpeg` / `icon.webp`，40px header 直接用它作为 `<img>`，OG 仍用 `share.png`；header 内保留 300×300 布局盒并用 CSS 缩到 40px，`<noscript>` 再放一张 300×300 `share.png` 作为不执行 JS 抓取器的兜底。大小图标建议分开设计，小图标避免细字。缩略图要求 `public_base_url` 是对外可达的 HTTPS 地址；局域网/localhost 微信抓不到。
+- **微信注意事项**：微信聊天里的转发卡片由服务端抓取页面；iframe 内的内容不会被抓取，所以缩略图必须来自宿主页的可见 `<img>` 或 OG 元数据。微信对无 JS-SDK 页面的首图/OG 解析并不稳定，实践上同时提供两者；右上角“分享给朋友”若需完全自定义标题/图片，仍需公众号 JS-SDK（当前未接入）。微信会缓存卡片，更新封面后可等待缓存过期或换带版本参数的链接（例如 `/p/{token}?v=2`）。
 - **撤销/过期**：`revoked_at` 或 `expires_at` 命中后 404。
 - **审计**：创建/撤销/公开访问写 `audit_log`。
 - **不支持**：公开写入、公开事件、公开看板分享。
@@ -261,6 +271,7 @@ orders            public_visible=false   全量内部数据
 - **豆瓣 adapter（2026-11-18）**：`douban` gateway connector 提供 `search_books` / `get_book` / `get_cover`；读书记录工作台声明 `douban` 服务即可查询，封面走 `serviceImage`，服务未填 URL 前缀时自动带 `img*.doubanio.com` 白名单。
 - **模板服务声明**：模板目录下的 `services.json` 会由 `create_from_template` 自动声明；`connector_kind` 为空凭据 gateway connector 时按 owner 复用/自动创建实例（`reading-tracker` 已内置 `douban`）。页面仍需 owner 在应用详情页开启 `external.fetch`。
 - **尚未做**：builtin→external 的 promote 切换。
+- **写侧**：`provider=extension` 的 HTTP 扩展（写工具、幂等、分片上传、媒体代理）见 §2.13。
 
 #### 事件收件箱（R2.2 第一版）
 
@@ -416,6 +427,162 @@ owner/admin 可以让 Agent 使用两组工具：
 | 键盘覆盖 | 仅空间切换、命令面板、任务控制；无关闭/最小化/切窗快捷键 | ⛔ 低-中 |
 | 通知偏好 | 通知中心有，但无「哪些应用可弹」的开关 | ⛔ 低 |
 
+### 2.13 外部写服务与扩展（V1-B / V2 平台地基）
+
+MiniApp 从「只读消费外部系统」走到「以声明式契约调用外部系统写接口」，为后续 Bundle v2、事件出站与第三方扩展打底。落地于 schema **v52**（commit `912e367d`），详细实施见 [视频审片工作台实施计划](./video-workbench-implementation-plan.md)。
+
+**声明模型（`light_app_services`）**：
+
+- `provider` 三选一：`connector`（只读连接器工具）、`external`（既有外部服务）、`extension`（HTTP 扩展，V1-B 新增）。
+- `mode` = `read` / `write`；`extension` 专属字段有 `base_url`、`extension_id`、`secret_ref`、`read_tools_json`、`write_tools_json`、`timeout_seconds`（1–300，默认 30）、`max_request_bytes`（1 KB–1 MB，默认 64 KB）、`max_response_bytes`（1 KB–5 MB，默认 5 MB）、`idempotency_required`、`confirmation_json`、`allow_private_network`。
+- **扩展字段只允许在 `provider=extension` 时出现**；其他 provider 携带这些字段直接报错。
+- **服务 token 加密存储在 `secrets` 表**（`secret_ref` 指向），不随声明返回、不回传页面；更换 token 时旧密文被清理。
+- **`allow_private_network` 仅管理员可开**（用于同机 Compose，如 `http://video:8000`）；开启时 `base_url` 校验放宽到私有网段，默认仍禁止访问内网。
+- 声明由 **Dashboard「服务」面板**配置（管理员填 `base_url` / token / 读写工具白名单）；Agent 工具 `app_add_service` 仍只能声明只读连接器服务，不能创建扩展写服务。
+
+**写调用（`invoke`）**：
+
+- 页面 `octopApp.service(name).invoke(tool, args, {idempotencyKey, confirmationToken})` → `POST /api/apps/{id}/services/{name}/invoke`，需 `external.write` 能力位。
+- **幂等账本**：`light_app_service_operations` 是薄账本（**不是任务运行时**：没有租约、没有执行循环），唯一索引 `(service_id, tool, actor_user_id, idempotency_key)`；同 key 同参数重放返回同一 `op_id`，**同 key 不同参数返回 409**。
+- **两阶段确认**：声明里标记为高风险的写工具（`confirmation` 映射到 `app_owner` / `run_owner` / `admin` 角色），先返回确认令牌，页面带 `confirmationToken` 二次调用才真正执行；令牌只存哈希，带独立有效期，且只有对应角色的用户能通过确认。
+- **`submission_unknown`**：提交后扩展侧结果未知（超时/断连）时操作停在 `submission_unknown` 状态，由 `POST /api/apps/{id}/services/{name}/operations/{op_id}/resolve` 人工或页面侧对账（`resolveOperation`）。
+
+**媒体与上传**：
+
+- **分片上传**：页面 `service(name).upload(file, {purpose})` 走「开始会话 → 逐块 PUT → 完成」三段式，单块 4 MB，上限 50 MB；分片临时落 `{tempdir}/octop-service-uploads/{upload_id}/`，宿主流式转给扩展，不整文件进内存。
+- **媒体代理**：`POST .../media-token` 换 30 分钟短时同源 URL，`GET`/`HEAD .../media/{asset_id}` 代理扩展的媒体流，保留 `Range` / `206` / `Content-Range`；该路径 **JWT 豁免**（凭短时 token，`src/octop/api/deps.py` 的媒体正则），避免把平台 JWT 交给页面。
+- **动态 CSP**：`media_paths` 声明的同源 media 前缀才会被 `media-src` 放行；未声明的媒体路径被 CSP 拦截。
+
+**参考实现**：`video-workbench` 系统模板（创建任务 → 上传 → 审片 → 播放/下载），刻意**不做系统列投影**——审片结论由扩展侧权威返回，不在 MiniApp 表里复制一份状态。
+
+**不做**：外部服务之间的事务/补偿、跨服务的分布式幂等、扩展侧沙箱；`external.write` 尚未开放给 Agent 工具，只能由页面在 owner 授权后调用。
+
+### 2.14 MiniApp HTML 文件契约
+
+MiniApp 的界面就是**一个文件**：`apps/<app_id>/app.html`。它由模型生成、按不可信代码处理，是整个平台里约束最紧的产物。本节是这份文件的完整契约；面向 Agent 的写作手册见 `src/octop/infra/agents/experts/library/light-apps/AGENTS.md`（第 2 步 + 沙箱红线）。
+
+#### 形态与配额
+
+| 项 | 规则 | 位置 |
+|---|---|---|
+| 位置 | owning Agent 工作区下的 `apps/<app_id>/app.html` | `service.py:242`（`APPS_DIR` / `FILE_HTML`） |
+| 大小 | UTF-8 编码后 ≤ **512 KB**（`MAX_HTML_BYTES`） | `models.py:42` |
+| 编码 | 必须 UTF-8，不能含 NUL 字节 | `validate_html` |
+| 结构 | 必须至少含一个标签；`<html>` / `<head>` / `<body>` 缺失时由宿主补齐 | `sandbox.py:205` |
+| 资源 | CSS / JS / 图片 / 字体全部**内联**；图片只能用 `data:` / `blob:` URL | 见下方校验规则 |
+| 配套文件 | `assets/`（图片素材）、`preview.svg`（封面）、`manifest.json` / `schema.json`（只读镜像） | §3.4 |
+
+页面**不持有凭证**：iframe 是 opaque origin，看不到 Dashboard 的 JWT；所有读写都要经宿主桥代调。
+
+#### 写入路径与回滚
+
+```
+Agent 调 app_write_html(html)            权限 edit_structure
+  → service.write_html()
+  → validate_html(html)                   写前扫描（见下）；不通过直接拒绝，不落盘
+  → 旧版 HTML 存入 light_apps.previous_html（previous_html_at 记时间）
+  → 写 apps/<app_id>/app.html
+  → 应用详情页「恢复上一版」= POST /api/apps/{id}/restore-html
+```
+
+- **回滚只回滚 HTML**，不动表与行。
+- **公开链接不随写入自动更新**：已发布的快照仍是旧 HTML，需要 `POST /api/apps/{id}/publication/publish` 刷新；详情页会提示「有未发布修改」。
+- 同一应用多次写入覆盖式进行，**没有版本历史**，只有上一版。
+
+#### 写入时校验（`validate_html` → `find_external_refs`）
+
+校验在**写入时**做，不等到运行时报错。命中时错误里带 **行号 + 类别 + 具体片段**（`ExternalRef.kind` / `.url` / `.line`），并按大类给出不同的修复提示。
+
+| 类别 | 命中什么 | 为什么禁 | 替代 |
+|---|---|---|---|
+| **远程加载** | `<script src>`、`<link href>`、`<img src|srcset>`、`<video|audio|source|track src|poster>`、`<iframe|frame src>`、`<object data>`、`<embed src>`、`<a href>` | 沙箱无网络，且远程脚本/图片信标是**数据外泄通道**（页面读过行） | 内联 CSS/JS；图片 `data:` / `blob:`；链接用 `octopApp.openExternal(url)` |
+| **CSS 外链** | `@import url(...)`、CSS `url(...)` 指向 `http://` / `https://` / `//` | 同上 | 内联样式，或用 `data:` URL |
+| **嵌入上下文** | `<iframe>` `<frame>` `<portal>` `<object>` `<embed>` | 子框架有**独立 JS realm**，能绕过 WebRTC 冻结与 SDK 自检 | 在页面自身渲染；外链用 `openExternal` |
+| **网络 API** | `fetch(`、`XMLHttpRequest`、`WebSocket(`、`EventSource(`、`sendBeacon(`、`import('http…')` | iframe 无凭证也禁止联网 | `octopApp.*` |
+| **导航逃逸** | `location.href=` / `location.assign(` / `location.replace(`、`window.location=`、`window.open(`、`RTCPeerConnection`、`webkitRTCPeerConnection`、`<meta http-equiv="refresh">` | **CSP 管不到导航**；页面带着已读到的数据逃出沙箱就会继承桥 | 页面内渲染；外链用 `openExternal` |
+| **脚本 URL** | 任何属性值以 `javascript:` 开头 | 同「逃逸」 | 改用事件回调 |
+
+只允许 `data:` / `blob:` 这类非远程 scheme；`http://`、`https://`、协议相对 `//` 一律拒。相对路径（如 `<img src="assets/a.png">`）**不在这套校验里**，但运行时会被 CSP 拦掉——所以素材要走 `octopApp.asset(name)`，不要在 HTML 里直接写相对路径。
+
+#### 渲染时的双层加固
+
+写入校验只是第一层。真到运行时还有两道：
+
+```
+宿主页（Dashboard / /p/{token}）
+  └─ wrapper 文档（Octop 自己写，不可见）
+       CSP: APP_CSP + "; frame-src 'none'"
+       └─ app 文档（srcdoc，opaque origin）
+            <meta http-equiv="Content-Security-Policy" content="APP_CSP">
+            <script>WEBRTC_FREEZE</script>   ← 插在第一个 app script 之前
+            <script>window.octopApp = {...}</script>
+            <style>APP_HOST_STYLE</style>
+            ...app 自己的内容
+```
+
+1. **wrapper 是真正的边界**。子框架的导航按**嵌入方**的 `frame-src` 判定，wrapper 声明 `frame-src 'none'`，浏览器直接拒绝逃逸；wrapper 还负责双向转发消息（宿主页够不到 opaque-origin 帧）。
+2. **`load` 事件是探针**：第一次是 srcdoc 自身，之后任何一次 `load` 都意味着导航逃逸——wrapper 移除内层 frame 并向宿主发 `escaped`。
+3. **WebRTC 冻结**：`WEBRTC_FREEZE` 在任何 app 脚本之前执行，把 `RTCPeerConnection` 等全局锁成 `undefined`（不可配置），封堵 `HTMLIFrameElement` / `Worker` / `open` 等构造器，并用 MutationObserver 兜底删除后插入的 frame 元素。SDK 每次桥请求前还会自检这些不变量。
+4. **旧应用兜底**：早于写入时规则的旧应用若静态含 frame，渲染时直接返回安全错误页（不执行任何脚本），提示需要重写。
+
+#### 生效的 CSP
+
+```
+default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';
+img-src data: blob:; font-src data:; media-src data: blob:;
+connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'
+```
+
+- **不要在 app 文档里显式写 `frame-src 'none'`**：Chrome 会因此拒绝创建它自己的 srcdoc frame，表现为整页空白。`default-src 'none'` 已经隐含禁止嵌套 frame，显式禁令由 wrapper 承担。
+- **动态放行 `media_paths`（V1-B）**：`dashboard/src/components/MiniAppFrame/appCsp.ts` 的 `buildAppCsp(mediaPaths)` 会把声明的同源路径前缀追加进 `img-src` / `media-src`。因为 iframe 是 opaque origin，`'self'` 永远不匹配，所以每条前缀必须写成**完整 origin + path**；格式不合法的（不以 `/` 开头结尾、含 `..`、`;` 或空白）直接丢弃而不是放宽策略。
+- **前后端两套实现必须一致**：Dashboard 走 `dashboard/src/components/MiniAppFrame/sdk.ts` 的 `buildSrcDoc`，公开链接走 `src/octop/infra/apps/sandbox.py` 的 `build_app_doc` / `build_wrapper_doc`。两者注入的 CSP、冻结脚本、SDK 顺序一致。
+
+#### 页面能做什么
+
+- **23 个顶层 SDK 方法 + `service(name)` 的 8 个子方法**（完整清单见 §2.3）；每个方法都对应宿主桥上的一个方法名，桥按能力位放行。
+- **数据一律走 `listRows()` / `aggregate()`**，不要把行值写死在 HTML 里——写死的数据不会随表更新，也会让公开快照失效。
+- **写操作要带 `row_id` 与 `expectedVersion`**：`listRows()` 返回的 `row_meta` 里有 `row_id` 与 `version`，`updateRow` / `deleteRow` 用它做 CAS。
+- **样式建议**：Dashboard 宿主会额外注入 `APP_HOST_STYLE`（透明滚动条 + `overscroll-behavior: none`），页面自己给 `body` 设背景色即可避免深色桌面里的白边。
+
+#### 最小可用骨架
+
+```html
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本周待办</title>
+<style>/* 全部内联 */</style>
+</head>
+<body>
+<h1>本周待办</h1>
+<ul id="list"></ul>
+<script>
+// 宿主会注入 window.octopApp；这里只写业务逻辑。
+(async function () {
+  const res = await octopApp.listRows({ table: "main", limit: 100 });
+  const rows = res.rows || [];
+  document.getElementById("list").innerHTML = rows
+    .map((r) => `<li>${r.values.title || ""}</li>`)
+    .join("");
+})();
+</script>
+</body>
+</html>
+```
+
+#### 排查
+
+| 症状 | 原因 | 处理 |
+|---|---|---|
+| `app_write_html` 被拒，错误带「line N」 | 命中写入时扫描 | 按提示把 CSS/JS 内联、图片换 `data:`/`blob:`、链接换 `openExternal` |
+| 页面整页空白 | app 文档显式写了 `frame-src 'none'` | 删掉这条，让 wrapper 承担导航禁令 |
+| 页面显示「embeds a frame and cannot be displayed」 | 旧应用静态含 frame 标签 | 让 Agent 重写页面 |
+| 图片/视频不显示 | 用了远程 URL 或未声明 `media_paths` | 素材走 `octopApp.asset(name)`；扩展媒体走 `mediaUrl` |
+| `octopApp` 未定义 | 页面在 wrapper 之外或 SDK 未注入 | 页面必须由宿主渲染；不要自己建 iframe |
+| 数据不刷新 | 页面把行值写死 | 改用 `listRows()` 并订阅 `onDataChange` |
+
 ---
 
 ## 3. 架构
@@ -442,9 +609,15 @@ owner/admin 可以让 Agent 使用两组工具：
         light_apps / light_app_tables / light_app_rows
         light_app_collaborators / light_app_assistant_messages
         light_app_sources / light_app_schedules / light_app_services
+        light_app_service_operations / light_app_tasks
         light_app_publications / light_app_events / light_app_webhooks
         light_app_ingress / app_setup_plans / app_access_codes
+        app_member_invites / app_join_codes / app_sessions
         miniapp_boards / notifications
+
+  Extension (V1-B):
+  App iframe ── service().invoke ──► AppService ──HTTP──► extension base_url
+                ▲ media proxy ─────┘ (Range/206, 30min token, JWT-exempt)
 
   Browser:
   Dashboard host ── postMessage bridge ── wrapper iframe (fixed doc)
@@ -482,15 +655,28 @@ owner/admin 可以让 Agent 使用两组工具：
 | `infra/apps/templates.py` | 系统模板注册表 + Agent 模板信息 |
 | `infra/apps/preview.py` | 封面 SVG 校验 |
 | `infra/apps/sources.py` | 连接器只读工具调用 |
+| `infra/apps/upload_sessions.py` | 扩展服务分片上传会话（临时落盘、4 MB 分片） |
+| `infra/apps/tasks.py` / `task_runner.py` / `task_types.py` | AI 任务：创建与授权、后台执行器（单车道 + 租约）、任务类型注册表 |
+| `infra/apps/members.py` | 成员、邀请、加入码、guest 生命周期 |
+| `infra/apps/access.py` | 授权内核（`Action` / `Decision` / `authorize()`） |
+| `infra/apps/host_policy.py` | Agent 级外部参与策略 |
+| `infra/apps/im_guard.py` | IM 侧 MiniApp 工具闸门（sender ≠ owner） |
 | `infra/apps/scheduler.py` | 应用级调度循环（DB 租约 + 心跳；`sync_source` / `snapshot_publication`） |
 | `infra/apps/boards.py` | 个人看板布局与 CAS |
 | `infra/apps/game_sessions.py` | 游戏 token 签发/校验 |
 | `infra/apps/session.py` | 从对话 transcript 提取 app_card id |
 | `infra/apps/prompt.py` | 向 Agent 系统提示注入 MiniApp 规则 |
 | `infra/db/repos/apps.py` | 应用/表/行/协作者/助手历史/数据源/发布 SQL |
+| `infra/db/repos/app_services.py` / `app_service_operations.py` | 外部服务声明与缓存 / 扩展写调用幂等账本 |
+| `infra/db/repos/app_tasks.py` | AI 任务状态机 SQL |
 | `infra/db/repos/boards.py` | 看板 SQL |
-| `api/routers/apps.py` | 应用 HTTP 面（约 86 个路由） |
-| `api/routers/public_apps.py` | 公开只读 API + `/p/{token}` 宿主页 |
+| `api/routers/apps.py` | 应用 HTTP 面（108 个路由） |
+| `api/routers/public_apps.py` | 公开只读 API + `/p/{token}` 宿主页 + `share.png` |
+| `api/routers/app_route_actions.py` | 路由 → 授权 action 注册表（未注册的新路由会被测试打挂） |
+| `api/routers/app_members.py` | 成员 / 邀请 / 加入码 / guest 成员 |
+| `api/routers/guest.py` | guest 门户会话与账号 |
+| `api/routers/app_host_policy.py` | Agent 外部参与策略 |
+| `api/routers/app_link_codes.py` | `/link` 握手码 |
 | `api/routers/boards.py` | 看板 CRUD / 布局 |
 | `api/routers/game_sessions.py` | 游戏结果写入 |
 | `api/routers/app_access.py` | 应用访问申请 |
@@ -512,7 +698,8 @@ owner/admin 可以让 Agent 使用两组工具：
 | `miniapp_boards` | 个人看板 | `board_id`、`owner_user_id`、`layout_json`、`version` |
 | `app_access_requests` | 访问申请 | `request_id`、`app_id`、`agent_id`、`requester_user_id`、`app_owner_user_id`、`agent_owner_user_id`、`needed`、`status`；同一 requester/target 仅一条 `pending` |
 | `light_app_bindings` | 服务绑定 | `binding_id`、`app_id`、`provider`、`service_id`、`config_json`、`enabled`、`version` |
-| `light_app_services` | 外部服务声明 | `service_id`、`app_id`、`name`、`provider`、`connector_instance_id`、工具白名单、URL 前缀、TTL、每分钟上限 |
+| `light_app_services` | 外部服务声明 | `service_id`、`app_id`、`name`、`provider`、`connector_instance_id`、工具白名单、URL 前缀、TTL、每分钟上限；v52 追加 `mode`、`base_url`、`extension_id`、`secret_ref`、`read_tools_json`、`write_tools_json`、`timeout_seconds`、`max_request_bytes`、`max_response_bytes`、`idempotency_required`、`confirmation_json`、`allow_private_network` |
+| `light_app_service_operations` | 扩展写调用幂等账本（薄账本，非任务运行时） | `op_id`、`service_id`、`app_id`、`tool`、`args_hash`、`idempotency_key`、`status`、`confirmation_token_hash`、`confirmation_expires_at`、`result_json`、`error_code`、`error_message`、`actor_user_id`、`expires_at`；唯一索引 `(service_id, tool, actor_user_id, idempotency_key)`（key 非空时） |
 | `light_app_service_cache` | 服务结果缓存 | `service_id`、`tool`、`args_hash`、`response_json`、`expires_at` |
 | `light_app_events` | 事件收件箱 | `event_id`、`app_id`、`event_type`、`source`、`summary`、`payload_json`、`acknowledged_at` |
 | `light_app_webhooks` | 出站 Webhook | `webhook_id`、`app_id`、`name`、`url`、`event_types_json`、`source_id`、`subscription_id`、`secret_blob`、`enabled` |
@@ -522,8 +709,10 @@ owner/admin 可以让 Agent 使用两组工具：
 | `channel_identities` | IM 身份绑定 | `channel_type`、`account_key`、`sender_id`、`user_id`、`verified_at`；唯一 `(channel_type, account_key, sender_id)`；旧行 `account_key=''` 继续兜底 |
 | `channel_link_codes` | WebView → IM 的 `/link` 握手码 | `code_hash`、`user_id`、`app_id`、`expires_at`、`consumed_at` |
 | `channel_bind_codes` | IM 绑定码 | `code_hash`、`user_id`、`expires_at`、`consumed_at` |
-| `notifications` | 用户通知收件箱 | `notification_id`、`user_id`、`kind`、`title`、`body`、`path`、`read_at`、`dedupe_key` |
+| `notifications` | 用户通知收件箱 | `notification_id`、`user_id`、`kind`、`title`、`body`、`path`、`read_at`、`dedupe_key`；MiniApp AI 任务用 `kind='app_task'` |
+| `usage_log` | 用量归因 | v51 追加 `app_id`、`task_id`；MiniApp 助手/生成/任务按应用归属 owner 额度 |
 | `light_app_row_history` | 行级变更历史 | `app_id`、`table_key`、`row_id`、`version`、`action`、`before_json`、`after_json`、`actor`、`source`、`changed_at` |
+| `light_app_tasks` | AI 任务状态机 | `task_id`、`app_id`、`table_key`、`row_id`、`task_type`、`status`、`input_json`、`result_json`、`actor_user_id`、`agent_id`、`model_ref`、`thread_id`、`idempotency_key`、`attempts`、`cancel_requested`、`lease_until` |
 | `light_app_tables.row_scope` | 行级范围 | `app`（协作者共享）或 `user`（普通用户只看自己创建的行） |
 | `light_app_tables.member_visible` | 成员可见性 | 已约束 `participate` 可读表；默认 0，owner 在成员页逐表开启 |
 | `light_app_tables.rules_json` | 表规则 | v1 状态机：`state_field` + `transitions`；可选 `triggers.on_create/on_update`（写收件箱） |
@@ -531,24 +720,30 @@ owner/admin 可以让 Agent 使用两组工具：
 | `users.kind` | 主体类型 | `member` / `guest` 已参与登录、Principal 解析与运行时授权 |
 | `goal_deliverables` | 团队交付物 | `artifact_type` 支持 `app`，`artifact_ref=app_id` |
 
-迁移编号：025（应用/协作者/多表/助手/数据源）→ 026（交付物）→ 027（外部事件）→ 028（行入库）→ 029（公开链接）→ 030（表可见性/能力清单/HTML 回滚/看板）→ 031（访问申请）→ 032（服务绑定）→ 033（行级范围）→ 034（表规则）→ 035（访问申请双 owner / pending 唯一索引）→ 036（外部服务声明/缓存）→ 037（应用事件收件箱）→ 038（应用级调度）→ 039（通知收件箱）→ 040（行级变更历史）→ 041（事件幂等作用域 / delivery 结果）→ 042（出站 Webhook）→ 043（app-owned 入站入口）→ 044（服务请求头）→ 045（setup plans / channel identity / app access codes）→ 046（MiniApp identity primitives）→ 047（collaborator status / invites / join codes / app_sessions / host policy）→ 048（IM identity v2 / access-code sender fields / channel link codes）。当前 `_schema_version = 48`，`tests/unit/db/test_db_pool.py` 断言为 48。
+迁移编号：025（应用/协作者/多表/助手/数据源）→ 026（交付物）→ 027（外部事件）→ 028（行入库）→ 029（公开链接）→ 030（表可见性/能力清单/HTML 回滚/看板）→ 031（访问申请）→ 032（服务绑定）→ 033（行级范围）→ 034（表规则）→ 035（访问申请双 owner / pending 唯一索引）→ 036（外部服务声明/缓存）→ 037（应用事件收件箱）→ 038（应用级调度）→ 039（通知收件箱）→ 040（行级变更历史）→ 041（事件幂等作用域 / delivery 结果）→ 042（出站 Webhook）→ 043（app-owned 入站入口）→ 044（服务请求头）→ 045（setup plans / channel identity / app access codes）→ 046（MiniApp identity primitives）→ 047（collaborator status / invites / join codes / app_sessions / host policy）→ 048（IM identity v2 / access-code sender fields / channel link codes）→ 049（调度加固：去重 + `snapshot_publication` 唯一索引）→ 050（AI 任务表）→ 051（用量归因 `app_id`/`task_id`）→ 052（外部写服务 + 幂等账本）。当前 `_schema_version = 52`，`tests/unit/db/test_db_pool.py` 断言为 52。
+
+每条迁移除 SQL 文件（`.sql` / `.pg.sql` 成对）外，都有 `src/octop/infra/db/migrate.py` 里的幂等修复辅助函数（如 `_ensure_light_app_external_write_schema`），启动时对「记录版本跳过了文件」的库自愈；两份实现必须保持等价。
 
 ### 3.4 存储布局
 
-每个应用在 owning Agent 工作区下：
+每个应用在 owning Agent 工作区下（工作区根 = `{OCTOP_HOME}/agents/{agent_id}/`，也可落在作用域 `root_dir` 后端的 `{root_dir}/.octop/workspaces/{agent_id}/`）：
 
 ```
 apps/<app_id>/
-  app.html            # 唯一必写产物，Agent 生成的完整页面
-  preview.svg         # Agent 画的封面（app_set_preview）
-  manifest.json       # 只读镜像：app 元数据 + 表清单（不含行数）
-  schema.json         # 主表 schema 镜像（历史兼容）
-  tables/<key>/
-    schema.json
-  assets/<name>       # PNG/JPEG/WebP/GIF，≤5MB
+  app.html                  # 唯一必写产物，Agent 生成的完整页面
+  preview.svg               # Agent 画的封面（app_set_preview）
+  manifest.json             # 只读镜像：app 元数据 + 表清单（不含行数）
+  schema.json               # 主表 schema 镜像（历史兼容）
+  tables/<key>.schema.json  # 附加表 schema（当前写入路径为平铺形式）
+  data.csv                  # 仅 storage_version=1 的旧应用
+  assets/<name>             # PNG/JPEG/WebP/GIF，≤5MB
+  .pending.json             # 写入暂存标记
+  *.new                     # 暂存写入的临时文件
 ```
 
-行数据在 DB；工作区文件是 `app.html`、`assets/`、`preview.svg` 和 schema/manifest 镜像。v2 应用不再写空的 `data.csv`；只有 `storage_version=1` 的旧应用还保留 CSV，首次读写时懒迁移到 DB，迁移后的旧 CSV 不再列出（保留为回滚副本）。远程后端（COS/S3/OSS/OBS/docker）通过 `BackendWorkspace` 读写，Octop 不直接拼路径。
+行数据在 DB；工作区文件是 `app.html`、`assets/`、`preview.svg` 和 schema/manifest 镜像。v2 应用不再写空的 `data.csv`；只有 `storage_version=1` 的旧应用还保留 CSV，首次读写时懒迁移到 DB，迁移后的旧 CSV 不再列出（保留为回滚副本）。**备份/恢复归档的目录形状与工作区不同**：归档里是 `tables/<key>/schema.json` + `row_ids.json` + `data.csv`（嵌套目录）。远程后端（COS/S3/OSS/OBS/docker）通过 `BackendWorkspace` 读写，Octop 不直接拼路径。
+
+扩展服务的分片上传临时文件不进工作区：`{tempdir}/octop-service-uploads/{upload_id}/{meta.json,part.bin}`（`src/octop/infra/apps/upload_sessions.py`），单实例、临时落盘。
 
 ### 3.5 关键链路
 
@@ -632,6 +827,24 @@ octopApp.launchGame(game_id)
   → postMessage session-finished → MiniApp 重新加载
 ```
 
+**G. 扩展写调用（V1-B）**
+
+```
+octopApp.service(name).invoke(tool, args, {idempotencyKey})
+  → POST /api/apps/{id}/services/{name}/invoke
+  → require_capability(external.write) + 服务 ACL
+  → 幂等账本 light_app_service_operations:
+       唯一 (service_id, tool, actor_user_id, idempotency_key)
+       同 key 同参数 → 返回既有 op_id（不重复写）
+       同 key 不同参数 → 409
+  → 高风险工具：先返回 confirmation_token，页面带 token 二次调用才执行
+  → HTTP 调 extension base_url（超时 / 请求体 / 响应体上限由声明约束）
+  → 成功写 result_json；结果未知写 status=submission_unknown
+  → 页面用 .operation(opId) 轮询，或 .resolveOperation() 对账
+```
+
+媒体与上传走另一条链路：`service(name).upload(file)` 走「开始会话 → 分片 PUT → 完成」，分片临时落盘后由宿主流式转扩展；`service(name).mediaUrl(assetId)` 换 30 分钟短时 token，`GET .../media/{asset_id}` 代理扩展媒体并透传 `Range` / `206`（该路径 JWT 豁免）。
+
 ### 3.6 权限模型
 
 MiniApp 有两套正交的权限：
@@ -644,8 +857,8 @@ MiniApp 有两套正交的权限：
 执行点：
 
 - 页面方法：`bridge.ts` 的 `checkMethodAllowed`；未知方法默认拒绝。
-- 昂贵/外部副作用端点：服务端 `require_capability`（`generate`、`game-sessions`、`services/{name}/call`、`events/emit`）。
-- Agent 工具：`app_create` / `app_set_capabilities` 只能设置低风险能力；`ai.generate`、`game.launch`、`external.fetch`、`events.emit`、`schedules.manage` 由 Owner 在应用详情页开启。
+- 昂贵/外部副作用端点：服务端 `require_capability`（`generate`、`game-sessions`、`services/{name}/call`、`services/{name}/invoke`、`events/emit`）。
+- Agent 工具：`app_create` / `app_set_capabilities` 只能设置低风险能力（`data.*` / `asset.read` / `external.open` / `chat.compose` / `events.read`）；`ai.generate`、`ai.agent_task`、`game.launch`、`external.fetch`、`external.write`、`events.emit`、`schedules.manage` 由 Owner 在应用详情页开启。
 - 数据端点（`/rows`、`/assets`）：以用户 ACL 为准，能力位只约束页面代码，不约束用户本人。
 - 公开面：token 即凭证；只读；不接受 JWT。
 - 管理员在 HTTP 路由与 `app_*` Agent 工具中均按 `edit_structure` 放行；在他人 Agent/应用上的写操作写入 `miniapp.admin_override` 审计，桌面会话顶部显示「管理员代理操作」横幅。
@@ -665,8 +878,10 @@ MiniApp 有两套正交的权限：
 | `chat.compose` | `composeMessage` | 开 | ✅ |
 | `events.read` | `events` / `ackEvents`（R2.2） | 开 | ✅ 收件箱游标 + ack |
 | `ai.generate` | `generate` | 关 | ✅ |
+| `ai.agent_task` | `runTask` / `getTask` / `cancelTask` | 关 | ✅ AI 任务（需 owner 开启；新建应用默认关闭） |
 | `game.launch` | `launchGame` | 关 | ✅ |
 | `external.fetch` | `service` / `serviceImage` | 关 | ✅ 只读连接器工具 + URL 前缀 + 缓存 |
+| `external.write` | `serviceInvoke` / `serviceOperation` / `serviceResolveOperation` / `serviceUpload*` / `serviceMediaToken` | 关 | ✅ 扩展写服务（v52）：幂等账本 + 两阶段确认 + 分片上传 + 媒体代理 |
 | `events.emit` | `emitEvent` | 关 | ✅ 出站 Webhook（v42，至少一次 + HMAC 签名） |
 | `schedules.manage` | — | 关 | ⛔ 预留；应用级调度目前由 Dashboard/API 管理，未开放给页面 SDK |
 
@@ -703,7 +918,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 
 - **行追加**：DB 事务内单行 INSERT + 计数更新；进程内 `asyncio.Lock` 仍包住同一应用的行操作，跨进程依靠 DB 事务、唯一索引和 CAS。
 - **行修改/删除**：`row_id + version` CAS；冲突 409 `APP_CONFLICT`。
-- **幂等**：`client_request_id`；数据源 `(source_id, source_key)`；游戏 `session_id:op:row`。
+- **幂等**：`client_request_id`；数据源 `(source_id, source_key)`；游戏 `session_id:op:row`；扩展写调用 `(service_id, tool, actor_user_id, idempotency_key)`（唯一索引，同 key 不同参数 409）。
 - **多实例**：插入/更新/CAS 正确；但限额检查（如 `count >= MAX_ROWS`）仍是 check-then-insert，且限流/锁是进程内，不是全局。
 - **懒迁移**：进程内锁 + `storage_version` 条件更新；其他进程完成后重读 DB。
 
@@ -733,7 +948,12 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | `.../bridge.ts` | 共享桥 + 能力检查 + 违规上报 |
 | `.../sdk.ts` | `window.octopApp` SDK + WebRTC 冻结 + `buildSrcDoc` |
 | `.../capabilities.ts` | 前端能力目录与方法映射 |
+| `.../CapabilityPicker.tsx` | 能力清单勾选（`external.write` 等高风险位） |
+| `.../appCsp.ts` | 页面 CSP 计算（`media_paths` 动态放行） |
 | `.../GameFrame.tsx` | 外部游戏侧栏宿主 |
+| `dashboard/src/pages/Apps/detail/ServicesSection.tsx` | 「服务」面板：外部服务声明 + 扩展服务配置（base_url / token / 读写工具） |
+| `dashboard/src/pages/Apps/detail/AppPublishModal.tsx` | 公开链接弹窗：显示并复制当前链接、公开范围预览 |
+| `dashboard/src/pages/Apps/detail/AppTasksPanel.tsx` | AI 任务面板（列表 / 取消 / `submission_unknown` 对账） |
 | `dashboard/src/pages/Chat/components/ChatDockSessionApps.tsx` | 对话内 MiniApp 列表/打开 |
 | `dashboard/src/plugins/toolRenderers/builtin/AppCard.tsx` | 对话 app_card |
 | `dashboard/src/plugins/toolRenderers/builtin/AppInspectCard.tsx` | Excel 检查确认卡 |
@@ -749,7 +969,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 |---|---|---|---|
 | 创建 | Agent 工具创建 | ✅ | `app_create` + `app_write_html` |
 | 创建 | Excel 快速模式 | ✅ | 确定性渲染，不打 LLM |
-| 创建 | 系统模板 | ✅ | 6 个：客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核 |
+| 创建 | 系统模板 | ✅ | 7 个：客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片（`video-workbench`） |
 | 创建 | 专家模板 | ✅ | `app_templates/<id>/`，随专家发布/安装 |
 | 创建 | 云端市场 | ⛔ | 前端占位 |
 | 数据 | 多表 | ✅ | 最多 12 张 |
@@ -762,9 +982,11 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 数据 | 引用列 | ✅ | `reference` + 写入校验 + 删除/replace 守卫 + `expand_refs` label |
 | 数据 | 工作区文件数据源 | ✅ | 手动/定时 |
 | 数据 | 只读连接器数据源 | ✅ | 外部 MCP 工具 + 游标 + 退避 |
-| 数据 | 外部服务 `light_app_services` | 🟡 | 声明/CRUD/只读调用/TTL 缓存/图片资产/公开缓存调用/Agent 工具已实现；promote 待做 |
-| 界面 | 单文件 HTML + SDK | ✅ | 19 个顶层方法（含 `aggregate` / `updateRow` / `updateRows` / `deleteRow` / `onDataChange` / `events` / `emitEvent` / `service`；`service` 含 `call` / `callDetailed` / `image`） |
-| 界面 | 能力清单 | ✅ | 10 执行 + 1 预留（`schedules.manage`） |
+| 数据 | 外部服务 `light_app_services`（只读） | ✅ | 声明/CRUD/只读调用/TTL 缓存/图片资产/公开缓存调用/Agent 工具已实现；builtin→external promote 待做 |
+| 数据 | 外部写服务 `provider=extension`（V1-B） | ✅ | schema v52：读写工具契约、幂等账本、两阶段确认、`submission_unknown` 对账、分片上传、媒体 Range 代理、动态 CSP |
+| 界面 | 媒体代理 / 分片上传 | ✅ | 50 MB 上限，SDK 4 MB 分片会话；`GET`/`HEAD .../media/{asset_id}` 保留 Range/206；30 分钟短时 token，路径 JWT 豁免 |
+| 界面 | 单文件 HTML + SDK | ✅ | 23 个顶层方法（含 `aggregate` / `updateRow` / `updateRows` / `deleteRow` / `upload` / `onDataChange` / `events` / `emitEvent` / `runTask` / `service`；`service` 含 8 个子方法：`call` / `callDetailed` / `image` / `invoke` / `operation` / `resolveOperation` / `upload` / `mediaUrl`） |
+| 界面 | 能力清单 | ✅ | 13 执行 + 1 预留（`schedules.manage`） |
 | 界面 | 双层沙箱 + CSP + WebRTC 冻结 | ✅ | P0/P1/WebRTC 已完成 |
 | 界面 | 违规上报 | ✅ | 登录态页面；公开页暂不上报 |
 | 协作 | 应用 ACL | ✅ | view / edit_data / edit_structure |
@@ -780,6 +1002,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | 发布 | 公开表可见性 | ✅ | 主表默认公开，附加表默认私有 |
 | 发布 | PII 脱敏 | ✅ | 列级 + 值级 |
 | 发布 | HTML 上一版回滚 | ✅ | `previous_html` |
+| 发布 | 分享卡片（OG / 首图 / `share.png`） | ✅ | `/p/{token}` 输出 OG/Twitter 元数据 + 宿主页可见首图；`share.png` 300×300；`public_base_url` 需对外可达的 HTTPS |
 | 发布 | 公开看板 | ⛔ | R2/P3 未实现 |
 | AI | 只读数据助手 | ✅ | 工具循环 + 图表 + SSE |
 | AI | 一次性文本生成 | ✅ | `ai.generate` + owner 额度 |
@@ -875,8 +1098,17 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | GET | `/apps/{id}/bindings` | 服务绑定列表（含内置数据集） |
 | PUT/DELETE | `/apps/{id}/bindings/{binding_id}` | 保存/删除服务绑定 |
 | GET | `/apps/{id}/services` | 外部服务声明列表 |
-| PUT/DELETE | `/apps/{id}/services/{name}` | 声明/删除外部服务（owner/admin） |
+| PUT/DELETE | `/apps/{id}/services/{name}` | 声明/删除外部服务（owner/admin）；`provider=extension` 时可带 `base_url` / 读写工具 / 超时 / 限额 / `allow_private_network`（admin-only） |
 | POST | `/apps/{id}/services/{name}/call` | 调用声明的只读工具（需 `external.fetch`） |
+| POST | `/apps/{id}/services/{name}/invoke` | 调用扩展写工具（需 `external.write`；幂等账本 + 两阶段确认） |
+| GET | `/apps/{id}/services/{name}/operations/{op_id}` | 读取写操作（状态 / 结果 / 错误） |
+| POST | `/apps/{id}/services/{name}/operations/{op_id}/resolve` | 对账 `submission_unknown` 操作 |
+| POST | `/apps/{id}/services/{name}/upload` | 单次上传文件到扩展服务 |
+| POST | `/apps/{id}/services/{name}/upload-sessions` | 开始分片上传会话（返回 `upload_id` / `max_chunk_bytes`） |
+| PUT | `/apps/{id}/services/{name}/upload-sessions/{upload_id}/chunks/{index}` | 追加一个分片 |
+| POST | `/apps/{id}/services/{name}/upload-sessions/{upload_id}/finish` | 完成分片上传 |
+| POST | `/apps/{id}/services/{name}/media-token` | 签发 30 分钟短时同源媒体 URL |
+| GET/HEAD | `/apps/{id}/services/{name}/media/{asset_id}` | 媒体代理，透传 Range / 206（JWT 豁免，凭短时 token） |
 | POST | `/apps/{id}/services/{name}/image` | 拉取图片并存入 assets |
 | GET | `/apps/{id}/events` | 事件收件箱（游标） |
 | POST | `/apps/{id}/events/ack` | 标记事件已处理 |
@@ -911,7 +1143,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | POST | `/apps/{id}/restore-html` | 恢复上一版 HTML |
 | DELETE | `/apps/{id}` | 删除 |
 | GET/PUT | `/apps/{id}/shares` | 协作者 |
-| GET/POST/DELETE | `/apps/{id}/publication` | 公开链接状态/创建/撤销 |
+| GET/POST/DELETE | `/apps/{id}/publication` | 公开链接状态/创建/撤销；GET 对 owner/admin 返回当前链接 URL（view 协作者只拿状态） |
 | POST | `/apps/{id}/publication/publish` | 刷新发布快照 |
 | POST | `/apps/{id}/transfer` | 交接给另一个 Agent |
 | GET | `/apps/{id}/assistant/history` | 助手历史 |
@@ -943,6 +1175,37 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | POST | `/apps/access-requests/{request_id}/approve` | 批准申请 |
 | POST | `/apps/access-requests/{request_id}/reject` | 拒绝申请 |
 
+成员、访客与外部参与（`/api/apps`、`/api/guest`）：
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET/POST | `/apps/{id}/members` | 列出/添加成员（平台成员） |
+| POST | `/apps/{id}/guests` | 添加 guest 成员 |
+| PATCH/DELETE | `/apps/{id}/members/{user_id}` | 调整成员角色与状态 / 移除 |
+| GET/POST | `/apps/{id}/invites` | 列出/创建外部邀请（可设 TTL、次数上限、需宿主审批） |
+| PATCH/DELETE | `/apps/{id}/invites/{invite_id}` | 宿主审批 / 撤销邀请 |
+| POST | `/apps/invites/preview` | 预览外部邀请（JWT 豁免） |
+| POST | `/apps/invites/redeem` | 兑换外部邀请（JWT 豁免） |
+| GET/POST | `/apps/{id}/join-codes` | 列出/创建加入码 |
+| DELETE | `/apps/{id}/join-codes/{join_code_id}` | 撤销加入码 |
+| POST | `/apps/join/preview` | 预览加入码（JWT 豁免） |
+| POST | `/apps/join/redeem` | 兑换加入码（JWT 豁免） |
+| POST | `/apps/{id}/link-code` | 生成 WebView → IM `/link` 握手码（5 分钟一次性） |
+| POST | `/apps/{id}/session` | 平台成员换取 app-scoped 会话 |
+| POST | `/guest/apps/{id}/session` | guest 会话（7 天）+ 可轮换 refresh token |
+| POST | `/guest/session/refresh` | 刷新 guest 会话（JWT 豁免） |
+| DELETE | `/guest/sessions/current` | 注销当前 guest 会话 |
+| GET | `/guest/apps` | 列出已加入的 MiniApp |
+| DELETE | `/guest/memberships/{app_id}` | 退出 MiniApp |
+| DELETE | `/guest/account` | 删除 guest 账号（禁用 + 匿名化 + 撤销全部会话） |
+
+宿主策略（`/api/agents`）：
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/agents/{agent_id}/external-sharing` | 读宿主外部参与策略（agent owner / admin 可改，app owner 可读） |
+| PATCH | `/agents/{agent_id}/external-sharing` | 改策略：是否允许外部参与、guest 上限、是否需宿主审批 |
+
 公开面（`/api/public/apps`）：
 
 | 方法 | 路径 | 作用 |
@@ -950,6 +1213,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | GET | `/public/apps/{token}` | 公开应用元数据 + HTML + 表 |
 | GET | `/public/apps/{token}/rows` | 公开行（只读、脱敏、快照列过滤） |
 | GET | `/public/apps/{token}/assets/{name}` | 公开素材 |
+| GET | `/public/apps/{token}/share.png` | 分享卡片首图（300×300 PNG，`Access-Control-Allow-Origin: *`） |
 | POST | `/public/apps/{token}/services/{name}/call` | 公开只读服务（只查缓存） |
 | GET | `/p/{token}` | 服务端渲染宿主页（JWT 豁免） |
 
@@ -962,6 +1226,8 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | PUT | `/api/boards/{board_id}/layout` | CAS 保存布局 |
 | POST | `/api/game-sessions/{token}/results` | 游戏结果写入（JWT 豁免） |
 
+路由面共约 156 条 MiniApp 相关路由：`apps.py` 108、成员/邀请/加入码 16、guest 门户 7、访问申请 4、认证链接 2、IM 绑定 3、`/link` 握手 1、宿主策略 2、看板 6、游戏 2、公开面 5 + 宿主页 1。**JWT 豁免名单集中在 `src/octop/api/deps.py`**（公开应用前缀、邀请/加入码兑换、guest refresh、游戏结果、媒体代理正则等）；公开面另有按 `sha256(token)+IP` 的限流（20 并发 / 120 次每分钟，`src/octop/infra/apps/limits.py`），其余公开响应统一 `Cache-Control: no-store`。所有 MiniApp 路由必须在 `src/octop/api/routers/app_route_actions.py` 的 `APP_ROUTE_ACTIONS` 注册 action，未注册的新路由会直接被注册表测试打挂。
+
 ### 4.4 路线图状态
 
 依据 `docs/miniapp-platform-roadmap.md`：
@@ -972,7 +1238,9 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | **R2** | 实时外部服务、事件收件箱/发送、统一调度、公开看板 | ◐ 外部服务、事件收件箱、出站 Webhook、应用级调度已落地；公开看板未做 |
 | **R3** | 迁移包 v2、IM 公开链接、owner 身份绑定 | ◐ IM 公开链接、D4-lite 与 PR-11/12 sender 身份 / `/link` 已实现；迁移包 v2 未做 |
 
-R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `events.emit` 已接入执行链路，`schedules.manage` 仍是可声明、不可执行的能力名，避免未来端点默认放行。
+R2/R3 的共同地基（能力清单）已经就位：`external.fetch`、`external.write`（v52）与 `events.emit` 已接入执行链路，`schedules.manage` 仍是可声明、不可执行的能力名，避免未来端点默认放行。
+
+**V1-B 外部写服务（2026-11-23，schema v52）**：R2 的「实时外部服务」从只读升级到可写——`provider=extension` 的 HTTP 扩展声明、幂等账本、两阶段确认、`submission_unknown` 对账、分片上传、媒体 Range 代理与动态 CSP 均已落地，并以 `video-workbench` 系统模板作为参考实现。它是 V2「Bundle v2 / 第三方扩展」的地基，但**跨主机迁移包 v2 与公开看板仍未做**。
 
 **身份 v3 状态（2026-11-22）**：P0/P1 已落地并部署（PR-01~PR-10，schema v47）：`PrincipalDirectory`、`authorize()`、路由 action 注册表、行级 PII、成员 / 邀请 / 加入码、guest 会话与门户、host policy、Dashboard 成员页。P2a（`account_key` / `sender_id`、`ToolScope`、IM 数据工具收口、`/link`）已实现并部署；submission / per-sender actor 仍属 P2b/P3。
 
@@ -991,6 +1259,9 @@ R2/R3 的共同地基（能力清单）已经就位：`external.fetch` 与 `even
 | `miniapp-event-api-design.md` | 收件箱 + 出站 Webhook 已实施 | ◐ 部分一致；`app.inbox` + 游标/ack、`events.emit` + outbound webhook 已落地，CloudEvents/ordering 未做；已知缺口见 [event-model.md](./event-model.md) |
 | `miniapp-identity-access-plan.md` | v3 身份/访问设计（2026-11-21） | ✅ P0/P1/P2a 已实现（v48，PR-01~12） |
 | `miniapp-identity-implementation-plan.md` | P0–P2a 实施拆解 | ✅ PR-01~PR-12 已实现；PR-01~PR-10 已部署 |
+| `miniapp-product-plan.md` | 产品定位与路线图（2026-11-15，事实数据同步至 2026-11-24） | ◐ 定位与取舍是当前准绳；§3 的规模数字已对齐 v52，其余阶段表仍是撰写时快照 |
+| `miniapp-ai-native-plan.md` | AI-native 增强开发计划（2026-11-23 重排） | ◐ P0 / P1a / P1b / P2a / P2b-* 已落地（AI 任务、任务 UI、页面上传、查询下推、任务通知、审核参考应用）；预算预扣/结算（S1）、成本可观察性（S2）待做 |
+| `video-workbench-implementation-plan.md` | V1-B 视频审片工作台设计（2026-11-23） | ✅ 已实现（schema v52）：扩展写服务 + 幂等账本 + 两阶段确认 + 分片上传 + 媒体 Range 代理 + 动态 CSP + `video-workbench` 模板 |
 | `docs/architecture-overview.md` | 仍是 2026-11-08 旧数据（35 个工具、50 张表、v29） | ⬜ 待同步；以本文为准 |
 
 > 已删除两份已实施且被本文覆盖的设计稿：`light-apps-multi-table-design.md`、`light-apps-assistant-and-import-design.md`；多表、助手与导入内容见 §2.2、§2.6、§2.7。
@@ -1019,8 +1290,9 @@ MiniApp 适合“结构化数据 + 轻界面 + 可分享交付”的场景。满
 |---|---|---|---|
 | **A. 台账与填报** | 门店 / 巡检 / 客户跟进表，按人可见、状态流转 | 快速创建、`row_scope=user`、状态机规则、页面写行、行级历史 | 填报者必须是平台用户 / 协作者；公开填报未做 |
 | **B. 轻看板与摘要卡** | Excel → 看板 / 台账 / 进度板；公开链接；工作台格子 | 快速模式三视图、服务端聚合与图表、发布快照、Board / 桌面 | 公开看板未做；快速模式图表类型有限 |
-| **C. 外部数据速览** | 豆瓣读书、公开 JSON / 文本、连接器数据 | R2.1 外部服务（只读工具、URL 前缀、TTL 缓存、限流） | 只读；不能写回外部系统；builtin→external promote 未做 |
-| **D. 审核与内容流转** | 审片 / 质检 / 合规：列表 → 预览 → 通过 / 驳回 → 留痕 | 状态机、行级历史、页面写行、导出、ACL | 页面不能上传文件，同源视频播放未做；不能替代剪辑 / 工作流 |
+| **C. 外部数据速览** | 豆瓣读书、公开 JSON / 文本、连接器数据 | R2.1 外部服务（只读工具、URL 前缀、TTL 缓存、限流） | 连接器侧仍只读；写回外部系统由扩展写服务覆盖（见 §2.13）；builtin→external promote 未做 |
+| **D. 审核与内容流转** | 审片 / 质检 / 合规：列表 → 预览 → 通过 / 驳回 → 留痕 | 状态机、行级历史、页面写行、导出、ACL、50MB 上传、同源视频播放（Range 代理）、扩展写服务调审片接口 | 审片结论由扩展侧权威返回，不在表内复制状态；仍不能替代剪辑 / 工作流 |
+| **D2. 外部系统写回** | 把 MiniApp 当成外部系统的操作面板：提交任务、上传素材、拿回结果 | 扩展写服务（`invoke`）、幂等账本、两阶段确认、`submission_unknown` 对账、分片上传 | 需 admin 配置扩展声明；无自动补偿；跨服务事务待做 |
 | **E. 对外只读发布** | 政策 / 价目 / 名单 / 结果 / 活动页 | 发布快照、`public_visible`、PII 脱敏、限流、撤销 | 只读；公开事件 / 公开看板不支持 |
 | **F. 外部系统“最后一公里”** | CRM / 工单 / 订单数据落地成业务页面 | 入站 Webhook、出站 Webhook、数据源定时同步、应用级调度 | 不是双向实时集成；无 workflow runner |
 | **G. 个人 / 团队轻工具** | 番茄钟、报名表、资料目录、外部游戏 | 单文件 HTML、SDK、能力清单、游戏 token | 适合轻量工具，不适合重前端应用 |
@@ -1036,7 +1308,7 @@ A–D 与 `docs/miniapp-product-plan.md` 的四个高频场景一致；本表补
 | **2. 快速创建** | 30 分钟得到可用页面 | 上传 Excel → inspect → 确认字段 → 选视图 | `POST /apps/quick/inspect`、`POST /apps/quick/create` |
 | **3. Agent 精修** | 让页面贴合业务 | 补表 / 改 schema / 画页面 / 导入数据 | `app_add_table`、`app_alter_schema`、`app_write_html`、`app_import_rows`、`app_set_preview` |
 | **4. 协作与发布** | 让人用起来 | 加协作者；发布快照；公开链接；IM 免密链接 | `/shares`、`/publication`、`app_share_link` |
-| **5. 自动化与集成** | 减少手工 | 数据源定时同步；公开快照刷新；入站 / 出站 Webhook；外部服务 | `/sources`、`/schedules`、`/ingress`、`/webhooks`、`/services` |
+| **5. 自动化与集成** | 减少手工 | 数据源定时同步；公开快照刷新；入站 / 出站 Webhook；外部服务；扩展写服务（写回外部系统） | `/sources`、`/schedules`、`/ingress`、`/webhooks`、`/services` |
 | **6. 运维与验收** | 可持续 | 备份 / 恢复预检；行历史；页面回滚；审计；限额监控 | `/backup`、`/restore/preflight`、`/rows/{row_id}/history`、`/restore-html` |
 
 **30 分钟最小闭环**：
@@ -1087,6 +1359,21 @@ A–D 与 `docs/miniapp-product-plan.md` 的四个高频场景一致；本表补
 
 ### 6.1 本次运行
 
+V1-B 外部写服务 + 分享卡片（2026-11-24）：
+
+```bash
+uv run pytest tests/unit/apps tests/integration/test_apps_api.py -q
+# 627 passed（540 单测 + 87 集成），耗时 11 分 12 秒
+make lint        # 通过
+make typecheck   # 通过
+```
+
+schema 断言已同步到 v52：`tests/unit/db/test_db_pool.py` 的 9 处 `assert v == 52` 全部通过（本次运行中该文件不在范围内，已由 `912e367d` 提交时验证）。公开链接分享卡片与 `publication` URL 回显的用例在 `tests/integration/test_apps_api.py`（本次 +167 行）。
+
+未运行：一次完整的 `make all`（含全量 pytest 与前端生产构建）。本机 2 GB 内存下全量 pytest 会在后段因资源压力被中止，合并前应在 CI 或停服窗口补跑。
+
+历史定向验证（2026-11-22）：
+
 ```bash
 # PR-10 定向验证（2026-11-22）
 uv run pytest tests/unit/apps tests/unit/db/test_app_members_migration.py \
@@ -1114,9 +1401,6 @@ uv run pytest tests/integration/test_apps_api.py \
   tests/integration/test_channel_bindings_api.py -q   # 103 passed
 uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 ```
-`make lint`、`make typecheck` 通过；前端新增 Guest `/link` 码弹窗用例。
-
-未运行：一次完整的 `make all`。PR-01~10 的全量 pytest 在本机跑到 88% 时因内存 / swap 压力被中止；PR-11/12 使用定向测试 + lint + mypy。合并前应在 CI 或停服窗口补跑。
 
 ### 6.2 测试分布
 
@@ -1143,7 +1427,7 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 | **合计** | `tests/unit/apps` + `test_db_pool.py` + 两个集成文件 | **569** |
 | 集成：浏览器沙箱 | `test_miniapp_sandbox.py`（单独运行） | 13 |
 
-> 上表是 2026-11-21 基线。PR-06~PR-10 新增的 `test_pii_policy` / `test_members` / `test_host_policy` / `test_guest_sessions` / 成员与 guest API 集成用例未计入；最新一次定向结果为 529 单测 + 97 集成，见 §6.1。
+> 上表是 2026-11-21 基线。PR-06~PR-10 新增的 `test_pii_policy` / `test_members` / `test_host_policy` / `test_guest_sessions` / 成员与 guest API 集成用例未计入；V1-B 新增的扩展写服务与分享卡片用例也未单列——最新一次定向结果为 **540 单测 + 87 集成 = 627 passed**，见 §6.1。
 
 ### 6.3 手工验证建议
 
@@ -1158,6 +1442,8 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 9. 成员页：owner 添加平台成员 / guest、创建邀请与加入码、逐表开启 `member_visible`；agent 宿主只读审批。
 10. 非成员打开 `/apps/{id}` → 403「申请加入 / 使用加入码」；受邀 guest 走 `/join` → `/my` → 应用，只看到可见表和自己的行。
 11. IM 边界：群聊 / 未绑定私聊只应拿到链接 / 加入码，app 数据工具应被拒绝；guest 在 `/my` 生成 `/link` 码，私聊发送后 `app_share_link` 返回个人入口。
+12. 公开分享卡片：`/p/{token}` 用 `view-source` 看 `og:*` 与 `og:image`；直接访问 `share.png` 拿到 300×300 PNG；把链接贴进微信聊天，看是否出卡片与缩略图；改封面后等缓存或用 `?v=2` 绕过。
+13. 扩展写服务（V1-B）：管理员在「服务」面板配 `provider=extension` 的 `base_url` / token / 读写工具 → 建 `video-workbench` 应用 → 上传视频（> 4 MB 走分片）→ 触发审片写工具 → 重复同一 `idempotencyKey` 确认不重复写 → 同 key 改参数应 409 → 播放用 `mediaUrl` 取到的短时 URL 验证 Range/206。
 
 ---
 
@@ -1169,13 +1455,16 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 |---|---|---|
 | IM per-sender actor（P2b） | IM 会话 / 记忆仍归 agent owner；PR-11 只收口工具与链接，不切换 thread / memory actor | 需要 per-sender thread / memory 隔离，单独设计 |
 | 公开填报 | 公开链接只读；外部写入必须走签名入站 Webhook | 匿名公开填报属 P3；受邀 guest 可登录写自己的行 |
-| R2 外部服务 `light_app_services` | 页面可通过宿主调用已声明的只读连接器工具 | 已支持 CRUD/调用/TTL 缓存/图片资产/公开缓存调用/Agent 工具；promote 待做 |
+| R2 外部服务 `light_app_services` | 页面可通过宿主调用已声明的只读连接器工具 | 已支持 CRUD/调用/TTL 缓存/图片资产/公开缓存调用/Agent 工具；builtin→external promote 待做 |
+| 扩展写服务的补偿与对账 | 写调用失败后没有自动回滚；`submission_unknown` 需人工/页面侧对账 | 幂等账本保证不重复写，但不保证业务一致；跨服务事务/补偿待做 |
 | R2 应用级调度 `light_app_schedules` | 统一管理数据源同步与公开快照刷新 | `sync_source` / `snapshot_publication` 已落地；`run_agent` 等动作待做 |
 | R2 公开看板 | Board 不能分享 | 仅个人看板 |
 | R3 Bundle v2 | 不能跨主机迁移应用 | 只有同实例 zip 备份/恢复 |
 | R3 认证链接 / 渠道身份 | D4-lite 已落地：owner 绑定后发 app-scoped 免密链接；未绑定/群聊只读 | ✅ |
 | 云端模板市场 | 只能系统/专家模板 | 前端占位 |
 | 按应用选择模型 | 助手/生成固定用 owning agent 默认模型 | `model_access.py` |
+| 扩展服务的 `read` 侧未开放 | `provider=extension` 的读工具已声明，但页面侧只有写调用（`invoke`）链路 | 只读侧仍走 `call`（连接器语义），扩展读契约未接 |
+| 分享卡片自定义 | 微信「分享给朋友」无法完全自定义标题/图片 | 需公众号 JS-SDK（当前未接入）；OG + 首图已覆盖多数场景 |
 
 ### 7.2 架构风险
 
@@ -1190,6 +1479,9 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 | 旧应用静态 frame | 渲染时拒绝并显示错误页 | 需要用户让 Agent 重写 |
 | 团队 host 无 app 工具 | 团队只能通过交付物引用应用 | 设计如此，避免 host 直接操作应用 |
 | IM 会话归 owner | IM 入站仍把外部 sender 归到 agent owner 的 thread / memory；PR-11 已收口 app 工具与个人链接 | P2b 再做 per-sender thread / memory；群聊消息仍共享 owner 的会话上下文 |
+| 扩展服务可访问内网 | `allow_private_network` 打开后扩展 `base_url` 可指向内网地址 | 仅 admin 可开；默认拒绝；开启即视为 admin 显式授权（审计需覆盖） |
+| 扩展服务密钥 | 服务 token 存 `secrets` 表，不回传页面 | 依赖 secrets 表访问控制；轮换即失效旧密文 |
+| 扩展写无自动补偿 | 幂等账本只保证「不重复写」，不保证「业务一致」 | `submission_unknown` 需对账；跨服务事务待设计 |
 
 ### 7.3 文档漂移
 
@@ -1199,6 +1491,7 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 - 所有保留的 MiniApp 设计稿已加统一的“当前实现状态见 `miniapp-overview.md`”指针；设计稿只保留动机、取舍和历史记录。
 - `docs/miniapp-platform-roadmap.md` 的 R1 状态准确；R2 的外部服务/事件/调度、R3 的 IM 公开链接与 owner 身份绑定（D4-lite）已落地；公开看板与迁移包 v2 仍未做。
 - `docs/miniapp-identity-access-plan.md` 是 v3 设计；P0/P1/P2a 已实现（v48，PR-01~12）。
+- **本文已对齐 schema v52**（此前正文停留在 v48/头部停在 v51）：迁移链补到 052，`light_app_service_operations` / `light_app_tasks` 补进表清单，能力位从 12 补到 14，路由数从「约 102」修正为「约 156」，SDK 从 19 个顶层方法修正为 23 个。
 - 本文作为当前状态的单一入口。
 
 ---
@@ -1212,6 +1505,7 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 | Agent 工具 | `src/octop/infra/apps/tools.py` |
 | 能力清单 | `src/octop/infra/apps/capabilities.py` |
 | 沙箱 / CSP / wrapper | `src/octop/infra/apps/sandbox.py` |
+| HTML 契约（校验 + 渲染） | 写前扫描 `src/octop/infra/apps/models.py`（`validate_html` / `find_external_refs`）；渲染 `sandbox.py`（`build_app_doc` / `build_wrapper_doc`）与 `dashboard/src/components/MiniAppFrame/sdk.ts`（`buildSrcDoc`）/`appCsp.ts`（动态 `media_paths`） |
 | 限流 | `src/octop/infra/apps/limits.py` |
 | 只读助手 | `src/octop/infra/apps/assistant.py` |
 | 一次性生成 | `src/octop/infra/apps/generation.py` |
@@ -1220,10 +1514,14 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 | 表格分析 | `src/octop/infra/apps/inspect.py` |
 | 导入解析 | `src/octop/infra/apps/importer.py` |
 | 快速模式渲染 | `src/octop/infra/apps/viewgen.py` |
-| 模板 | `src/octop/infra/apps/templates.py` |
+| 模板 | `src/octop/infra/apps/templates.py`、`src/octop/infra/apps/system_templates/`（7 个系统模板） |
+| 扩展上传会话 | `src/octop/infra/apps/upload_sessions.py`（分片落盘 `{tempdir}/octop-service-uploads/`） |
+| AI 任务 | `src/octop/infra/apps/tasks.py`、`task_runner.py`、`task_types.py` |
+| 成员 / 邀请 / 加入码 | `src/octop/infra/apps/members.py` |
 | 封面 | `src/octop/infra/apps/preview.py` |
 | 数据源 / 调度 | `src/octop/infra/apps/sources.py`、`scheduler.py` |
-| 外部服务 / 数据集 | `src/octop/infra/apps/dataset.py` |
+| 外部服务 / 数据集 | `src/octop/infra/apps/dataset.py`；声明与调用在 `service.py`（`add_service` / `call_service` / `invoke_service` / `list_service_operations`） |
+| 公开分享卡片 | `src/octop/api/routers/public_apps.py`（`_host_page` / `_share_image_bytes` / `_default_share_image`） |
 | 出站 Webhook | `src/octop/infra/apps/webhooks.py` |
 | app-owned 入站入口 | `src/octop/infra/apps/ingress.py` |
 | 工具风险 / HITL | `src/octop/infra/apps/tool_policy.py`、`hitl_preflight.py`、`integration_ops.py` |
@@ -1237,7 +1535,8 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 | 游戏 HTTP | `src/octop/api/routers/game_sessions.py` |
 | 访问申请 / 认证链接 / IM 绑定 | `src/octop/api/routers/app_access.py`、`app_access_link.py`、`channel_bindings.py` |
 | 应用仓储 | `src/octop/infra/db/repos/apps.py` |
-| 迁移 | `src/octop/infra/db/migrations/025–046_*`、`migrate.py` |
+| 服务仓储 / 幂等账本 | `src/octop/infra/db/repos/app_services.py`、`app_service_operations.py` |
+| 迁移 | `src/octop/infra/db/migrations/025–052_*`、`migrate.py` |
 | 专家手册 | `src/octop/infra/agents/experts/library/light-apps/AGENTS.md` |
 | 前端工作台 | `dashboard/src/pages/Apps/` |
 | 前端宿主 | `dashboard/src/components/MiniAppFrame/` |
