@@ -1011,17 +1011,6 @@ function DesktopChatWindow({
             <span>{title}</span>
             <ChevronDown size={12} />
           </button>
-          <Tooltip title={tr("apps.desktop.newChat", "New conversation")}>
-            <button
-              type="button"
-              className={styles.desktopChatIconButton}
-              data-testid="desktop-chat-new"
-              aria-label={tr("apps.desktop.newChat", "New conversation")}
-              onClick={handleNewChat}
-            >
-              <Plus size={15} />
-            </button>
-          </Tooltip>
         </div>
       </header>
 
@@ -1073,6 +1062,7 @@ function DesktopChatWindow({
               <button
                 type="button"
                 className={styles.desktopChatPanelAction}
+                data-testid="desktop-chat-panel-new"
                 onClick={handleNewChat}
               >
                 <Plus size={12} />

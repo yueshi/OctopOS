@@ -442,7 +442,7 @@ describe("DesktopChatWindow", () => {
     );
   });
 
-  it("creates a new conversation from the header", async () => {
+  it("creates a new conversation from the conversations panel", async () => {
     render(
       <DesktopChatWindow
         agentId="agent_1"
@@ -451,8 +451,9 @@ describe("DesktopChatWindow", () => {
       />,
     );
 
-    await screen.findByTestId("desktop-chat-new");
-    fireEvent.click(screen.getByTestId("desktop-chat-new"));
+    await screen.findByText("客户跟进");
+    fireEvent.click(screen.getByTestId("desktop-chat-thread-trigger"));
+    fireEvent.click(screen.getByTestId("desktop-chat-panel-new"));
 
     await waitFor(() => expect(mockCreate).toHaveBeenCalledWith("agent_1"));
   });

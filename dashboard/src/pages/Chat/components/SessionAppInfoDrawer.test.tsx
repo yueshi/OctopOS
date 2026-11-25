@@ -188,6 +188,24 @@ describe("SessionAppInfoDrawer", () => {
     );
   });
 
+  it("mounts inside the fullscreen desktop root so it stays on the desktop", async () => {
+    const desktopRoot = document.createElement("div");
+    document.body.appendChild(desktopRoot);
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      get: () => desktopRoot,
+    });
+    try {
+      renderDrawer({});
+
+      await screen.findByDisplayValue("客户台账");
+      expect(desktopRoot.querySelector(".ant-drawer")).not.toBeNull();
+    } finally {
+      Reflect.deleteProperty(document, "fullscreenElement");
+      desktopRoot.remove();
+    }
+  });
+
   it("keeps everything read-only without edit_structure", async () => {
     currentUserMock.mockReturnValue({
       id: 2,

@@ -29,6 +29,7 @@ import { useServerTimezone } from "../../../hooks/useServerTimezone";
 import { apiErrorMessage } from "../../../utils/apiError";
 import { message } from "../../../utils/antdMessage";
 import { formatServerDateTime } from "../../../utils/formatMessageTime";
+import { fullscreenContainer } from "../../../utils/overlayContainer";
 
 const { Text } = Typography;
 
@@ -236,6 +237,7 @@ export default function SessionAppInfoDrawer({
       title={t("apps.infoTitle", "App info")}
       open={open}
       onClose={onClose}
+      getContainer={fullscreenContainer}
       width={isMobile ? "100%" : 440}
       styles={{
         header: { padding: "12px 16px" },
