@@ -322,13 +322,11 @@ async def test_page_calls_the_kernel_through_the_extension_service(
         assert set(referenced).issubset(element_ids)
 
 
-async def test_expert_reads_the_same_result_over_mcp() -> None:
-    """The MCP path the expert uses: list tools, then check_drawing."""
+@pytest.fixture()
+def kernel_mcp_url() -> Any:
+    """A live geometry-kernel MCP server on an ephemeral port."""
     import socket
     import time
-
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
 
     from octop.infra.design.mcp_server import build_server
 
@@ -341,7 +339,7 @@ async def test_expert_reads_the_same_result_over_mcp() -> None:
     thread.start()
 
     # Wait for the listener before speaking MCP: the client wraps connection
-    # errors in an ExceptionGroup, which the retry loop would not see.
+    # errors in an ExceptionGroup, which a retry loop would not see.
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
@@ -351,10 +349,16 @@ async def test_expert_reads_the_same_result_over_mcp() -> None:
             time.sleep(0.2)
     else:
         pytest.fail("the kernel MCP server never started listening")
+    yield f"http://127.0.0.1:{port}/mcp"
 
-    url = f"http://127.0.0.1:{port}/mcp"
+
+async def test_expert_reads_the_same_result_over_mcp(kernel_mcp_url: str) -> None:
+    """The MCP path the expert uses: list tools, then check_drawing."""
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
     async with (
-        streamablehttp_client(url) as (read, write, _get_session_id),
+        streamablehttp_client(kernel_mcp_url) as (read, write, _get_session_id),
         ClientSession(read, write) as session,
     ):
         await session.initialize()
@@ -366,6 +370,44 @@ async def test_expert_reads_the_same_result_over_mcp() -> None:
         payload = json.loads(result.content[0].text)
         rule_ids = {item["rule_id"] for item in payload["diagnostics"]}
         assert "clearance.wardrobe_front" in rule_ids
+
+
+async def test_expert_gets_the_kernel_tools_over_a_custom_mcp_connector(
+    env_alice_bob_agent: tuple[httpx.AsyncClient, OctopServer, dict[str, str], dict[str, str], str],
+    kernel_mcp_url: str,
+) -> None:
+    """The connector path: save a custom MCP server, then load it on a turn.
+
+    Custom MCP servers are deliberately deferred — the agent starts with a
+    placeholder and ``prepare_chat_mcp`` loads the tools before the first
+    turn. This asserts that the deferred load really reaches the kernel.
+    """
+    client, srv, alice_auth, _bob_auth, agent_id = env_alice_bob_agent
+
+    r = await client.put(
+        "/api/connectors/custom-mcp",
+        headers=alice_auth,
+        json={"servers": {"geometry": {"transport": "streamable_http", "url": kernel_mcp_url}}},
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.post(f"/api/agents/{agent_id}/start", headers=alice_auth)
+    assert r.status_code == 204
+    r = await client.get(f"/api/agents/{agent_id}/status", headers=alice_auth)
+    assert r.json()["state"] == "running"
+
+    registry = srv.app_runtime.agent_registry
+    alice_id = await _owner_id(srv, "alice")
+    failed = await registry.prepare_chat_mcp(
+        agent_id,
+        ["geometry"],
+        connector_user_id=alice_id,
+    )
+    assert failed == []
+
+    agent = registry.get_agent(agent_id)
+    names = {str(getattr(tool, "name", "")) for tool in agent._mcp_tools}  # noqa: SLF001
+    assert {"geometry_check_drawing", "geometry_takeoff", "geometry_apply_ops"} <= names
 
 
 async def test_rows_and_page_build_the_same_ir(

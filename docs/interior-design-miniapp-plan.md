@@ -41,19 +41,57 @@
 | ① 装修设计专家 | ✅ manifest + SOUL + AGENTS + 2 个 skill（`src/octop/infra/agents/experts/library/interior-design/`） |
 | ③ 几何内核 | ✅ IR / 校验 / 算量 / 操作 / REST / MCP 已实现，25 个用例（`src/octop/infra/design/`） |
 | 端到端联通 | ✅ 三条链路已在集成测试中真跑通，见下方「端到端验证」 |
-| 真实部署 | ⛔ 待做：起内核服务、建 `custom-mcp` 连接器、Owner 配 extension service |
+| 真实部署 | ✅ 在全新 `OCTOP_HOME` 上起真实实例验证通过，见「真机验证」 |
 
 ### 端到端验证（已跑通）
 
-`tests/integration/test_interior_design_flow.py` 与 `tests/integration/test_interior_plan_page.py` 用真实服务验证了三条链路，不是 mock：
+`tests/integration/test_interior_design_flow.py` 与 `tests/integration/test_interior_plan_page.py` 用真实服务验证：
 
 | 链路 | 怎么验的 |
 |---|---|
 | 页面 → 内核（extension service） | 起真内核 HTTP 服务 + 真 `AppService`：建模板应用 → 建四张表 → 灌 IR 行 → 配 `provider=extension` 服务 → `invoke_service("check_drawing")` → 诊断写回 `diagnostics` 表 → 经 `/rows` 读回；并断言诊断引用的元素 id 都存在于 `main` 表（否则页面无从高亮） |
 | 专家 → 内核（MCP） | 真起 FastMCP `streamable-http`，用 MCP client `initialize` → `list_tools` → `call_tool("check_drawing")`，与 REST 返回同一组 `rule_id` |
+| 专家 → 内核（custom-mcp 连接器） | `PUT /api/connectors/custom-mcp` 保存内核地址 → 启动 agent → `prepare_chat_mcp` 返回空失败集 → agent 手上出现 `geometry_check_drawing` / `geometry_takeoff` / `geometry_apply_ops` |
 | 页面 IR 契约 | 真 Chromium 加载模板页，桩桥记录页面发出的 IR：断言 `furniture[].kind` 与 `openings[].host` 都带上了、房间多边形正确、诊断写回后 blocking 元素被染成红色 |
 
 **这轮抓到的真 bug**：页面构建 IR 时漏掉了 `furniture[].kind` 和 `openings[].host`，导致衣柜净空、湿区电气这些**依赖 kind 的整族规则从页面路径永远不触发**（专家路径正常，所以单测和 REST 集成测试都发现不了）。已修，并加了 Chromium 回归测试；用"临时回退修复"验证过该测试确实会变红。
+
+### 真机验证（全新实例，2026-11-26）
+
+用 `octop init` 建全新 `OCTOP_HOME`、`octop run` 起真实服务，全程只走 HTTP API（不经过测试夹具）：
+
+| 步骤 | 结果 |
+|---|---|
+| `POST /api/connectors/custom-mcp/test`（inline spec 指向内核 MCP） | `ok=true`，`tool_count=3`，返回三个工具及描述 |
+| `PUT /api/connectors/custom-mcp` 保存为 `geometry` | 200，读回一致 |
+| 建 agent 并启动 | 204 → `state=running` |
+| 发起一轮聊天（WS `user_turn`，`mcp_servers=["geometry"]`） | 日志：`prepare_chat_mcp ... tool_count=0 missing=['geometry']` → `tool_count=3 missing=[]` → `matching_tools=['geometry_apply_ops','geometry_check_drawing','geometry_takeoff']` |
+| `POST /api/apps/from-template`（system 模板） | 201，capabilities 含 `external.write` |
+| `PUT /api/apps/{id}/services/cad`（admin 开 `allow_private_network`） | 200 |
+| `POST /api/apps/{id}/services/cad/invoke` | 200，`status=succeeded`，返回 4 条诊断（含 `clearance.wardrobe_front` blocking） |
+
+**确认了两个设计假设**：
+
+1. **custom-mcp 连接器是「每用户手动配一次」，模板无法自带**——`services.json` 与模板 manifest 都不支持声明 custom MCP。这是当前路线唯一的强制手工步骤。
+2. **custom MCP 工具是「延迟加载」的**：agent 启动时只登记空占位（日志 `defer custom MCP ... load on chat`），真正的工具在首轮聊天前由 `prepare_chat_mcp` 拉取并缓存（按 user+server+spec 指纹）。所以「专家启动后立刻能用内核工具」这个预期是错的——**必须先发一轮消息**，工具才进上下文。专家的 AGENTS.md 已提醒用户首次使用先发一句话。
+
+### 部署步骤（运维视角）
+
+```bash
+# 1. 起内核（两个端口，勿混）
+python -m octop.infra.design                  # REST 8848：给页面
+python -m octop.infra.design --mcp            # MCP  8849：给专家
+
+# 2. 专家侧：设置 → 连接器 → 自定义 MCP
+#    transport=streamable_http  url=http://127.0.0.1:8849/mcp  名称如 geometry
+
+# 3. 页面侧：应用详情 → 服务，新增 provider=extension
+#    base_url=http://127.0.0.1:8848  mode=write  allow_private_network（需管理员）
+#    工具：check_drawing POST /check_drawing、takeoff POST /takeoff
+#    并在能力清单勾选 external.write
+```
+
+> 用 `POST /apps/from-template`（Dashboard 走的就是这条）建应用时会自动带上模板声明的 `external.write`；**Agent 工具建的应用不会**，必须手动开（见 §6.3）。
 
 ---
 
@@ -296,12 +334,17 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 注意 REST 与 MCP 是两个端口（默认 8848 / 8849），别把 MCP 地址指到 REST 端口上。
 
+**工具是延迟加载的**（真机验证确认）：agent 启动时 `build_mcp_server_configs_for_user` 对 custom MCP 只写空占位并记 `defer custom MCP … load on chat`；真正的工具在首轮聊天前由 `prepare_chat_mcp` 拉取，命名规则是 `{server}_{tool}`（如 `geometry_check_drawing`），并按 `(user, server, spec 指纹)` 缓存复用。所以：
+
+- 第一次对话前工具不在上下文里，**必须真的发一轮消息**才会装载；
+- 改了内核地址或工具描述（spec 指纹变化）会触发重新加载。
+
 ### 6.3 能力位与权限
 
 - 页面需要 `data.read`（读 IR）、`data.write`（写诊断）、`external.write`（调内核）。
 - 三个里 `external.write` 需 Owner 手动开；`data.read`/`data.write` 是新应用默认集。
 
-**已在集成测试中确认的细节**：模板 manifest 声明了 `external.write`，但只有 **Dashboard 的 owner 创建路径**会带上它（`create_from_template(grant_template_capabilities=True)`，`api/routers/apps.py:1856`）；Agent 工具建的模板应用**不会**获得这个能力位，必须 Owner 手动开。端到端测试也走的是 owner 路径，否则 `invoke_service` 直接报 `app does not allow external.write`。
+**已在集成测试与真机验证中确认的细节**：模板 manifest 声明了 `external.write`，只有 **HTTP 创建路径**（`POST /api/apps/from-template`，Dashboard 用的就是它）会按 `grant_template_capabilities=True` 自动带上（`api/routers/apps.py:1856`，真机验证确认返回的 capabilities 含 `external.write`）；**Agent 工具 `app_create_from_template` 建的模板应用不会**获得这个能力位，必须 Owner 手动开。走 Agent 路径时若不手动开，`invoke_service` 直接报 `app does not allow external.write`。
 
 ---
 
@@ -333,7 +376,7 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 ## 9. 未决项
 
-1. **模板能否自动绑定 `custom-mcp` 连接器**（还是每个用户手建）——这是"独立微服务"路线最大的落地摩擦，阶段 0 必须验掉。**仍未验**：这需要真实部署环境，集成测试绕过了连接器（直接调内核）。
+1. ~~**模板能否自动绑定 `custom-mcp` 连接器**~~ —— **已验（2026-11-26）：不能自动绑定，必须每用户手配一次。** 已确认为当前路线唯一的强制手工步骤，见「真机验证」。
 2. **是否给 `services.json` / `app_add_service` 增加 extension 支持**——决定 extension 服务是"每应用手动配一次"还是"模板自带"。
 3. **IR 体量**：100㎡ 户型 IR JSON 约 100–300KB，对 `max_request_bytes=1MB` 够用，但需实测元素数上限。
 4. **家具库**：`furniture[].kind` 的标准清单由谁定（领域顾问）——影响内核与前端渲染的一致性。**注意**：`kind` 缺失会让衣柜/湿区/电气整族规则静默失效，页面侧已有回归测试守着，专家侧需要在 AGENTS.md 的写入规范里继续强调。
