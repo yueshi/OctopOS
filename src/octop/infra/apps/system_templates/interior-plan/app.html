@@ -241,6 +241,7 @@
     var openings = [];
     var furniture = [];
     var mep = [];
+    var ceiling = null;
     state.elements.forEach(function (row) {
       var v = vals(row);
       var kind = String(v.kind || "").toLowerCase();
@@ -262,7 +263,8 @@
           x: num(payload.x), y: num(payload.y),
           width: num(payload.width, 900),
           angle: num(payload.angle, 0),
-          host: String(payload.host || "")
+          host: String(payload.host || ""),
+          h: payload.h == null ? null : num(payload.h, 0)
         });
       } else if (kind === "furniture") {
         furniture.push({
@@ -273,8 +275,11 @@
           rot: num(payload.rot, 0),
           kind: String(payload.kind || ""),
           host: String(payload.host || ""),
-          facing: payload.facing == null ? null : num(payload.facing, 0)
+          facing: payload.facing == null ? null : num(payload.facing, 0),
+          h: payload.h == null ? null : num(payload.h, 0)
         });
+      } else if (kind === "setting") {
+        if (payload.ceiling_height != null) ceiling = num(payload.ceiling_height, 0);
       } else if (kind === "mep") {
         mep.push({
           id: id,
@@ -284,7 +289,7 @@
         });
       }
     });
-    return { walls: walls, openings: openings, furniture: furniture, mep: mep };
+    return { walls: walls, openings: openings, furniture: furniture, mep: mep, ceiling: ceiling };
   }
 
   function polygonCentroid(points) {
@@ -581,7 +586,7 @@
         polygon: payload.polygon || []
       });
     });
-    return {
+    var ir = {
       version: 1,
       walls: geo.walls,
       openings: geo.openings,
@@ -589,6 +594,8 @@
       rooms: rooms,
       mep: geo.mep
     };
+    if (geo.ceiling) ir.ceiling_height = geo.ceiling;
+    return ir;
   }
 
   function showNotice(message, kind) {

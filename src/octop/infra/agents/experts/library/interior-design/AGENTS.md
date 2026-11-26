@@ -126,6 +126,10 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
   "payload": "{\"x\":3050,\"y\":600,\"w\":500,\"d\":800,\"host\":\"F-002\",\"kind\":\"sink\"}",
   "source": "默认布置", "status": "assumption" }
 
+// 层高（可选，一条即可；不写按 2800）
+{ "element_id": "S-001", "kind": "setting", "name": "层高",
+  "payload": "{\"ceiling_height\":2600}", "source": "用户口述", "status": "confirmed" }
+
 // 水电点位：插座/开关/给水/排水/空调/燃气
 { "element_id": "P-001", "kind": "mep", "name": "厨房给水",
   "payload": "{\"type\":\"water\",\"x\":3400,\"y\":700}",
@@ -145,6 +149,7 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
 - **标准 kind**（写这些，别自创）：`bed_double` / `bed_single` / `bed_king` / `crib`；`sofa` / `armchair` / `chair` / `stool` / `bench`；`dining_table` / `coffee_table` / `desk` / `side_table`；`wardrobe` / `cabinet` / `bookshelf` / `shoe_cabinet` / `tv_stand` / `bedside_table`；`kitchen_counter` / `sink` / `stove` / `hood` / `fridge` / `oven` / `dishwasher`；`washer` / `dryer`；`toilet` / `basin` / `shower` / `bathtub`。
 - **默认尺寸**：省略 `w` / `d` 时内核按目录补全（如 `fridge` 700×700、`wardrobe` 1800×600）。你仍应显式写尺寸，除非用户没给。
 - **嵌入关系**：台面上的水槽、灶台、灶上的烟机用 `host` 指向被嵌入的件。**被嵌入的件允许与 host 重叠**，净空按 host 计算；不要把水槽挪出台面来"避免重叠"。
+- **高度**：家具可写 `h`（毫米），省略时按目录默认（衣柜 2200、餐桌 750、椅面 450…）；门窗可写 `h`（门 2100、窗 1800），**窗面积按宽度 × 高度计算**。层高写成 `kind=setting` 的一行（`{"ceiling_height":2600}`），不写按 2800。高柜（≥1800mm）会检查能否在层高下立起来，层高不明时按 2800 判断——如果用户说层高矮，务必写 setting 行。
 - **座椅朝向**：椅子、沙发、单椅可以写 `facing`（角度，0 朝 +x，逆时针为正）。写了就按这个方向检查站立/通行净空；不写则取四面中最好的一面——所以只有一面被堵的椅子不会误报，但挤在墙角里会报。面对桌子/电视的座椅建议显式写朝向。
 - **旧写法兼容**：`closet`→`wardrobe`、`refrigerator`→`fridge`、`washing machine`→`washer` 等别名会自动归一；但新方案请直接用标准名。
 - **水电点位**：插座、开关、给水、排水、空调、燃气一律记成 `kind=mep` 的 `P-xxx` 行，**不要再把插座当家具**（旧数据仍能识别）。用水电器（洗衣机、洗碗机、水槽、洁具）的给排水点要在 1500mm 内，否则会报 `mep.wet_appliance_services`。

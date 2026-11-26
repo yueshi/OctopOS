@@ -62,6 +62,10 @@ class CatalogItem:
     front_clearance: float | None = None
     #: Fixed installations must touch a wall (they are plumbed or wired in).
     fixed: bool = False
+    #: Overall height in millimetres.
+    height: float = 800.0
+    #: Seating height, for chairs and sofas only.
+    seat_height: float | None = None
 
 
 def _item(
@@ -88,21 +92,135 @@ CATALOG: Final[dict[str, CatalogItem]] = {
     item.kind: item
     for item in (
         # sleeping
-        _item("bed_double", "bed", "双人床", "double bed", 1500, 2000, against_wall=True),
-        _item("bed_king", "bed", "大床", "king bed", 1800, 2000, against_wall=True),
-        _item("bed_single", "bed", "单人床", "single bed", 1000, 2000, against_wall=True),
-        _item("crib", "bed", "婴儿床", "crib", 700, 1200, against_wall=True),
+        _item(
+            "bed_double",
+            "bed",
+            "双人床",
+            "double bed",
+            1500,
+            2000,
+            against_wall=True,
+            height=500.0,
+        ),
+        _item(
+            "bed_king",
+            "bed",
+            "大床",
+            "king bed",
+            1800,
+            2000,
+            against_wall=True,
+            height=500.0,
+        ),
+        _item(
+            "bed_single",
+            "bed",
+            "单人床",
+            "single bed",
+            1000,
+            2000,
+            against_wall=True,
+            height=500.0,
+        ),
+        _item(
+            "crib",
+            "bed",
+            "婴儿床",
+            "crib",
+            700,
+            1200,
+            against_wall=True,
+            height=900.0,
+        ),
         # seating
-        _item("sofa", "seat", "沙发", "sofa", 2000, 900),
-        _item("armchair", "seat", "单椅", "armchair", 800, 800),
-        _item("chair", "seat", "椅子", "chair", 450, 450),
-        _item("stool", "seat", "凳子", "stool", 350, 350),
-        _item("bench", "seat", "长凳", "bench", 1200, 400),
+        _item(
+            "sofa",
+            "seat",
+            "沙发",
+            "sofa",
+            2000,
+            900,
+            height=850.0,
+            seat_height=420.0,
+        ),
+        _item(
+            "armchair",
+            "seat",
+            "单椅",
+            "armchair",
+            800,
+            800,
+            height=800.0,
+            seat_height=420.0,
+        ),
+        _item(
+            "chair",
+            "seat",
+            "椅子",
+            "chair",
+            450,
+            450,
+            height=900.0,
+            seat_height=450.0,
+        ),
+        _item(
+            "stool",
+            "seat",
+            "凳子",
+            "stool",
+            350,
+            350,
+            height=450.0,
+            seat_height=450.0,
+        ),
+        _item(
+            "bench",
+            "seat",
+            "长凳",
+            "bench",
+            1200,
+            400,
+            height=450.0,
+            seat_height=450.0,
+        ),
         # tables
-        _item("dining_table", "table", "餐桌", "dining table", 1400, 800),
-        _item("coffee_table", "table", "茶几", "coffee table", 1000, 500),
-        _item("desk", "table", "书桌", "desk", 1200, 600, against_wall=True),
-        _item("side_table", "table", "边几", "side table", 450, 450),
+        _item(
+            "dining_table",
+            "table",
+            "餐桌",
+            "dining table",
+            1400,
+            800,
+            height=750.0,
+        ),
+        _item(
+            "coffee_table",
+            "table",
+            "茶几",
+            "coffee table",
+            1000,
+            500,
+            height=420.0,
+        ),
+        _item(
+            "desk",
+            "table",
+            "书桌",
+            "desk",
+            1200,
+            600,
+            against_wall=True,
+            height=750.0,
+        ),
+        _item(
+            "side_table",
+            "table",
+            "边几",
+            "side table",
+            450,
+            450,
+            height=550.0,
+        ),
         # storage
         _item(
             "wardrobe",
@@ -113,6 +231,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             600,
             against_wall=True,
             front_clearance=700,
+            height=2200.0,
         ),
         _item(
             "cabinet",
@@ -123,6 +242,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             450,
             against_wall=True,
             front_clearance=700,
+            height=1800.0,
         ),
         _item(
             "bookshelf",
@@ -133,6 +253,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             320,
             against_wall=True,
             front_clearance=600,
+            height=2000.0,
         ),
         _item(
             "shoe_cabinet",
@@ -143,6 +264,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             350,
             against_wall=True,
             front_clearance=700,
+            height=1100.0,
         ),
         _item(
             "tv_stand",
@@ -153,6 +275,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             400,
             against_wall=True,
             front_clearance=600,
+            height=500.0,
         ),
         _item(
             "bedside_table",
@@ -163,6 +286,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             400,
             against_wall=True,
             front_clearance=0.0,
+            height=550.0,
         ),
         # kitchen
         _item(
@@ -175,6 +299,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             against_wall=True,
             front_clearance=900,
             fixed=True,
+            height=900.0,
         ),
         _item(
             "sink",
@@ -188,6 +313,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_drain=True,
             front_clearance=900,
             fixed=True,
+            height=900.0,
         ),
         _item(
             "stove",
@@ -201,6 +327,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             electrical=True,
             front_clearance=900,
             fixed=True,
+            height=900.0,
         ),
         _item(
             "hood",
@@ -212,6 +339,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             against_wall=True,
             appliance=True,
             electrical=True,
+            height=600.0,
         ),
         _item(
             "fridge",
@@ -225,6 +353,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             electrical=True,
             front_clearance=900,
             fixed=True,
+            height=1800.0,
         ),
         _item(
             "oven",
@@ -238,6 +367,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             electrical=True,
             front_clearance=600,
             fixed=True,
+            height=600.0,
         ),
         _item(
             "dishwasher",
@@ -253,6 +383,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_drain=True,
             front_clearance=600,
             fixed=True,
+            height=850.0,
         ),
         # laundry
         _item(
@@ -269,6 +400,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_drain=True,
             front_clearance=600,
             fixed=True,
+            height=850.0,
         ),
         _item(
             "dryer",
@@ -282,6 +414,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             electrical=True,
             front_clearance=600,
             fixed=True,
+            height=850.0,
         ),
         # sanitary
         _item(
@@ -296,6 +429,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_drain=True,
             front_clearance=600,
             fixed=True,
+            height=750.0,
         ),
         _item(
             "basin",
@@ -309,6 +443,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_drain=True,
             front_clearance=600,
             fixed=True,
+            height=850.0,
         ),
         _item(
             "shower",
@@ -321,6 +456,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=600,
+            height=2000.0,
         ),
         _item(
             "bathtub",
@@ -335,10 +471,29 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_drain=True,
             front_clearance=600,
             fixed=True,
+            height=550.0,
         ),
         # electrical points that used to be modelled as furniture
-        _item("socket", "electrical", "插座", "socket", 86, 86, electrical=True),
-        _item("switch", "electrical", "开关", "switch", 86, 86, electrical=True),
+        _item(
+            "socket",
+            "electrical",
+            "插座",
+            "socket",
+            86,
+            86,
+            electrical=True,
+            height=86.0,
+        ),
+        _item(
+            "switch",
+            "electrical",
+            "开关",
+            "switch",
+            86,
+            86,
+            electrical=True,
+            height=86.0,
+        ),
     )
 }
 
@@ -432,6 +587,8 @@ def catalog_rows() -> list[dict[str, object]]:
             "needs_drain": item.needs_drain,
             "front_clearance": item.front_clearance,
             "fixed": item.fixed,
+            "height": item.height,
+            "seat_height": item.seat_height,
         }
         for item in CATALOG.values()
     ]

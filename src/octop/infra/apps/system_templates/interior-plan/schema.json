@@ -1,22 +1,51 @@
 {
   "version": 1,
   "columns": [
-    { "name": "element_id", "label": "元素 ID", "type": "string", "required": true },
+    {
+      "name": "element_id",
+      "label": "元素 ID",
+      "type": "string",
+      "required": true
+    },
     {
       "name": "kind",
       "label": "类型",
       "type": "enum",
       "required": true,
-      "values": ["wall", "opening", "furniture", "room", "material", "mep"]
+      "values": [
+        "wall",
+        "opening",
+        "furniture",
+        "room",
+        "material",
+        "mep",
+        "setting"
+      ]
     },
-    { "name": "name", "label": "名称", "type": "string" },
-    { "name": "payload", "label": "几何参数", "type": "text" },
-    { "name": "source", "label": "来源", "type": "string" },
+    {
+      "name": "name",
+      "label": "名称",
+      "type": "string"
+    },
+    {
+      "name": "payload",
+      "label": "几何参数",
+      "type": "text"
+    },
+    {
+      "name": "source",
+      "label": "来源",
+      "type": "string"
+    },
     {
       "name": "status",
       "label": "状态",
       "type": "enum",
-      "values": ["confirmed", "tentative", "assumption"]
+      "values": [
+        "confirmed",
+        "tentative",
+        "assumption"
+      ]
     }
   ]
 }

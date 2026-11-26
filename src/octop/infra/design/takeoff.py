@@ -50,7 +50,7 @@ def _wall_openings_area(ir: IR, wall_id: str) -> float:
             nearest, _ = nearest_wall(ir, (opening.x, opening.y))
             if nearest is None or nearest.id != wall_id:
                 continue
-        total += opening.width * DEFAULT_WINDOW_HEIGHT_MM
+        total += opening.width * opening.h
     return total
 
 

@@ -157,6 +157,15 @@ ROOM_OCCUPANCY_MAX: Final = 0.40
 #: How far an entry sightline is traced.
 ENTRY_SIGHT_RANGE_MM: Final = 10_000.0
 
+#: Comfortable gap between a seat surface and the table top it serves.
+SEAT_TABLE_DELTA_MIN: Final = 250.0
+SEAT_TABLE_DELTA_MAX: Final = 320.0
+#: How far a seat may be from the table it belongs to.
+SEAT_TABLE_REACH_MM: Final = 1200.0
+
+#: Items at least this tall have to be tilted up inside the room.
+TALL_ITEM_MM: Final = 1800.0
+
 
 @dataclass(frozen=True)
 class RuleSpec:
@@ -230,6 +239,7 @@ RULES: dict[str, RuleSpec] = {
         RuleSpec("safety.blocked_egress", "门扇开启撞到家具", SEVERITY_BLOCKING),
         RuleSpec("room.occupancy", "房间家具占用率异常", SEVERITY_IMPROVEMENT),
         RuleSpec("programme.service_empty", "服务房间放了无关家具", SEVERITY_IMPROVEMENT),
+        RuleSpec("assembly.tall_furniture", "高柜无法在房间内立起", SEVERITY_SIGNIFICANT),
     )
 }
 
@@ -1437,6 +1447,82 @@ def _check_service_room_use(ir: IR) -> list[Diagnostic]:
     return findings
 
 
+def _check_seat_height(ir: IR) -> list[Diagnostic]:
+    """A seat and the table it serves need a comfortable height gap."""
+    findings: list[Diagnostic] = []
+    tables = [
+        item for item in ir.furniture if not item.host and item.kind in {"dining_table", "desk"}
+    ]
+    for item in ir.furniture:
+        info = resolve(item.kind)
+        if item.host or info is None or info.category != "seat":
+            continue
+        seat_height = info.seat_height or item.h
+        nearest: Furniture | None = None
+        best_gap = SEAT_TABLE_REACH_MM
+        for table in tables:
+            gap = distance(item.center, table.center)
+            if gap < best_gap:
+                best_gap = gap
+                nearest = table
+        if nearest is None:
+            continue
+        table_info = resolve(nearest.kind)
+        delta = nearest.h - seat_height
+        if SEAT_TABLE_DELTA_MIN <= delta <= SEAT_TABLE_DELTA_MAX:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="ergonomics.seat_height",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_IMPROVEMENT,
+                message=(
+                    f"{item.name or info.label_zh} 座高 {_mm(seat_height)}，"
+                    f"{nearest.name or (table_info.label_zh if table_info else nearest.kind)} "
+                    f"高 {_mm(nearest.h)}，相差 {_mm(delta)}，"
+                    f"建议 {_mm(SEAT_TABLE_DELTA_MIN)}–{_mm(SEAT_TABLE_DELTA_MAX)}"
+                ),
+                elements=[item.id, nearest.id],
+                measured=delta,
+                required=SEAT_TABLE_DELTA_MAX
+                if delta > SEAT_TABLE_DELTA_MAX
+                else SEAT_TABLE_DELTA_MIN,
+            )
+        )
+    return findings
+
+
+def _check_tall_furniture(ir: IR) -> list[Diagnostic]:
+    """Tall pieces must be able to stand up under the ceiling."""
+    findings: list[Diagnostic] = []
+    ceiling = ir.ceiling_height or 2800.0
+    for item in ir.furniture:
+        if item.host or item.h < TALL_ITEM_MM:
+            continue
+        info = resolve(item.kind)
+        if info is None or not (info.fixed or info.category in {"storage", "kitchen"}):
+            continue
+        # Tilt about the long bottom edge: the short side is what swings up.
+        diagonal = math.hypot(min(item.w, item.d), item.h)
+        if diagonal <= ceiling + 1.0:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="assembly.tall_furniture",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_SIGNIFICANT,
+                message=(
+                    f"{item.name or info.label_zh} 高 {_mm(item.h)}、短边 {_mm(min(item.w, item.d))}，"
+                    f"立起需要 {_mm(diagonal)}，层高只有 {_mm(ceiling)}"
+                ),
+                elements=[item.id],
+                measured=diagonal,
+                required=ceiling,
+            )
+        )
+    return findings
+
+
 def _check_window_ratio(ir: IR) -> list[Diagnostic]:
     floor_area = sum(abs(polygon_area(room.polygon)) for room in ir.rooms)
     if floor_area <= 0.0:
@@ -1449,9 +1535,7 @@ def _check_window_ratio(ir: IR) -> list[Diagnostic]:
                 elements=[],
             )
         ]
-    window_area = sum(
-        opening.width * WINDOW_HEIGHT_MM for opening in ir.openings if opening.is_window
-    )
+    window_area = sum(opening.width * opening.h for opening in ir.openings if opening.is_window)
     required = floor_area / WINDOW_FLOOR_RATIO
     if window_area >= required:
         return []
@@ -1761,6 +1845,8 @@ def check_drawing(ir: IR, changed_ids: Sequence[str] | None = None) -> list[Diag
     findings.extend(_check_entry_sightline(ir))
     findings.extend(_check_door_swing(ir))
     findings.extend(_check_room_occupancy(ir))
+    findings.extend(_check_seat_height(ir))
+    findings.extend(_check_tall_furniture(ir))
     findings.extend(_check_service_room_use(ir))
     findings.extend(_check_mep_types(ir))
     findings.extend(_check_wet_appliance_services(ir))

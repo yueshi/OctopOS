@@ -57,6 +57,8 @@ class Opening:
     width: float
     angle: float = 0.0
     host: str = ""
+    #: Opening height in millimetres (door 2100, window 1800 by default).
+    h: float = 1800.0
 
     @property
     def is_window(self) -> bool:
@@ -92,6 +94,8 @@ class Furniture:
     #: Direction the user faces when using the item, in degrees (0 = +x).
     #: Unset means "no declared front"; seat rules then try every side.
     facing: float | None = None
+    #: Overall height in millimetres (catalog default when not given).
+    h: float = 800.0
 
     @property
     def center(self) -> tuple[float, float]:
@@ -155,6 +159,8 @@ class IR:
     furniture: list[Furniture] = field(default_factory=list)
     rooms: list[Room] = field(default_factory=list)
     mep: list[MEPPoint] = field(default_factory=list)
+    #: Clear floor-to-ceiling height; used by the tall-furniture rule.
+    ceiling_height: float = 2800.0
 
     def wall(self, wall_id: str) -> Wall | None:
         for wall in self.walls:
@@ -198,6 +204,7 @@ def parse_opening(raw: dict[str, Any]) -> Opening:
     kind = str(raw.get("type") or "door").strip() or "door"
     if kind not in OPENING_TYPES:
         kind = "opening"
+    default_h = 2100.0 if kind in {"door", "sliding_door"} else 1800.0
     return Opening(
         id=str(raw.get("id") or ""),
         type=kind,
@@ -206,6 +213,7 @@ def parse_opening(raw: dict[str, Any]) -> Opening:
         width=_num(raw.get("width"), 900.0) or 900.0,
         angle=_num(raw.get("angle")),
         host=str(raw.get("host") or ""),
+        h=_num(raw.get("h"), default_h) or default_h,
     )
 
 
@@ -214,6 +222,7 @@ def parse_furniture(raw: dict[str, Any]) -> Furniture:
     item = resolve(kind)
     default_w = item.w if item else 600.0
     default_d = item.d if item else 400.0
+    default_h = item.height if item else 800.0
     return Furniture(
         id=str(raw.get("id") or ""),
         x=_num(raw.get("x")),
@@ -225,6 +234,7 @@ def parse_furniture(raw: dict[str, Any]) -> Furniture:
         name=str(raw.get("name") or ""),
         host=str(raw.get("host") or ""),
         facing=(_num(raw.get("facing")) if raw.get("facing") is not None else None),
+        h=_num(raw.get("h"), default_h) or default_h,
     )
 
 
@@ -259,12 +269,14 @@ def parse_ir(raw: object) -> IR:
             return []
         return [item for item in value if isinstance(item, dict)]
 
+    ceiling = raw.get("ceiling_height")
     return IR(
         walls=[parse_wall(item) for item in items("walls")],
         openings=[parse_opening(item) for item in items("openings")],
         furniture=[parse_furniture(item) for item in items("furniture")],
         rooms=[parse_room(item) for item in items("rooms")],
         mep=[parse_mep_point(item) for item in items("mep")],
+        ceiling_height=_num(ceiling, 2800.0) or 2800.0,
     )
 
 
@@ -292,6 +304,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "width": o.width,
                 "angle": o.angle,
                 "host": o.host,
+                "h": o.h,
             }
             for o in ir.openings
         ],
@@ -307,6 +320,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "name": f.name,
                 "host": f.host,
                 "facing": f.facing,
+                "h": f.h,
             }
             for f in ir.furniture
         ],
@@ -319,6 +333,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
             }
             for r in ir.rooms
         ],
+        "ceiling_height": ir.ceiling_height,
         "mep": [
             {
                 "id": m.id,

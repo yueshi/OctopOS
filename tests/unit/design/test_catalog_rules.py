@@ -720,3 +720,83 @@ def test_bed_in_the_kitchen_is_reported() -> None:
     findings = _findings(ir, "programme.service_empty")
     assert findings
     assert "F-001" in findings[0].elements
+
+
+# --- heights ---------------------------------------------------------------
+
+
+def test_heights_default_from_the_catalog() -> None:
+    ir = parse_ir(
+        {
+            "furniture": [{"id": "F-001", "kind": "wardrobe", "x": 0, "y": 0}],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 0, "width": 900},
+                {"id": "N-001", "type": "window", "x": 0, "y": 0, "width": 900},
+            ],
+        }
+    )
+    assert ir.furniture[0].h == 2200
+    assert ir.openings[0].h == 2100
+    assert ir.openings[1].h == 1800
+    assert ir.ceiling_height == 2800
+
+
+def test_window_area_uses_the_declared_height() -> None:
+    base = {
+        "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 5000, "y2": 0, "t": 120}],
+        "openings": [
+            {"id": "N-001", "type": "window", "x": 1000, "y": 0, "width": 1000, "angle": 0}
+        ],
+        "rooms": [
+            {"id": "R-001", "name": "客厅", "polygon": [[0, 0], [5000, 0], [5000, 3800], [0, 3800]]}
+        ],
+    }
+    short = parse_ir(base)
+    assert _findings(short, "daylight.window_ratio")
+    tall = parse_ir({**base, "openings": [{**base["openings"][0], "h": 2400}]})
+    assert not _findings(tall, "daylight.window_ratio")
+
+
+def test_seat_and_table_height_gap_is_checked() -> None:
+    def plan(table_height: float | None) -> Any:
+        payload: dict[str, Any] = {"x": 600, "y": 0, "w": 1400, "d": 800, "kind": "dining_table"}
+        if table_height is not None:
+            payload["h"] = table_height
+        return parse_ir(
+            {
+                "furniture": [
+                    {"id": "F-001", "kind": "chair", "x": 0, "y": 0, "w": 450, "d": 450},
+                    {"id": "F-002", **payload},
+                ]
+            }
+        )
+
+    assert not _findings(plan(None), "ergonomics.seat_height")
+    findings = _findings(plan(1000), "ergonomics.seat_height")
+    assert findings
+    assert findings[0].measured == pytest.approx(550)
+
+
+def test_tall_wardrobe_must_stand_up_under_the_ceiling() -> None:
+    def plan(height: float) -> Any:
+        return parse_ir(
+            {
+                "ceiling_height": 2400,
+                "furniture": [
+                    {
+                        "id": "F-001",
+                        "kind": "wardrobe",
+                        "x": 0,
+                        "y": 0,
+                        "w": 1800,
+                        "d": 600,
+                        "h": height,
+                    }
+                ],
+            }
+        )
+
+    assert not _findings(plan(2200), "assembly.tall_furniture")
+    findings = _findings(plan(2350), "assembly.tall_furniture")
+    assert findings
+    assert findings[0].required == pytest.approx(2400)

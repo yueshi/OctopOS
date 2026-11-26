@@ -25,6 +25,7 @@
 - 小程序公开面统一由表级 `public_visible` 控制，取消 `published` row scope：发布弹窗新增公开范围预览（表数/行数/敏感列），个人表标记为「个人表」且公开开关禁用；需要只公开部分行时使用独立公开表/投影
 
 ### 新增
+- 装修设计支持高度：IR 增加 `ceiling_height`（默认 2800）、`furniture[].h` 与 `openings[].h`，品类目录为全部 kind 提供默认高度与座高，模板新增 `kind=setting` 行记录层高；窗面积与墙面扣减改为按真实洞口高度计算。借此解锁两条规则：`ergonomics.seat_height`（座面到桌面高差 250–320mm）与 `assembly.tall_furniture`（高柜 √(短边²+高²) 必须 ≤ 层高）
 - 装修设计补齐六条几何规则：`geometry.fixed_off_wall`（冰箱/灶具/洗碗机/洗衣机/马桶/洗手盆/浴缸/台面必须贴墙；品类目录新增 `fixed` 标记）、`daylight.service_window`（每个居住房间须在自己的外墙上开窗，内墙上的窗不计）、`privacy.entry_sightline`（从入户门沿进门方向的射线在被墙截断前不得直视床或马桶）、`safety.blocked_egress`（门扇 90° 开启扫掠不撞家具）、`room.occupancy`（家具占用率 10%–40%）、`programme.service_empty`（厨卫内不得放床/沙发/餐桌/衣柜/电视柜）
 - 装修设计的座椅、通道与隐私规则：新增 `clearance.seat_stand`（座椅前 750mm 站立空间）、`clearance.seat_walk`（750–900mm 可站不可过）、`route.width`（100mm 栅格上验证从入口到各房间存在连续 600mm 净宽通路；15m×12m 方案约 240ms）、`privacy.path`（公共区域无需穿过卧室/卫生间，按房间名推断）；家具新增可选 `facing`（使用朝向，0=+x），未声明时座椅规则取四面最好的一面，避免误报
 - 装修设计的家具/电器/水电支持：新增品类目录 `octop.infra.design.catalog`（30 余种标准 kind，含默认尺寸、类别、靠墙/湿区/电气/给排水标记与前净空阈值，别名自动归一），IR 增加 `furniture[].host`（嵌入关系，水槽在台面里、烟机在灶上，嵌入链内不算冲突）与 `mep` 水电点位（插座/开关/给水/排水/空调/燃气）；新增规则 `clearance.appliance_front`、`clearance.sanitary_front`、`clearance.kitchen_aisle`、`catalog.unknown_kind`、`mep.unknown_type`、`mep.not_recorded`、`mep.wet_appliance_services`，`safety.splash_zone` 同时识别 MEP 点位。页面按品类着色并显示图例、绘制水电点位、嵌入件以虚线区分。未知 kind 不再静默失效，而是报 `not_verifiable`
