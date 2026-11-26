@@ -69,6 +69,7 @@
   .chip.blocking { color: var(--bad); border-color: var(--bad); }
   .chip.significant { color: var(--warn); border-color: var(--warn); }
   .chip.improvement { color: var(--info); border-color: var(--info); }
+  .chip.pending { border-style: dashed; }
   .diag { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
   .diag .rule { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); }
   .notice { border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; color: var(--warn); }
@@ -165,10 +166,18 @@
     return node;
   }
 
+  // The host returns values in ``rows`` and ids/versions in a parallel
+  // ``row_meta`` array; a page that reads ``row.row_id`` off a value row gets
+  // undefined and every delete silently fails.
   async function readTable(table) {
     try {
       var page = await APP.listRows({ table: table, limit: 500 });
-      return (page && Array.isArray(page.rows)) ? page.rows : [];
+      var rows = (page && Array.isArray(page.rows)) ? page.rows : [];
+      var meta = (page && Array.isArray(page.row_meta)) ? page.row_meta : [];
+      return rows.map(function (values, index) {
+        var info = meta[index] || {};
+        return { row_id: info.row_id || "", version: info.version || 0, values: values };
+      });
     } catch (e) {
       return [];
     }
@@ -240,6 +249,23 @@
       }
     });
     return { walls: walls, openings: openings, furniture: furniture };
+  }
+
+  function polygonCentroid(points) {
+    var area = 0, cx = 0, cy = 0;
+    for (var i = 0; i < points.length; i += 1) {
+      var p1 = points[i], p2 = points[(i + 1) % points.length];
+      var cross = p1[0] * p2[1] - p2[0] * p1[1];
+      area += cross;
+      cx += (p1[0] + p2[0]) * cross;
+      cy += (p1[1] + p2[1]) * cross;
+    }
+    if (Math.abs(area) < 1e-6) {
+      var sx = 0, sy = 0;
+      points.forEach(function (p) { sx += p[0]; sy += p[1]; });
+      return [sx / points.length, sy / points.length];
+    }
+    return [cx / (3 * area), cy / (3 * area)];
   }
 
   function severityMap() {
@@ -345,6 +371,25 @@
       }
     });
 
+    state.rooms.forEach(function (row) {
+      var v = vals(row);
+      var payload = parseJSON(v.payload, {}) || {};
+      var polygon = Array.isArray(payload.polygon) ? payload.polygon : [];
+      if (polygon.length < 3) return;
+      var centroid = polygonCentroid(polygon);
+      var area = num(v.area_mm2, 0) / 1000000;
+      var label = svgEl("text", {
+        x: tx + scale * centroid[0],
+        y: ty - scale * centroid[1],
+        "text-anchor": "middle",
+        "font-size": 12,
+        fill: "currentColor",
+        opacity: "0.75"
+      });
+      label.textContent = String(v.name || "") + (area > 0 ? " · " + area.toFixed(1) + "㎡" : "");
+      svg.appendChild(label);
+    });
+
     var barLength = 1000 * scale;
     var barY = height - 18;
     svg.appendChild(svgEl("line", {
@@ -404,6 +449,12 @@
       chip.className = "chip " + String(v.severity || "").toLowerCase();
       chip.textContent = String(v.severity || "");
       head.appendChild(chip);
+      if (String(v.status || "") === "not_verifiable") {
+        var pending = document.createElement("span");
+        pending.className = "chip pending";
+        pending.textContent = "待专业确认";
+        head.appendChild(pending);
+      }
       var rule = document.createElement("span");
       rule.className = "rule";
       rule.textContent = String(v.rule_id || "");
@@ -451,7 +502,9 @@
       columns.forEach(function (column) {
         var td = document.createElement("td");
         var value = v[column.key];
-        td.textContent = value == null ? "" : String(value);
+        td.textContent = column.format
+          ? column.format(value)
+          : (value == null ? "" : String(value));
         tr.appendChild(td);
       });
       body.appendChild(tr);
@@ -530,7 +583,10 @@
     renderDiagnostics();
     renderTable($("roomWrap"), state.rooms, [
       { key: "name", label: "房间" },
-      { key: "area_mm2", label: "面积 (mm²)" },
+      { key: "area_mm2", label: "面积 (m²)", format: function (value) {
+        var area = Number(value);
+        return isFinite(area) && area > 0 ? (area / 1000000).toFixed(1) : "";
+      } },
       { key: "source", label: "来源" }
     ]);
     renderTable($("bomWrap"), state.bom, [

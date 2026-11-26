@@ -52,13 +52,23 @@ window.__rows = {
       room_id: "R-001", name: "客厅", area_mm2: 12000000, source: "t",
       payload: JSON.stringify({polygon:[[0,0],[4000,0],[4000,3000],[0,3000]]}) } }
   ],
-  diagnostics: [],
+  diagnostics: [
+    { row_id: "d0", version: 1, values: {
+      rule_id: "ventilation.service_room", severity: "blocking", status: "not_verifiable",
+      message: "旧诊断，应在重新校验时被替换", elements: "", acknowledged: false } }
+  ],
   bom: []
 };
 window.octopApp = {
   listRows: function (options) {
     var table = (options || {}).table || "main";
-    return Promise.resolve({ rows: (window.__rows[table] || []).slice() });
+    var stored = window.__rows[table] || [];
+    return Promise.resolve({
+      rows: stored.map(function (item) { return item.values; }),
+      row_meta: stored.map(function (item) {
+        return { row_id: item.row_id, version: item.version };
+      })
+    });
   },
   tables: function () {
     return Promise.resolve(Object.keys(window.__rows).map(function (key) {
@@ -139,6 +149,11 @@ def test_page_sends_kind_and_highlights_the_finding(browser: Any) -> None:
             "Array.from(document.querySelectorAll('#plan rect, #plan line'))"
             ".filter(function (n) { return n.getAttribute('stroke') === '#dc2626'; }).length"
         )
+        # The stale row must be replaced, not appended next to: the page has to
+        # read row ids from ``row_meta``, or the delete silently no-ops.
+        remaining = page.evaluate(
+            "window.__rows.diagnostics.map(function (r) { return r.values.rule_id; })"
+        )
     finally:
         page.close()
 
@@ -160,3 +175,6 @@ def test_page_sends_kind_and_highlights_the_finding(browser: Any) -> None:
 
     # A blocking finding colours the element it points at.
     assert red >= 1
+
+    # The stale row was replaced rather than duplicated.
+    assert remaining == ["clearance.wardrobe_front"], remaining
