@@ -48,7 +48,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 
 - 42 个 `app_*` Agent 工具（含 3 个 setup plan 工具、3 个只读集成诊断工具、8 个 HITL 集成运维工具、4 个 AI 任务工具）；约 156 个 MiniApp 相关 HTTP 路由（apps 108、成员/邀请/加入码 16、guest 门户 7、公开面 6、访问申请 4、看板 6 等），另含平台级 `external_events` 路由。
 - 每个用户最多 50 个应用；每个应用最多 12 张表、每表 50 列、2 万行、5 MB。
-- 单行读取上限 500；单文件 HTML 上限 512 KB；素材单文件 5 MB；扩展服务上传上限 50 MB（SDK 4 MB 分片）。
+- 单行读取上限 500；单文件 HTML 上限 1 MB；素材单文件 5 MB；扩展服务上传上限 50 MB（SDK 4 MB 分片）。
 - 14 个应用能力位：13 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
 - 页面 SDK 23 个顶层方法；`service(name)` 下 8 个子方法（`call` / `callDetailed` / `image` / `invoke` / `operation` / `resolveOperation` / `upload` / `mediaUrl`）。
 - 系统模板 7 个（客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片）。
@@ -151,7 +151,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 | 行 / 表 | 20,000 |
 | 单表数据 | 5 MB |
 | 单元格 | 10,000 字符 |
-| HTML | 512 KB |
+| HTML | 1 MB |
 | 素材 | 5 MB / 文件 |
 | 预览 SVG | 256 KB |
 | 协作者 / 应用 | 50 |
@@ -466,7 +466,7 @@ MiniApp 的界面就是**一个文件**：`apps/<app_id>/app.html`。它由模�
 | 项 | 规则 | 位置 |
 |---|---|---|
 | 位置 | owning Agent 工作区下的 `apps/<app_id>/app.html` | `service.py:242`（`APPS_DIR` / `FILE_HTML`） |
-| 大小 | UTF-8 编码后 ≤ **512 KB**（`MAX_HTML_BYTES`） | `models.py:42` |
+| 大小 | UTF-8 编码后 ≤ **1 MB**（`MAX_HTML_BYTES`） | `models.py:42` |
 | 编码 | 必须 UTF-8，不能含 NUL 字节 | `validate_html` |
 | 结构 | 必须至少含一个标签；`<html>` / `<head>` / `<body>` 缺失时由宿主补齐 | `sandbox.py:205` |
 | 资源 | CSS / JS / 图片 / 字体全部**内联**；图片只能用 `data:` / `blob:` URL | 见下方校验规则 |

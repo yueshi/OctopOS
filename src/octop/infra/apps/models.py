@@ -39,7 +39,7 @@ MAX_DESCRIPTION_LEN = 2000
 MAX_ENUM_VALUES = 100
 MAX_ENUM_VALUE_LEN = 200
 MAX_CELL_LEN = 10_000
-MAX_HTML_BYTES = 512 * 1024
+MAX_HTML_BYTES = 1024 * 1024
 MAX_CSV_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 20_000
 MAX_ROW_READ = 500
@@ -545,7 +545,7 @@ def validate_html(raw: str) -> str:
     if len(data) > MAX_HTML_BYTES:
         raise _invalid(
             ErrorCode.APP_HTML_INVALID,
-            f"HTML must be at most {MAX_HTML_BYTES // 1024} KB",
+            f"HTML must be at most {MAX_HTML_BYTES // (1024 * 1024)} MB",
             max_kb=MAX_HTML_BYTES // 1024,
         )
     if "\x00" in html:
