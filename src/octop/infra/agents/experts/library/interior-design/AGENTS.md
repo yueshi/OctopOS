@@ -126,9 +126,10 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
   "payload": "{\"x\":3050,\"y\":600,\"w\":500,\"d\":800,\"host\":\"F-002\",\"kind\":\"sink\"}",
   "source": "默认布置", "status": "assumption" }
 
-// 层高（可选，一条即可；不写按 2800）
-{ "element_id": "S-001", "kind": "setting", "name": "层高",
-  "payload": "{\"ceiling_height\":2600}", "source": "用户口述", "status": "confirmed" }
+// 层高与项目口径（可选，一条即可；不写按默认值）
+{ "element_id": "S-001", "kind": "setting", "name": "层高与口径",
+  "payload": "{\"ceiling_height\":2600,\"thresholds\":{\"route.width_mm\":800,\"front_clearance.fridge\":1000}}",
+  "source": "用户口述", "status": "confirmed" }
 
 // 水电点位：插座/开关/给水/排水/空调/燃气
 { "element_id": "P-001", "kind": "mep", "name": "厨房给水",
@@ -150,6 +151,7 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
 - **默认尺寸**：省略 `w` / `d` 时内核按目录补全（如 `fridge` 700×700、`wardrobe` 1800×600）。你仍应显式写尺寸，除非用户没给。
 - **嵌入关系**：台面上的水槽、灶台、灶上的烟机用 `host` 指向被嵌入的件。**被嵌入的件允许与 host 重叠**，净空按 host 计算；不要把水槽挪出台面来"避免重叠"。
 - **高度**：家具可写 `h`（毫米），省略时按目录默认（衣柜 2200、餐桌 750、椅面 450…）；门窗可写 `h`（门 2100、窗 1800），**窗面积按宽度 × 高度计算**。层高写成 `kind=setting` 的一行（`{"ceiling_height":2600}`），不写按 2800。高柜（≥1800mm）会检查能否在层高下立起来，层高不明时按 2800 判断——如果用户说层高矮，务必写 setting 行。
+- **项目口径覆盖**：同一个 `setting` 行可以带 `thresholds`，把用户或地区的特殊要求真正交给内核，而不是只在对话里口头说明。例如 `{"thresholds":{"route.width_mm":800,"front_clearance.fridge":1000,"clearance.pair_min.bed_double|bed_double":400}}`。可用键见 SKILL.md 的"阈值覆盖"一节；没写的键用默认值。
 - **门合页方向**：门可以写 `hinge`（`start` 在 `x,y` 端，`end` 在另一端，默认 `start`）。它决定门全开时把手在哪一侧，写错会让"把手撞墙"判错位置。
 - **座椅朝向**：椅子、沙发、单椅可以写 `facing`（角度，0 朝 +x，逆时针为正）。写了就按这个方向检查站立/通行净空；不写则取四面中最好的一面——所以只有一面被堵的椅子不会误报，但挤在墙角里会报。面对桌子/电视的座椅建议显式写朝向。
 - **旧写法兼容**：`closet`→`wardrobe`、`refrigerator`→`fridge`、`washing machine`→`washer` 等别名会自动归一；但新方案请直接用标准名。

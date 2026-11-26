@@ -91,6 +91,22 @@ argument-hint: "<要核对的方案或问题>"
 
 **高度**：家具可写 `h`（毫米），省略时按品类目录的默认高度（衣柜 2200、餐桌 750、椅面 450…）。门窗也可写 `h`（门默认 2100、窗默认 1800），**窗面积按 `width × h` 计算**，所以层高或窗型特殊时要显式写。层高用一条 `kind=setting` 的行记录：`{"ceiling_height": 2600}`，不写按 2800。
 
+**阈值覆盖（把"按用户要求"真正交给内核）**：`kind=setting` 行的 `payload.thresholds` 可覆盖以下键，未写的用默认值：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `route.width_mm` | 600 | 连续通行的最小净宽 |
+| `clearance.seat_stand_mm` / `clearance.seat_walk_mm` | 750 / 900 | 座椅背后站立 / 通行 |
+| `clearance.handle_mm` | 100 | 门全开时把手净空 |
+| `clearance.storage_front_mm` | 700 | 储物类未逐类声明时的前净空 |
+| `front_clearance.<kind>` | 目录值 | 单个品类的净空，如 `front_clearance.fridge`；写 0 = 无需 |
+| `daylight.window_floor_ratio` | 8 | 窗地比分母（窗面积 ≥ 地面 ÷ 该值） |
+| `room.occupancy_min` / `room.occupancy_max` | 0.10 / 0.40 | 家具占用率区间 |
+| `safety.splash_zone_mm` | 600 | 湿区溅水半径 |
+| `mep.service_radius_mm` | 1500 | 用水器具到给排水点的最大距离 |
+| `programme.min_area.<kind>` | 内置 | 房间最小面积（mm²），kind 为 living/bedroom/kitchen/bathroom/balcony/study |
+| `clearance.pair_min.<a>|<b>` | 内置表 | 指定配对的最小间距，如 `clearance.pair_min.bed_double|bed_double` |
+
 **门合页方向**：门可以写 `hinge`（`start` 或 `end`，默认 `start`），决定门扇打开 90° 后把手落在哪一侧；写错会让把手净空判在错误的位置。
 
 **座椅朝向**：座椅/沙发可以写 `facing`（角度，0 朝 +x，逆时针为正）声明使用时的朝向；不写则取四面中最好的一面判定——所以"只有一面被堵"的椅子不会误报，但明显挤在墙角里会报。

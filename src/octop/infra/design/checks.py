@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
-from octop.infra.design.catalog import MEP_TYPES, resolve
+from octop.infra.design.catalog import MEP_TYPES, CatalogItem, resolve
 from octop.infra.design.geometry import (
     Point,
     collinear_overlap_length,
@@ -129,6 +129,49 @@ MIN_ROOM_AREA_MM2: Final[dict[str, float]] = {
     "bathroom": 3_000_000.0,
     "balcony": 1_500_000.0,
 }
+
+
+def _limit(ir: IR, key: str, default: float) -> float:
+    """Read a per-plan threshold override, falling back to the default."""
+    value = ir.thresholds.get(key)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _kind_front_clearance(ir: IR, info: CatalogItem) -> tuple[float, bool]:
+    """Per-kind front clearance and whether it was stated for this kind.
+
+    ``(0.0, True)`` means "this kind needs none" (a bedside table), which is
+    different from "not stated" — the category default only applies then.
+    """
+    override = ir.thresholds.get(f"front_clearance.{info.kind}")
+    if override is not None:
+        return float(override), True
+    if info.front_clearance is not None:
+        return float(info.front_clearance), True
+    return 0.0, False
+
+
+#: Room kind by name, for rules that key on the kind rather than the label.
+ROOM_KIND_WORDS: Final[dict[str, tuple[str, ...]]] = {
+    "living": ("客厅", "起居", "living"),
+    "bedroom": ("卧室", "主卧", "次卧", "儿童房", "老人房", "bedroom"),
+    "kitchen": ("厨房", "kitchen"),
+    "bathroom": ("卫生间", "浴室", "客卫", "主卫", "bath", "toilet"),
+    "balcony": ("阳台", "balcony"),
+    "study": ("书房", "study"),
+}
+
+
+def _room_kind(room: Room) -> str:
+    for kind, words in ROOM_KIND_WORDS.items():
+        if _room_is(room, words):
+            return kind
+    return ""
 
 
 #: Rooms that need their own exterior window.
@@ -711,13 +754,13 @@ def _hosted_within(item: Furniture, host_id: str, by_id: dict[str, Furniture]) -
 def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
     def select(item: Furniture) -> float | None:
         info = resolve(item.kind)
+        default = _limit(ir, "clearance.storage_front_mm", STORAGE_FRONT_CLEARANCE_MM)
         if info is not None:
             if info.category != "storage":
                 return None
-            if info.front_clearance is not None:
-                return info.front_clearance or None
-            return STORAGE_FRONT_CLEARANCE_MM
-        return STORAGE_FRONT_CLEARANCE_MM if item.kind.lower() in STORAGE_KINDS else None
+            required, stated = _kind_front_clearance(ir, info)
+            return required or None if stated else default
+        return default if item.kind.lower() in STORAGE_KINDS else None
 
     return _front_clearance(
         ir,
@@ -730,9 +773,10 @@ def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
 def _check_appliance_clearance(ir: IR) -> list[Diagnostic]:
     def select(item: Furniture) -> float | None:
         info = resolve(item.kind)
-        if info is None or not info.appliance or not info.front_clearance:
+        if info is None or not info.appliance:
             return None
-        return info.front_clearance
+        required, _stated = _kind_front_clearance(ir, info)
+        return required or None
 
     return _front_clearance(
         ir,
@@ -745,9 +789,10 @@ def _check_appliance_clearance(ir: IR) -> list[Diagnostic]:
 def _check_sanitary_clearance(ir: IR) -> list[Diagnostic]:
     def select(item: Furniture) -> float | None:
         info = resolve(item.kind)
-        if info is None or info.category != "sanitary" or not info.front_clearance:
+        if info is None or info.category != "sanitary":
             return None
-        return info.front_clearance
+        required, _stated = _kind_front_clearance(ir, info)
+        return required or None
 
     return _front_clearance(
         ir,
@@ -762,7 +807,8 @@ def _check_kitchen_aisle(ir: IR) -> list[Diagnostic]:
         info = resolve(item.kind)
         if info is None or info.category != "kitchen" or info.appliance:
             return None
-        return info.front_clearance
+        required, _stated = _kind_front_clearance(ir, info)
+        return required or None
 
     return _front_clearance(
         ir,
@@ -932,30 +978,32 @@ def _seat_directions(item: Furniture) -> list[Point]:
 def _check_seat_clearance(ir: IR) -> list[Diagnostic]:
     """A seat needs room to stand up (and better, to walk behind)."""
     findings: list[Diagnostic] = []
+    stand = _limit(ir, "clearance.seat_stand_mm", SEAT_STAND_MM)
+    walk_limit = _limit(ir, "clearance.seat_walk_mm", SEAT_WALK_MM)
     for item in ir.furniture:
         info = resolve(item.kind)
         if item.host or info is None or info.kind not in SEAT_RULE_KINDS:
             continue
         best = max(_clearance_ahead(ir, item, d)[0] for d in _seat_directions(item))
-        if best >= SEAT_WALK_MM:
+        if best >= walk_limit:
             continue
-        walk = best >= SEAT_STAND_MM
+        walk = best >= stand
         findings.append(
             Diagnostic(
                 rule_id="clearance.seat_walk" if walk else "clearance.seat_stand",
                 status=STATUS_NON_COMPLIANT,
                 severity=SEVERITY_IMPROVEMENT if walk else SEVERITY_SIGNIFICANT,
                 message=(
-                    f"{item.name or info.label_zh} 前净空 {_mm(best)}，"
+                    f"{item.name or info.label_zh} 背后净空 {_mm(best)}，"
                     + (
-                        f"可站立但通行不足 {_mm(SEAT_WALK_MM)}"
+                        f"可站立但通行不足 {_mm(walk_limit)}"
                         if walk
-                        else f"不足站立所需的 {_mm(SEAT_STAND_MM)}"
+                        else f"不足站立所需的 {_mm(stand)}"
                     )
                 ),
                 elements=[item.id],
                 measured=best,
-                required=SEAT_WALK_MM if walk else SEAT_STAND_MM,
+                required=walk_limit if walk else stand,
             )
         )
     return findings
@@ -1060,7 +1108,8 @@ def _check_route_width(ir: IR) -> list[Diagnostic]:
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     step = ROUTE_GRID_MM
-    half_width = ROUTE_WIDTH_MM / 2
+    width = _limit(ir, "route.width_mm", ROUTE_WIDTH_MM)
+    half_width = width / 2
     cols = int((max_x - min_x) / step) + 1
     rows = int((max_y - min_y) / step) + 1
     if cols <= 0 or rows <= 0 or cols * rows > 400_000:
@@ -1195,12 +1244,12 @@ def _check_route_width(ir: IR) -> list[Diagnostic]:
                 status=STATUS_NON_COMPLIANT,
                 severity=SEVERITY_BLOCKING,
                 message=(
-                    f"在 {_mm(ROUTE_WIDTH_MM)} 净宽要求下，从入口无法到达{room.name or room.id}"
+                    f"在 {_mm(width)} 净宽要求下，从入口无法到达{room.name or room.id}"
                     "（门洞存在，但通路被家具或墙体收窄）"
                 ),
                 elements=[room.id],
-                measured=ROUTE_WIDTH_MM,
-                required=ROUTE_WIDTH_MM,
+                measured=width,
+                required=width,
             )
         )
     return findings
@@ -1435,7 +1484,9 @@ def _check_room_occupancy(ir: IR) -> list[Diagnostic]:
             if point_in_polygon(item.center, room.polygon):
                 used += item.w * item.d
         ratio = used / area
-        if ROOM_OCCUPANCY_MIN <= ratio <= ROOM_OCCUPANCY_MAX:
+        low = _limit(ir, "room.occupancy_min", ROOM_OCCUPANCY_MIN)
+        high = _limit(ir, "room.occupancy_max", ROOM_OCCUPANCY_MAX)
+        if low <= ratio <= high:
             continue
         findings.append(
             Diagnostic(
@@ -1444,11 +1495,11 @@ def _check_room_occupancy(ir: IR) -> list[Diagnostic]:
                 severity=SEVERITY_IMPROVEMENT,
                 message=(
                     f"{room.name or room.id} 家具占用率 {ratio * 100:.0f}%，"
-                    f"建议保持在 {ROOM_OCCUPANCY_MIN * 100:.0f}%–{ROOM_OCCUPANCY_MAX * 100:.0f}%"
+                    f"建议保持在 {low * 100:.0f}%–{high * 100:.0f}%"
                 ),
                 elements=[room.id],
                 measured=ratio,
-                required=ROOM_OCCUPANCY_MAX if ratio > ROOM_OCCUPANCY_MAX else ROOM_OCCUPANCY_MIN,
+                required=high if ratio > high else low,
             )
         )
     return findings
@@ -1587,7 +1638,8 @@ def _check_door_handle(ir: IR) -> list[Diagnostic]:
             if item.host:
                 continue
             clearance = min(clearance, point_to_polygon_distance(handle, item.corners()))
-        if clearance >= HANDLE_CLEARANCE_MM:
+        required = _limit(ir, "clearance.handle_mm", HANDLE_CLEARANCE_MM)
+        if clearance >= required:
             continue
         findings.append(
             Diagnostic(
@@ -1596,11 +1648,11 @@ def _check_door_handle(ir: IR) -> list[Diagnostic]:
                 severity=SEVERITY_IMPROVEMENT,
                 message=(
                     f"门 {door.id or '未命名'} 全开时把手侧净空 {_mm(clearance)}，"
-                    f"小于 {_mm(HANDLE_CLEARANCE_MM)}"
+                    f"小于 {_mm(required)}"
                 ),
                 elements=[door.id],
                 measured=clearance,
-                required=HANDLE_CLEARANCE_MM,
+                required=required,
             )
         )
     return findings
@@ -1632,9 +1684,11 @@ def _check_pair_clearance(ir: IR) -> list[Diagnostic]:
                 second_room = _room_id_for(second, rooms)
                 if first_room and second_room and first_room != second_room:
                     continue
-            key = tuple(sorted((first.kind, second.kind)))
-            required = PAIR_CLEARANCE_MM.get(key)  # type: ignore[arg-type]
+            pair_key = "|".join(sorted((first.kind, second.kind)))
+            required = ir.thresholds.get(f"clearance.pair_min.{pair_key}")
             if required is None:
+                required = PAIR_CLEARANCE_MM.get((first.kind, second.kind))
+            if required is None or required <= 0:
                 continue
             gap = polygon_distance(first.corners(), second.corners())
             if gap >= required:
@@ -1672,7 +1726,7 @@ def _check_window_ratio(ir: IR) -> list[Diagnostic]:
             )
         ]
     window_area = sum(opening.width * opening.h for opening in ir.openings if opening.is_window)
-    required = floor_area / WINDOW_FLOOR_RATIO
+    required = floor_area / _limit(ir, "daylight.window_floor_ratio", WINDOW_FLOOR_RATIO)
     if window_area >= required:
         return []
     return [
@@ -1694,8 +1748,12 @@ def _check_window_ratio(ir: IR) -> list[Diagnostic]:
 def _check_min_area(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
     for room in ir.rooms:
-        kind = room.name.strip().lower()
-        required = MIN_ROOM_AREA_MM2.get(kind)
+        kind = _room_kind(room)
+        if not kind:
+            continue
+        required = ir.thresholds.get(f"programme.min_area.{kind}")
+        if required is None:
+            required = MIN_ROOM_AREA_MM2.get(kind)
         if required is None:
             continue
         area = abs(polygon_area(room.polygon))
@@ -1802,13 +1860,14 @@ def _check_splash_zone(ir: IR) -> list[Diagnostic]:
     placed as furniture, so older plans keep being checked.
     """
     findings: list[Diagnostic] = []
+    zone = _limit(ir, "safety.splash_zone_mm", SPLASH_ZONE_MM)
     wet = [item for item in ir.furniture if _is_wet(item)]
     for wet_item in wet:
         for item in ir.furniture:
             if item.id == wet_item.id or not _is_electrical(item):
                 continue
             gap = distance(wet_item.center, item.center)
-            if gap > SPLASH_ZONE_MM:
+            if gap > zone:
                 continue
             findings.append(
                 Diagnostic(
@@ -1817,18 +1876,18 @@ def _check_splash_zone(ir: IR) -> list[Diagnostic]:
                     severity=SEVERITY_BLOCKING,
                     message=(
                         f"{item.name or item.id} 距 {wet_item.name or wet_item.id} 仅 {_mm(gap)}，"
-                        f"落在 {_mm(SPLASH_ZONE_MM)} 溅水范围内"
+                        f"落在 {_mm(zone)} 溅水范围内"
                     ),
                     elements=[item.id, wet_item.id],
                     measured=gap,
-                    required=SPLASH_ZONE_MM,
+                    required=zone,
                 )
             )
         for point in ir.mep:
             if point.type not in {"socket", "switch"}:
                 continue
             gap = distance(wet_item.center, (point.x, point.y))
-            if gap > SPLASH_ZONE_MM:
+            if gap > zone:
                 continue
             findings.append(
                 Diagnostic(
@@ -1838,11 +1897,11 @@ def _check_splash_zone(ir: IR) -> list[Diagnostic]:
                     message=(
                         f"水电点位 {point.id or '未命名'}（{point.type}）距 "
                         f"{wet_item.name or wet_item.id} 仅 {_mm(gap)}，"
-                        f"落在 {_mm(SPLASH_ZONE_MM)} 溅水范围内"
+                        f"落在 {_mm(zone)} 溅水范围内"
                     ),
                     elements=[point.id, wet_item.id],
                     measured=gap,
-                    required=SPLASH_ZONE_MM,
+                    required=zone,
                 )
             )
     return findings
@@ -1905,21 +1964,22 @@ def _check_wet_appliance_services(ir: IR) -> list[Diagnostic]:
                 status=STATUS_NON_COMPLIANT,
                 severity=SEVERITY_IMPROVEMENT,
                 message=(
-                    f"{item.name or info.label_zh} 附近 {_mm(WET_APPLIANCE_SERVICE_RADIUS_MM)} 内"
+                    f"{item.name or info.label_zh} 附近 "
+                    f"{_mm(_limit(ir, 'mep.service_radius_mm', WET_APPLIANCE_SERVICE_RADIUS_MM))} 内"
                     f"缺少{'、'.join(missing)}点位"
                 ),
                 elements=[item.id],
-                measured=WET_APPLIANCE_SERVICE_RADIUS_MM,
-                required=WET_APPLIANCE_SERVICE_RADIUS_MM,
+                measured=_limit(ir, "mep.service_radius_mm", WET_APPLIANCE_SERVICE_RADIUS_MM),
+                required=_limit(ir, "mep.service_radius_mm", WET_APPLIANCE_SERVICE_RADIUS_MM),
             )
         )
     return findings
 
 
 def _has_point_near(ir: IR, item: Furniture, point_type: str) -> bool:
+    radius = _limit(ir, "mep.service_radius_mm", WET_APPLIANCE_SERVICE_RADIUS_MM)
     return any(
-        point.type == point_type
-        and distance(item.center, (point.x, point.y)) <= WET_APPLIANCE_SERVICE_RADIUS_MM
+        point.type == point_type and distance(item.center, (point.x, point.y)) <= radius
         for point in ir.mep
     )
 

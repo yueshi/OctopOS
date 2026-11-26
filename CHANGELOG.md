@@ -25,6 +25,7 @@
 - 小程序公开面统一由表级 `public_visible` 控制，取消 `published` row scope：发布弹窗新增公开范围预览（表数/行数/敏感列），个人表标记为「个人表」且公开开关禁用；需要只公开部分行时使用独立公开表/投影
 
 ### 新增
+- 装修设计支持按项目覆盖阈值：IR 增加 `thresholds`，模板的 `kind=setting` 行可携带（如 `{"route.width_mm":800,"front_clearance.fridge":1000}`），覆盖通道净宽、座椅站立/通行、门把手、储物前净空、按品类净空（`front_clearance.<kind>`）、窗地比、占用率区间、溅水半径、给排水服务半径、房间最小面积与配对间距；未写的键沿用默认值。同时修正 `programme.min_area` 只认英文房间名的问题（现在按中英文关键词识别房间类型）
 - 装修设计补齐最后两条平面规则：`clearance.handle`（门全开时把手侧 100mm 净空；门新增 `hinge=start|end` 说明合页侧）与 `clearance.pair_min`（床–床 600、床–书桌 500、沙发/单椅–茶几 300 等默认配对表，未列组合不判）
 - 装修设计支持高度：IR 增加 `ceiling_height`（默认 2800）、`furniture[].h` 与 `openings[].h`，品类目录为全部 kind 提供默认高度与座高，模板新增 `kind=setting` 行记录层高；窗面积与墙面扣减改为按真实洞口高度计算。借此解锁两条规则：`ergonomics.seat_height`（座面到桌面高差 250–320mm）与 `assembly.tall_furniture`（高柜 √(短边²+高²) 必须 ≤ 层高）
 - 装修设计补齐六条几何规则：`geometry.fixed_off_wall`（冰箱/灶具/洗碗机/洗衣机/马桶/洗手盆/浴缸/台面必须贴墙；品类目录新增 `fixed` 标记）、`daylight.service_window`（每个居住房间须在自己的外墙上开窗，内墙上的窗不计）、`privacy.entry_sightline`（从入户门沿进门方向的射线在被墙截断前不得直视床或马桶）、`safety.blocked_egress`（门扇 90° 开启扫掠不撞家具）、`room.occupancy`（家具占用率 10%–40%）、`programme.service_empty`（厨卫内不得放床/沙发/餐桌/衣柜/电视柜）

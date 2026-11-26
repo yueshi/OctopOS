@@ -242,6 +242,7 @@
     var furniture = [];
     var mep = [];
     var ceiling = null;
+    var thresholds = null;
     state.elements.forEach(function (row) {
       var v = vals(row);
       var kind = String(v.kind || "").toLowerCase();
@@ -281,6 +282,9 @@
         });
       } else if (kind === "setting") {
         if (payload.ceiling_height != null) ceiling = num(payload.ceiling_height, 0);
+        if (payload.thresholds && typeof payload.thresholds === "object") {
+          thresholds = payload.thresholds;
+        }
       } else if (kind === "mep") {
         mep.push({
           id: id,
@@ -290,7 +294,10 @@
         });
       }
     });
-    return { walls: walls, openings: openings, furniture: furniture, mep: mep, ceiling: ceiling };
+    return {
+      walls: walls, openings: openings, furniture: furniture, mep: mep,
+      ceiling: ceiling, thresholds: thresholds
+    };
   }
 
   function polygonCentroid(points) {
@@ -596,6 +603,7 @@
       mep: geo.mep
     };
     if (geo.ceiling) ir.ceiling_height = geo.ceiling;
+    if (geo.thresholds) ir.thresholds = geo.thresholds;
     return ir;
   }
 

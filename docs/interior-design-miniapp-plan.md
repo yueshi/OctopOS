@@ -209,6 +209,7 @@ python -m octop.infra.design --mcp            # MCP  8849：给专家
 - `furniture[].kind` **必须来自品类目录**（`src/octop/infra/design/catalog.py`）：床、座椅、桌台、储物、厨房、洗衣、洁具共 30 余种，带默认尺寸与语义标记；写目录外的名字会报 `catalog.unknown_kind`（`not_verifiable`），不会静默失效。常见别名（`refrigerator` / `washing machine` / `closet`…）会自动归一。
 - `furniture[].host`：嵌入关系（水槽在台面里、烟机在灶上）。嵌入链内的重叠不算冲突、净空按被嵌入件计算，支持嵌套（烟机→灶台→台面）。
 - `ceiling_height`（可选，默认 2800）、`furniture[].h`、`openings[].h`：高度以毫米计；省略时家具用品类默认高度，门 2100、窗 1800。窗面积按 `width × h` 计算。
+- `thresholds`（可选）：按项目覆盖默认口径，键与默认值见下表；页面从 `kind=setting` 行的 `payload.thresholds` 原样透传。
 - `mep[].type` ∈ `socket` / `switch` / `water` / `drain` / `ac` / `gas`。水电点位与家具分开建模；旧的"插座当家具"写法仍然识别，但新方案请用 `mep`。
 - 家具省略 `w` / `d` 时按目录默认值补全（`fridge` 700×700、`wardrobe` 1800×600 等）。
 
@@ -358,6 +359,26 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `ventilation.service_room` | 恒返回 `not_verifiable` | blocking |
 
 家具与电器的语义来自 `src/octop/infra/design/catalog.py`（类别、默认尺寸、靠墙/湿区/电气/给排水标记、前净空阈值）。`host` 表示嵌入关系（水槽在台面里、烟机在灶上）：嵌入链内的重叠不算冲突，净空按被嵌入件计算，支持嵌套。
+
+### 4.6 可覆盖阈值
+
+默认值集中在内核常量与品类目录里，运行时按 `IR.thresholds` 覆盖（页面从 `setting` 行读取，专家可直接写入）：
+
+| 键 | 默认 |
+|---|---|
+| `route.width_mm` | 600 |
+| `clearance.seat_stand_mm` / `clearance.seat_walk_mm` | 750 / 900 |
+| `clearance.handle_mm` | 100 |
+| `clearance.storage_front_mm` | 700 |
+| `front_clearance.<kind>` | 目录值（0 = 无需） |
+| `daylight.window_floor_ratio` | 8 |
+| `room.occupancy_min` / `room.occupancy_max` | 0.10 / 0.40 |
+| `safety.splash_zone_mm` | 600 |
+| `mep.service_radius_mm` | 1500 |
+| `programme.min_area.<kind>` | 内置表（mm²） |
+| `clearance.pair_min.<a>|<b>` | 内置表 |
+
+两套 fixture 在默认阈值下的诊断与算量由 `test_plan_fixtures.py` 冻结，改动默认值会立刻在快照里显示。
 
 `route.width` 用 100mm 栅格 + 300mm 内缩近似"连续 600mm 净宽"，因此存在一个栅格步长的误差；15m×12m、24 件家具的方案实测约 240ms。`privacy.path` 依赖房间名（中英文关键词）判断私密性，房间命名不规范时该规则会跳过而不是误报。
 

@@ -57,6 +57,10 @@ window.__rows = {
     { row_id: "r7", version: 1, values: {
       element_id: "P-001", kind: "mep", name: "给水",
       payload: JSON.stringify({type:"water",x:3100,y:700}),
+      source: "t", status: "confirmed" } },
+    { row_id: "r8", version: 1, values: {
+      element_id: "S-001", kind: "setting", name: "层高与口径",
+      payload: JSON.stringify({ceiling_height:2600,thresholds:{"route.width_mm":800}}),
       source: "t", status: "confirmed" } }
   ],
   rooms: [
@@ -183,6 +187,9 @@ def test_page_sends_kind_and_highlights_the_finding(browser: Any) -> None:
     assert furniture_by_id["F-003"]["host"] == "F-002"
     # MEP points travel with the IR too.
     assert ir["mep"] == [{"id": "P-001", "type": "water", "x": 3100, "y": 700, "height": 0}]
+    # A setting row carries the ceiling and the per-plan thresholds.
+    assert ir["ceiling_height"] == 2600
+    assert ir["thresholds"] == {"route.width_mm": 800}
 
     # The diagnostics come back and the page writes them into its table.
     diagnostics = [item for item in appended if item["table"] == "diagnostics"]

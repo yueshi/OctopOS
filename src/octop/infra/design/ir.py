@@ -163,6 +163,9 @@ class IR:
     mep: list[MEPPoint] = field(default_factory=list)
     #: Clear floor-to-ceiling height; used by the tall-furniture rule.
     ceiling_height: float = 2800.0
+    #: Per-plan threshold overrides, e.g. ``route.width_mm``. Unset keys keep
+    #: the documented defaults; see ``docs/interior-design-miniapp-plan.md``.
+    thresholds: dict[str, float] = field(default_factory=dict)
 
     def wall(self, wall_id: str) -> Wall | None:
         for wall in self.walls:
@@ -276,6 +279,16 @@ def parse_ir(raw: object) -> IR:
         return [item for item in value if isinstance(item, dict)]
 
     ceiling = raw.get("ceiling_height")
+    thresholds: dict[str, float] = {}
+    raw_thresholds = raw.get("thresholds")
+    if isinstance(raw_thresholds, dict):
+        for key, value in raw_thresholds.items():
+            if isinstance(value, bool):
+                continue
+            try:
+                thresholds[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
     return IR(
         walls=[parse_wall(item) for item in items("walls")],
         openings=[parse_opening(item) for item in items("openings")],
@@ -283,6 +296,7 @@ def parse_ir(raw: object) -> IR:
         rooms=[parse_room(item) for item in items("rooms")],
         mep=[parse_mep_point(item) for item in items("mep")],
         ceiling_height=_num(ceiling, 2800.0) or 2800.0,
+        thresholds=thresholds,
     )
 
 
@@ -341,6 +355,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
             for r in ir.rooms
         ],
         "ceiling_height": ir.ceiling_height,
+        "thresholds": dict(ir.thresholds),
         "mep": [
             {
                 "id": m.id,
