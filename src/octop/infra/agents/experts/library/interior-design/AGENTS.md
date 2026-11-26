@@ -117,13 +117,38 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
 { "element_id": "F-001", "kind": "furniture", "name": "三人沙发",
   "payload": "{\"x\":400,\"y\":1600,\"w\":2000,\"d\":900,\"rot\":0,\"kind\":\"sofa\"}",
   "source": "默认布置", "status": "assumption" }
+
+// 嵌入件：水槽坐进橱柜台面里（host 指向台面），烟机嵌在灶台上方
+{ "element_id": "F-002", "kind": "furniture", "name": "橱柜台面",
+  "payload": "{\"x\":3000,\"y\":0,\"w\":600,\"d\":1800,\"rot\":0,\"kind\":\"kitchen_counter\"}",
+  "source": "默认布置", "status": "assumption" }
+{ "element_id": "F-003", "kind": "furniture", "name": "水槽",
+  "payload": "{\"x\":3050,\"y\":600,\"w\":500,\"d\":800,\"host\":\"F-002\",\"kind\":\"sink\"}",
+  "source": "默认布置", "status": "assumption" }
+
+// 水电点位：插座/开关/给水/排水/空调/燃气
+{ "element_id": "P-001", "kind": "mep", "name": "厨房给水",
+  "payload": "{\"type\":\"water\",\"x\":3400,\"y\":700}",
+  "source": "默认布置", "status": "assumption" }
 ```
 
 **单位与坐标系**：毫米（整数），原点在户型左下角，y 轴向上，x 向右。墙用两个端点 + 厚度 `t`；门窗用中心点 + 宽度 + 角度 `angle`（0° 沿 +x，逆时针为正）；家具用左下角 + 宽深 + 旋转角。
 
 **`source` 必填**，写清这条信息从哪来：`用户户型图` / `用户口述` / `规范默认值` / `我的推断`。**`status` 必填**：用户确认过才写 `confirmed`；你自己定的写 `assumption`；用户说了但还没落到具体位置写 `tentative`。
 
-**`element_id` 自己编并保持稳定**：墙 `W-xxx`、门窗 `D-xxx`/`N-xxx`、家具 `F-xxx`。诊断结果靠它回指图元，编号乱了高亮就乱。
+**`element_id` 自己编并保持稳定**：墙 `W-xxx`、门窗 `D-xxx`/`N-xxx`、家具 `F-xxx`、水电点位 `P-xxx`。诊断结果靠它回指图元，编号乱了高亮就乱。
+
+### 家具与电器：必须用目录里的 kind
+
+`kind` **不是自由文本**。内核有一份品类目录（`src/octop/infra/design/catalog.py`），每个 kind 带类别、默认尺寸和语义标记；写错名字规则会静默失效，现在则会被报成 `catalog.unknown_kind`（无法判定）。
+
+- **标准 kind**（写这些，别自创）：`bed_double` / `bed_single` / `bed_king` / `crib`；`sofa` / `armchair` / `chair` / `stool` / `bench`；`dining_table` / `coffee_table` / `desk` / `side_table`；`wardrobe` / `cabinet` / `bookshelf` / `shoe_cabinet` / `tv_stand` / `bedside_table`；`kitchen_counter` / `sink` / `stove` / `hood` / `fridge` / `oven` / `dishwasher`；`washer` / `dryer`；`toilet` / `basin` / `shower` / `bathtub`。
+- **默认尺寸**：省略 `w` / `d` 时内核按目录补全（如 `fridge` 700×700、`wardrobe` 1800×600）。你仍应显式写尺寸，除非用户没给。
+- **嵌入关系**：台面上的水槽、灶台、灶上的烟机用 `host` 指向被嵌入的件。**被嵌入的件允许与 host 重叠**，净空按 host 计算；不要把水槽挪出台面来"避免重叠"。
+- **旧写法兼容**：`closet`→`wardrobe`、`refrigerator`→`fridge`、`washing machine`→`washer` 等别名会自动归一；但新方案请直接用标准名。
+- **水电点位**：插座、开关、给水、排水、空调、燃气一律记成 `kind=mep` 的 `P-xxx` 行，**不要再把插座当家具**（旧数据仍能识别）。用水电器（洗衣机、洗碗机、水槽、洁具）的给排水点要在 1500mm 内，否则会报 `mep.wet_appliance_services`。
+
+**规则阈值是默认值**：目录里的净空（衣柜 700、冰箱 900、灶台 900、洁具 600…）来自常见做法，用户所在地区或项目有特殊要求时，按用户要求调整并在交付里注明。
 
 改已有元素用 `app_update_row(app_id, row_id, row=完整行, expected_version=版本号, table="main")` —— **必须传完整行**（缺列会被清空），`expected_version` 从 `app_read_data` 返回的行里取。删除用 `app_delete_row(app_id, row_id, expected_version=..., table="main")`。
 

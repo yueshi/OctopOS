@@ -76,6 +76,8 @@
   .notice.info { border-color: var(--info); color: var(--info); }
   .hidden { display: none; }
   .empty { color: var(--muted); padding: 8px 0; }
+  .legend { margin-top: 8px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
 </style>
 </head>
 <body>
@@ -99,6 +101,7 @@
       <svg id="plan" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" role="img" aria-label="装修平面图"></svg>
     </div>
     <p class="muted" id="planNote"></p>
+    <div class="row legend" id="legend"></div>
   </section>
 
   <section class="card">
@@ -140,6 +143,29 @@
   };
 
   var SEV = { blocking: 3, significant: 2, improvement: 1 };
+  // Presentation-only grouping; the kernel owns the real catalog.
+  var KIND_CATEGORY = {
+    bed_double: "bed", bed_king: "bed", bed_single: "bed", crib: "bed",
+    sofa: "seat", armchair: "seat", chair: "seat", stool: "seat", bench: "seat",
+    dining_table: "table", coffee_table: "table", desk: "table", side_table: "table",
+    wardrobe: "storage", cabinet: "storage", bookshelf: "storage",
+    shoe_cabinet: "storage", tv_stand: "storage", bedside_table: "storage",
+    kitchen_counter: "kitchen", sink: "kitchen", stove: "kitchen", hood: "kitchen",
+    fridge: "kitchen", oven: "kitchen", dishwasher: "kitchen",
+    washer: "laundry", dryer: "laundry",
+    toilet: "sanitary", basin: "sanitary", shower: "sanitary", bathtub: "sanitary",
+    socket: "electrical", switch: "electrical"
+  };
+  var CATEGORY_COLOR = {
+    bed: "#7c3aed", seat: "#2563eb", table: "#0891b2", storage: "#6366f1",
+    kitchen: "#d97706", laundry: "#0d9488", sanitary: "#0ea5e9", electrical: "#dc2626"
+  };
+  var CATEGORY_LABEL = {
+    bed: "床", seat: "座椅", table: "桌台", storage: "储物", kitchen: "厨房",
+    laundry: "洗衣", sanitary: "洁具", electrical: "电气"
+  };
+  var MEP_GLYPH = { socket: "S", switch: "L", water: "W", drain: "D", ac: "A", gas: "G" };
+  var MEP_LABEL = { socket: "插座", switch: "开关", water: "给水", drain: "排水", ac: "空调", gas: "燃气" };
   var SEV_ORDER = ["blocking", "significant", "improvement"];
   var SEV_COLOR = { blocking: "#dc2626", significant: "#d97706" };
   var WALL_DEFAULT = "#334155";
@@ -214,6 +240,7 @@
     var walls = [];
     var openings = [];
     var furniture = [];
+    var mep = [];
     state.elements.forEach(function (row) {
       var v = vals(row);
       var kind = String(v.kind || "").toLowerCase();
@@ -244,11 +271,19 @@
           x: num(payload.x), y: num(payload.y),
           w: num(payload.w, 600), d: num(payload.d, 400),
           rot: num(payload.rot, 0),
-          kind: String(payload.kind || "")
+          kind: String(payload.kind || ""),
+          host: String(payload.host || "")
+        });
+      } else if (kind === "mep") {
+        mep.push({
+          id: id,
+          type: String(payload.type || "").toLowerCase(),
+          x: num(payload.x), y: num(payload.y),
+          height: num(payload.height, 0)
         });
       }
     });
-    return { walls: walls, openings: openings, furniture: furniture };
+    return { walls: walls, openings: openings, furniture: furniture, mep: mep };
   }
 
   function polygonCentroid(points) {
@@ -350,17 +385,21 @@
     });
 
     geo.furniture.forEach(function (f) {
-      var color = SEV_COLOR[severity[f.id]] || FURNITURE_COLOR;
+      var category = KIND_CATEGORY[f.kind] || "";
+      var color = SEV_COLOR[severity[f.id]] || CATEGORY_COLOR[category] || FURNITURE_COLOR;
       var rect = svgEl("rect", {
         x: f.x, y: f.y,
         width: Math.max(f.w, 60), height: Math.max(f.d, 60),
-        fill: "rgba(99,102,241,0.16)", stroke: color, "stroke-width": 20, rx: 12
+        fill: f.host ? "rgba(148,163,184,0.10)" : "rgba(99,102,241,0.16)",
+        stroke: color, "stroke-width": f.host ? 14 : 20, rx: 12
       });
+      if (f.host) rect.setAttribute("stroke-dasharray", "60 30");
       if (f.rot) {
         rect.setAttribute("transform", "rotate(" + f.rot + "," + (f.x + f.w / 2) + "," + (f.y + f.d / 2) + ")");
       }
       group.appendChild(rect);
-      if (f.name) {
+      // A sink inside a counter run would print on top of the counter label.
+      if (f.name && !f.host) {
         var label = svgEl("text", {
           x: tx + scale * (f.x + f.w / 2),
           y: ty - scale * (f.y + f.d / 2),
@@ -369,6 +408,21 @@
         label.textContent = f.name;
         svg.appendChild(label);
       }
+    });
+
+    geo.mep.forEach(function (point) {
+      var color = SEV_COLOR[severity[point.id]] || "#dc2626";
+      group.appendChild(svgEl("circle", {
+        cx: point.x, cy: point.y, r: 110,
+        fill: "#ffffff", stroke: color, "stroke-width": 30
+      }));
+      var glyph = svgEl("text", {
+        x: tx + scale * point.x,
+        y: ty - scale * point.y + 3.5,
+        "text-anchor": "middle", "font-size": 10, fill: color
+      });
+      glyph.textContent = MEP_GLYPH[point.type] || "?";
+      svg.appendChild(glyph);
     });
 
     state.rooms.forEach(function (row) {
@@ -531,7 +585,8 @@
       walls: geo.walls,
       openings: geo.openings,
       furniture: geo.furniture,
-      rooms: rooms
+      rooms: rooms,
+      mep: geo.mep
     };
   }
 
@@ -577,9 +632,46 @@
     }
   }
 
+  function renderLegend() {
+    var host = $("legend");
+    clear(host);
+    var geo = geometry();
+    var seen = {};
+    geo.furniture.forEach(function (item) {
+      var category = KIND_CATEGORY[item.kind];
+      if (!category || seen[category]) return;
+      seen[category] = true;
+      var chip = document.createElement("span");
+      chip.className = "chip";
+      var swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.background = CATEGORY_COLOR[category] || FURNITURE_COLOR;
+      chip.appendChild(swatch);
+      chip.appendChild(document.createTextNode(" " + (CATEGORY_LABEL[category] || category)));
+      host.appendChild(chip);
+    });
+    var mepSeen = {};
+    geo.mep.forEach(function (point) {
+      if (mepSeen[point.type]) return;
+      mepSeen[point.type] = true;
+      var chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = (MEP_GLYPH[point.type] || "?") + " " + (MEP_LABEL[point.type] || point.type);
+      host.appendChild(chip);
+    });
+  }
+
   function render() {
-    setText($("summary"), "元素 " + state.elements.length + " 个 · 诊断 " + state.diagnostics.length + " 条 · 房间 " + state.rooms.length + " 个");
+    var geo = geometry();
+    var appliances = geo.furniture.filter(function (item) {
+      return ["fridge", "oven", "dishwasher", "washer", "dryer", "stove", "hood"].indexOf(item.kind) >= 0;
+    }).length;
+    setText($("summary"),
+      "元素 " + state.elements.length + " 个 · 家具 " + (geo.furniture.length - appliances) +
+      " · 电器 " + appliances + " · 点位 " + geo.mep.length +
+      " · 诊断 " + state.diagnostics.length + " 条 · 房间 " + state.rooms.length + " 个");
     renderPlan();
+    renderLegend();
     renderDiagnostics();
     renderTable($("roomWrap"), state.rooms, [
       { key: "name", label: "房间" },

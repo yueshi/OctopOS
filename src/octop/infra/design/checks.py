@@ -12,10 +12,11 @@ something, it reports ``not_verifiable`` instead of guessing.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from octop.infra.design.catalog import MEP_TYPES, resolve
 from octop.infra.design.geometry import (
     Point,
     collinear_overlap_length,
@@ -57,6 +58,11 @@ PLACEMENT_TOLERANCE_MM: Final = 20.0
 #: Two wall ends further apart than this are not considered the same joint.
 JOINT_SEARCH_RADIUS_MM: Final = 300.0
 
+#: A wet appliance should have water and drain within this distance.
+WET_APPLIANCE_SERVICE_RADIUS_MM: Final = 1500.0
+
+#: Kind-name sets the rules relied on before the catalog existed. Kept as a
+#: fallback for kinds the catalog does not know yet.
 STORAGE_KINDS: Final = frozenset({"wardrobe", "cabinet", "closet", "storage", "bookcase"})
 WET_KINDS: Final = frozenset({"shower", "bathtub"})
 ELECTRICAL_KINDS: Final = frozenset(
@@ -128,6 +134,13 @@ RULES: dict[str, RuleSpec] = {
         RuleSpec("robustness.tolerance", "净空余量小于摆放容差", SEVERITY_SIGNIFICANT),
         RuleSpec("ergonomics.seat_height", "座高与台面高不匹配", SEVERITY_IMPROVEMENT, unit="mm"),
         RuleSpec("ventilation.service_room", "服务房间通风", SEVERITY_BLOCKING),
+        RuleSpec("clearance.appliance_front", "电器前净空不足", SEVERITY_SIGNIFICANT),
+        RuleSpec("clearance.sanitary_front", "洁具前净空不足", SEVERITY_SIGNIFICANT),
+        RuleSpec("clearance.kitchen_aisle", "厨房操作通道不足", SEVERITY_SIGNIFICANT),
+        RuleSpec("catalog.unknown_kind", "家具类型不在品类目录", SEVERITY_IMPROVEMENT),
+        RuleSpec("mep.unknown_type", "水电点位类型未知", SEVERITY_IMPROVEMENT),
+        RuleSpec("mep.not_recorded", "未录入水电点位", SEVERITY_SIGNIFICANT),
+        RuleSpec("mep.wet_appliance_services", "用水电器缺少给排水点位", SEVERITY_IMPROVEMENT),
     )
 }
 
@@ -431,8 +444,13 @@ def _overlap_on_wall(first: Opening, second: Opening, wall: Wall) -> float:
 
 def _check_element_overlaps(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
+    by_id = {item.id: item for item in ir.furniture}
     for i, first in enumerate(ir.furniture):
         for second in ir.furniture[i + 1 :]:
+            if _hosted_within(first, second.id, by_id) or _hosted_within(second, first.id, by_id):
+                # A sink sits inside its counter run by design, and a hood sits
+                # above the stove that is itself inset in the same run.
+                continue
             if not convex_polygons_overlap(first.corners(), second.corners()):
                 continue
             findings.append(
@@ -445,6 +463,8 @@ def _check_element_overlaps(ir: IR) -> list[Diagnostic]:
                 )
             )
     for item in ir.furniture:
+        if item.host:
+            continue
         for wall in ir.walls:
             if wall.is_degenerate:
                 continue
@@ -491,10 +511,26 @@ def _wall_cuts_polygon(wall: Wall, polygon: list[Point]) -> bool:
     return len(signs) > 1
 
 
-def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
+def _front_clearance(
+    ir: IR,
+    *,
+    rule_id: str,
+    select: Callable[[Furniture], float | None],
+    severity: str,
+) -> list[Diagnostic]:
+    """Generic "clear space in front of a wall-hugging item" rule.
+
+    ``select`` returns the required clearance for an item, or ``None`` to skip
+    it. The measurement is taken from the item's front face towards the room,
+    so a wide wardrobe anchored to a wall is measured from its own face.
+    """
     findings: list[Diagnostic] = []
     for item in ir.furniture:
-        if item.kind.lower() not in STORAGE_KINDS:
+        if item.host:
+            # Access is measured at the host, not at the inset item.
+            continue
+        required = select(item)
+        if not required:
             continue
         wall, gap = _supporting_wall(item, ir.walls)
         if wall is None or gap > max(wall.t, 40.0):
@@ -503,29 +539,136 @@ def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
         if normal is None:
             continue
         front_edge = _front_edge_point(item, normal)
+        by_id = {candidate.id: candidate for candidate in ir.furniture}
         blockers: list[tuple[Furniture, float]] = []
         for other in ir.furniture:
             if other.id == item.id:
                 continue
+            if _hosted_within(other, item.id, by_id):
+                # The sink inside this counter is not something standing in
+                # front of it.
+                continue
             distance = point_to_polygon_distance(front_edge, other.corners())
-            if distance < STORAGE_FRONT_CLEARANCE_MM:
+            if distance < required:
                 blockers.append((other, distance))
         if not blockers:
             continue
         closest = min(blockers, key=lambda pair: pair[1])
+        info = resolve(item.kind)
+        label = item.name or (info.label_zh if info else item.id)
         findings.append(
             Diagnostic(
-                rule_id="clearance.wardrobe_front",
+                rule_id=rule_id,
                 status=STATUS_NON_COMPLIANT,
-                severity=SEVERITY_BLOCKING,
+                severity=severity,
                 message=(
-                    f"{item.name or item.id} 前方净空 {_mm(closest[1])}，"
-                    f"小于要求的 {_mm(STORAGE_FRONT_CLEARANCE_MM)}，"
+                    f"{label} 前方净空 {_mm(closest[1])}，小于要求的 {_mm(required)}，"
                     f"被 {closest[0].name or closest[0].id} 占用"
                 ),
                 elements=[item.id, *[other.id for other, _ in blockers]],
                 measured=closest[1],
-                required=STORAGE_FRONT_CLEARANCE_MM,
+                required=required,
+            )
+        )
+    return findings
+
+
+def _hosted_within(item: Furniture, host_id: str, by_id: dict[str, Furniture]) -> bool:
+    """True when *item* sits inside *host_id*, directly or through a chain."""
+    seen: set[str] = set()
+    host = item.host
+    while host and host not in seen:
+        if host == host_id:
+            return True
+        seen.add(host)
+        parent = by_id.get(host)
+        host = parent.host if parent else ""
+    return False
+
+
+def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
+    def select(item: Furniture) -> float | None:
+        info = resolve(item.kind)
+        if info is not None:
+            if info.category != "storage":
+                return None
+            return info.front_clearance or STORAGE_FRONT_CLEARANCE_MM
+        return STORAGE_FRONT_CLEARANCE_MM if item.kind.lower() in STORAGE_KINDS else None
+
+    return _front_clearance(
+        ir,
+        rule_id="clearance.wardrobe_front",
+        select=select,
+        severity=SEVERITY_BLOCKING,
+    )
+
+
+def _check_appliance_clearance(ir: IR) -> list[Diagnostic]:
+    def select(item: Furniture) -> float | None:
+        info = resolve(item.kind)
+        if info is None or not info.appliance or info.front_clearance <= 0:
+            return None
+        return info.front_clearance
+
+    return _front_clearance(
+        ir,
+        rule_id="clearance.appliance_front",
+        select=select,
+        severity=SEVERITY_SIGNIFICANT,
+    )
+
+
+def _check_sanitary_clearance(ir: IR) -> list[Diagnostic]:
+    def select(item: Furniture) -> float | None:
+        info = resolve(item.kind)
+        if info is None or info.category != "sanitary" or info.front_clearance <= 0:
+            return None
+        return info.front_clearance
+
+    return _front_clearance(
+        ir,
+        rule_id="clearance.sanitary_front",
+        select=select,
+        severity=SEVERITY_SIGNIFICANT,
+    )
+
+
+def _check_kitchen_aisle(ir: IR) -> list[Diagnostic]:
+    def select(item: Furniture) -> float | None:
+        info = resolve(item.kind)
+        if info is None or info.category != "kitchen" or info.appliance:
+            return None
+        return info.front_clearance
+
+    return _front_clearance(
+        ir,
+        rule_id="clearance.kitchen_aisle",
+        select=select,
+        severity=SEVERITY_SIGNIFICANT,
+    )
+
+
+def _check_unknown_kinds(ir: IR) -> list[Diagnostic]:
+    findings: list[Diagnostic] = []
+    unknown: dict[str, list[str]] = {}
+    for item in ir.furniture:
+        kind = item.kind.strip()
+        if not kind or resolve(kind) is not None:
+            continue
+        if kind.lower() in STORAGE_KINDS or kind.lower() in WET_KINDS:
+            continue
+        unknown.setdefault(kind, []).append(item.id)
+    for kind, ids in sorted(unknown.items()):
+        findings.append(
+            Diagnostic(
+                rule_id="catalog.unknown_kind",
+                status=STATUS_NOT_VERIFIABLE,
+                severity=SEVERITY_IMPROVEMENT,
+                message=(
+                    f"家具类型 {kind!r} 不在品类目录里，依赖品类的净空/水电规则无法判定；"
+                    "请改用目录中的标准 kind"
+                ),
+                elements=ids,
             )
         )
     return findings
@@ -693,12 +836,32 @@ def _entrance_room(ir: IR, rooms: list[Room]) -> Room | None:
     return rooms[0] if rooms else None
 
 
+def _is_wet(item: Furniture) -> bool:
+    info = resolve(item.kind)
+    if info is not None:
+        return info.wet
+    return item.kind.lower() in WET_KINDS
+
+
+def _is_electrical(item: Furniture) -> bool:
+    info = resolve(item.kind)
+    if info is not None:
+        return info.electrical
+    return item.kind.lower() in ELECTRICAL_KINDS
+
+
 def _check_splash_zone(ir: IR) -> list[Diagnostic]:
+    """No socket or switch in the splash zone of a shower or bath.
+
+    Electrical points are read from both the MEP list and any legacy socket
+    placed as furniture, so older plans keep being checked.
+    """
     findings: list[Diagnostic] = []
-    wet = [item for item in ir.furniture if item.kind.lower() in WET_KINDS]
-    electrical = [item for item in ir.furniture if item.kind.lower() in ELECTRICAL_KINDS]
+    wet = [item for item in ir.furniture if _is_wet(item)]
     for wet_item in wet:
-        for item in electrical:
+        for item in ir.furniture:
+            if item.id == wet_item.id or not _is_electrical(item):
+                continue
             gap = distance(wet_item.center, item.center)
             if gap > SPLASH_ZONE_MM:
                 continue
@@ -716,7 +879,104 @@ def _check_splash_zone(ir: IR) -> list[Diagnostic]:
                     required=SPLASH_ZONE_MM,
                 )
             )
+        for point in ir.mep:
+            if point.type not in {"socket", "switch"}:
+                continue
+            gap = distance(wet_item.center, (point.x, point.y))
+            if gap > SPLASH_ZONE_MM:
+                continue
+            findings.append(
+                Diagnostic(
+                    rule_id="safety.splash_zone",
+                    status=STATUS_NON_COMPLIANT,
+                    severity=SEVERITY_BLOCKING,
+                    message=(
+                        f"水电点位 {point.id or '未命名'}（{point.type}）距 "
+                        f"{wet_item.name or wet_item.id} 仅 {_mm(gap)}，"
+                        f"落在 {_mm(SPLASH_ZONE_MM)} 溅水范围内"
+                    ),
+                    elements=[point.id, wet_item.id],
+                    measured=gap,
+                    required=SPLASH_ZONE_MM,
+                )
+            )
     return findings
+
+
+def _check_mep_types(ir: IR) -> list[Diagnostic]:
+    unknown = [point for point in ir.mep if point.type not in MEP_TYPES]
+    if not unknown:
+        return []
+    return [
+        Diagnostic(
+            rule_id="mep.unknown_type",
+            status=STATUS_NOT_VERIFIABLE,
+            severity=SEVERITY_IMPROVEMENT,
+            message=(
+                "水电点位类型不在支持范围内，相关规则无法判定："
+                + ", ".join(sorted({point.type or "(空)" for point in unknown}))
+            ),
+            elements=[point.id for point in unknown],
+        )
+    ]
+
+
+def _check_wet_appliance_services(ir: IR) -> list[Diagnostic]:
+    """Water-using appliances need a supply and a drain nearby."""
+    needing = [
+        item
+        for item in ir.furniture
+        if (info := resolve(item.kind)) is not None and (info.needs_water or info.needs_drain)
+    ]
+    if not needing:
+        return []
+    if not ir.mep:
+        return [
+            Diagnostic(
+                rule_id="mep.not_recorded",
+                status=STATUS_NOT_VERIFIABLE,
+                severity=SEVERITY_SIGNIFICANT,
+                message=(
+                    f"方案里有 {len(needing)} 件用水器具，但没有录入任何水电点位；"
+                    "给水/排水是否到位无法判定"
+                ),
+                elements=[item.id for item in needing],
+            )
+        ]
+    findings: list[Diagnostic] = []
+    for item in needing:
+        info = resolve(item.kind)
+        assert info is not None
+        missing: list[str] = []
+        if info.needs_water and not _has_point_near(ir, item, "water"):
+            missing.append("给水")
+        if info.needs_drain and not _has_point_near(ir, item, "drain"):
+            missing.append("排水")
+        if not missing:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="mep.wet_appliance_services",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_IMPROVEMENT,
+                message=(
+                    f"{item.name or info.label_zh} 附近 {_mm(WET_APPLIANCE_SERVICE_RADIUS_MM)} 内"
+                    f"缺少{'、'.join(missing)}点位"
+                ),
+                elements=[item.id],
+                measured=WET_APPLIANCE_SERVICE_RADIUS_MM,
+                required=WET_APPLIANCE_SERVICE_RADIUS_MM,
+            )
+        )
+    return findings
+
+
+def _has_point_near(ir: IR, item: Furniture, point_type: str) -> bool:
+    return any(
+        point.type == point_type
+        and distance(item.center, (point.x, point.y)) <= WET_APPLIANCE_SERVICE_RADIUS_MM
+        for point in ir.mep
+    )
 
 
 def _check_robustness(ir: IR) -> list[Diagnostic]:
@@ -767,6 +1027,12 @@ def check_drawing(ir: IR, changed_ids: Sequence[str] | None = None) -> list[Diag
     findings.extend(_check_openings(ir))
     findings.extend(_check_element_overlaps(ir))
     findings.extend(_check_storage_clearance(ir))
+    findings.extend(_check_appliance_clearance(ir))
+    findings.extend(_check_sanitary_clearance(ir))
+    findings.extend(_check_kitchen_aisle(ir))
+    findings.extend(_check_unknown_kinds(ir))
+    findings.extend(_check_mep_types(ir))
+    findings.extend(_check_wet_appliance_services(ir))
     findings.extend(_check_window_ratio(ir))
     findings.extend(_check_min_area(ir))
     findings.extend(_check_route_continuity(ir))

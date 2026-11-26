@@ -45,7 +45,19 @@ window.__rows = {
     { row_id: "r3", version: 1, values: {
       element_id: "F-001", kind: "furniture", name: "衣柜",
       payload: JSON.stringify({x:0,y:0,w:2000,d:600,rot:0,kind:"wardrobe"}),
-      source: "t", status: "assumption" } }
+      source: "t", status: "assumption" } },
+    { row_id: "r5", version: 1, values: {
+      element_id: "F-002", kind: "furniture", name: "橱柜台面",
+      payload: JSON.stringify({x:3000,y:0,w:600,d:1800,rot:0,kind:"kitchen_counter"}),
+      source: "t", status: "assumption" } },
+    { row_id: "r6", version: 1, values: {
+      element_id: "F-003", kind: "furniture", name: "水槽",
+      payload: JSON.stringify({x:3050,y:600,w:500,d:800,rot:0,kind:"sink",host:"F-002"}),
+      source: "t", status: "assumption" } },
+    { row_id: "r7", version: 1, values: {
+      element_id: "P-001", kind: "mep", name: "给水",
+      payload: JSON.stringify({type:"water",x:3100,y:700}),
+      source: "t", status: "confirmed" } }
   ],
   rooms: [
     { row_id: "r4", version: 1, values: {
@@ -166,6 +178,11 @@ def test_page_sends_kind_and_highlights_the_finding(browser: Any) -> None:
     openings = {item["id"]: item for item in ir["openings"]}
     assert openings["D-001"]["host"] == "W-001"
     assert ir["rooms"][0]["polygon"][0] == [0, 0]
+    # Hosted items keep their host, so the kernel allows the intended overlap.
+    furniture_by_id = {item["id"]: item for item in ir["furniture"]}
+    assert furniture_by_id["F-003"]["host"] == "F-002"
+    # MEP points travel with the IR too.
+    assert ir["mep"] == [{"id": "P-001", "type": "water", "x": 3100, "y": 700, "height": 0}]
 
     # The diagnostics come back and the page writes them into its table.
     diagnostics = [item for item in appended if item["table"] == "diagnostics"]

@@ -14,6 +14,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Final
 
+from octop.infra.design.catalog import CatalogItem, normalize_kind, resolve
 from octop.infra.design.geometry import point_to_segment_distance
 
 #: Wall segments closer than this are treated as connected.
@@ -85,10 +86,23 @@ class Furniture:
     rot: float = 0.0
     kind: str = ""
     name: str = ""
+    #: Id of the item this one sits on or inside (a sink in a counter run).
+    #: Hosted items are allowed to overlap their host and borrow its clearance.
+    host: str = ""
 
     @property
     def center(self) -> tuple[float, float]:
         return (self.x + self.w / 2, self.y + self.d / 2)
+
+    @property
+    def catalog(self) -> CatalogItem | None:
+        """The catalog entry for this item, or ``None`` when the kind is unknown."""
+        return resolve(self.kind)
+
+    @property
+    def category(self) -> str:
+        item = self.catalog
+        return item.category if item else ""
 
     def corners(self) -> list[tuple[float, float]]:
         """The four footprint corners, rotated about the footprint centre."""
@@ -119,6 +133,17 @@ class Room:
 
 
 @dataclass(frozen=True)
+class MEPPoint:
+    """A water or electrical point, kept apart from furniture."""
+
+    id: str
+    type: str
+    x: float
+    y: float
+    height: float = 0.0
+
+
+@dataclass(frozen=True)
 class IR:
     """The whole plan."""
 
@@ -126,6 +151,7 @@ class IR:
     openings: list[Opening] = field(default_factory=list)
     furniture: list[Furniture] = field(default_factory=list)
     rooms: list[Room] = field(default_factory=list)
+    mep: list[MEPPoint] = field(default_factory=list)
 
     def wall(self, wall_id: str) -> Wall | None:
         for wall in self.walls:
@@ -181,15 +207,30 @@ def parse_opening(raw: dict[str, Any]) -> Opening:
 
 
 def parse_furniture(raw: dict[str, Any]) -> Furniture:
+    kind = normalize_kind(str(raw.get("kind") or ""))
+    item = resolve(kind)
+    default_w = item.w if item else 600.0
+    default_d = item.d if item else 400.0
     return Furniture(
         id=str(raw.get("id") or ""),
         x=_num(raw.get("x")),
         y=_num(raw.get("y")),
-        w=_num(raw.get("w"), 600.0) or 600.0,
-        d=_num(raw.get("d"), 400.0) or 400.0,
+        w=_num(raw.get("w"), default_w) or default_w,
+        d=_num(raw.get("d"), default_d) or default_d,
         rot=_num(raw.get("rot")),
-        kind=str(raw.get("kind") or ""),
+        kind=kind,
         name=str(raw.get("name") or ""),
+        host=str(raw.get("host") or ""),
+    )
+
+
+def parse_mep_point(raw: dict[str, Any]) -> MEPPoint:
+    return MEPPoint(
+        id=str(raw.get("id") or ""),
+        type=str(raw.get("type") or "").strip().casefold(),
+        x=_num(raw.get("x")),
+        y=_num(raw.get("y")),
+        height=_num(raw.get("height")),
     )
 
 
@@ -219,6 +260,7 @@ def parse_ir(raw: object) -> IR:
         openings=[parse_opening(item) for item in items("openings")],
         furniture=[parse_furniture(item) for item in items("furniture")],
         rooms=[parse_room(item) for item in items("rooms")],
+        mep=[parse_mep_point(item) for item in items("mep")],
     )
 
 
@@ -259,6 +301,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "rot": f.rot,
                 "kind": f.kind,
                 "name": f.name,
+                "host": f.host,
             }
             for f in ir.furniture
         ],
@@ -270,6 +313,16 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "area_mm2": r.area_mm2,
             }
             for r in ir.rooms
+        ],
+        "mep": [
+            {
+                "id": m.id,
+                "type": m.type,
+                "x": m.x,
+                "y": m.y,
+                "height": m.height,
+            }
+            for m in ir.mep
         ],
     }
 
@@ -299,6 +352,7 @@ def ir_from_rows(rows: list[dict[str, Any]]) -> IR:
     openings: list[Opening] = []
     furniture: list[Furniture] = []
     rooms: list[Room] = []
+    mep: list[MEPPoint] = []
 
     for row in rows:
         kind = str(row.get("kind") or "").strip().lower()
@@ -328,5 +382,7 @@ def ir_from_rows(rows: list[dict[str, Any]]) -> IR:
             furniture.append(parse_furniture(data))
         elif kind == "room":
             rooms.append(parse_room(data))
+        elif kind == "mep":
+            mep.append(parse_mep_point(data))
 
-    return IR(walls=walls, openings=openings, furniture=furniture, rooms=rooms)
+    return IR(walls=walls, openings=openings, furniture=furniture, rooms=rooms, mep=mep)

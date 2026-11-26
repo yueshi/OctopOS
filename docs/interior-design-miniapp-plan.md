@@ -92,9 +92,21 @@
 1. **`row_id` 不在行里**。宿主返回的是 `{rows: [值...], row_meta: [{row_id, version}...]}`，页面却读 `row.row_id` → 永远是 `undefined` → 删除静默失败 → **每点一次「重新校验」，诊断表就多一份重复行**。已改为按下标把 `row_meta` 合并回行；Chromium 回归测试的桩桥也改成真实形状（之前它返回带 `row_id` 的行，正因为与生产不一致才漏掉了这个 bug）。
 2. 房间面积按 mm² 原值显示、平面图没有房间标注。现在面积显示 m²，平面图在房间中心标注「名称 · 面积」，`not_verifiable` 的诊断加「待专业确认」标签。
 
+家具、电器与水电点位走查见下方「家具与电器走查」。截图：[`docs/assets/interior-plan-appliances.png`](./assets/interior-plan-appliances.png)。
+
 > 顺带核对：`content-review` 模板正确处理了 `row_meta`；`video-workbench` 与本次修复前的写法相同（`found.row_id` 永远为空，`markDraft` 因此静默 no-op）。它只影响本地草稿记账，本次不修，留作独立问题。
 
 **平台的另一处缺口（非本项目缺陷）**：**没有「新增表」的 HTTP 接口**，只有 Agent 工具 `app_add_table`。所以从模板建出来的应用只有主表 `main`，`rooms` / `diagnostics` / `bom` / `operations` 必须由专家创建；页面在缺表时会明确提示。若希望用户能在 Dashboard 里自己建表，需要平台补一个路由。
+
+### 家具与电器走查（2026-11-27）
+
+在一套 38.9㎡ 的客餐厨（带嵌入橱柜、冰箱、洗衣机、6 个水电点位）上走了一遍：
+
+- **目录生效**：`kind` 用标准名后，页面按品类着色（座椅/储物/桌台/厨房/洗衣），图例自动出现；省略尺寸的家具按目录默认值补全。
+- **嵌入关系**：水槽、灶台、烟机用 `host` 挂在台面上，不再误报"互相重叠"，条纹虚线表示嵌入件，标签不重叠。**这是走查抓到的建模问题**：真实橱柜本来就该嵌水槽/灶台，规则一开始把整排橱柜都报成冲突。
+- **电气语义**：插座从"家具"升级为 `mep` 点位；`safety.splash_zone` 同时识别 MEP 点位和旧的家具式插座。
+- **校验结果**：冰箱前净空 100mm（要求 900，significant）、洗衣机缺排水点（improvement）、通风待专业确认——三条都指向真实问题，没有噪声。
+- **调试坑（测试夹具问题，非产品）**：桩桥复用了同一个幂等键，服务端按幂等语义直接返回旧结果，导致看起来"规则改了没生效"。真实 SDK 每次生成新 key。
 
 ### 部署步骤（运维视角）
 
@@ -160,15 +172,25 @@ python -m octop.infra.design --mcp            # MCP  8849：给专家
     { "id": "N-001", "type": "window", "x": 1800, "y": 0, "width": 1500, "angle": 0, "host": "W-001" }
   ],
   "furniture": [
-    { "id": "F-001", "x": 0, "y": 0, "w": 2000, "d": 900, "rot": 0, "kind": "sofa" }
+    { "id": "F-001", "x": 0, "y": 0, "w": 2000, "d": 900, "rot": 0, "kind": "sofa" },
+    { "id": "F-002", "x": 3000, "y": 0, "w": 600, "d": 1800, "rot": 0, "kind": "kitchen_counter" },
+    { "id": "F-003", "x": 3050, "y": 600, "w": 500, "d": 800, "rot": 0, "kind": "sink", "host": "F-002" }
   ],
   "rooms": [
     { "id": "R-001", "name": "客厅", "polygon": [[0,0],[3600,0],[3600,2400],[0,2400]] }
+  ],
+  "mep": [
+    { "id": "P-001", "type": "socket", "x": 1000, "y": 200, "height": 300 },
+    { "id": "P-002", "type": "water", "x": 3400, "y": 700 }
   ]
 }
 ```
 
-`openings[].type` ∈ `door` / `window` / `sliding_door` / `opening`；`furniture[].kind` 见微服务的家具库。
+- `openings[].type` ∈ `door` / `window` / `sliding_door` / `opening`
+- `furniture[].kind` **必须来自品类目录**（`src/octop/infra/design/catalog.py`）：床、座椅、桌台、储物、厨房、洗衣、洁具共 30 余种，带默认尺寸与语义标记；写目录外的名字会报 `catalog.unknown_kind`（`not_verifiable`），不会静默失效。常见别名（`refrigerator` / `washing machine` / `closet`…）会自动归一。
+- `furniture[].host`：嵌入关系（水槽在台面里、烟机在灶上）。嵌入链内的重叠不算冲突、净空按被嵌入件计算，支持嵌套（烟机→灶台→台面）。
+- `mep[].type` ∈ `socket` / `switch` / `water` / `drain` / `ac` / `gas`。水电点位与家具分开建模；旧的"插座当家具"写法仍然识别，但新方案请用 `mep`。
+- 家具省略 `w` / `d` 时按目录默认值补全（`fridge` 700×700、`wardrobe` 1800×600 等）。
 
 ---
 
@@ -288,11 +310,20 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `geometry.element_overlap` | 家具轮廓不相交；墙体不贯穿家具 | blocking |
 | `route.continuity` | 各房间经门洞与入口连通 | blocking |
 | `safety.splash_zone` | 淋浴/浴缸侧 600mm 内无电气件 | blocking |
-| `clearance.wardrobe_front` | 衣柜/柜前净空 ≥ 700mm | blocking |
+| `clearance.wardrobe_front` | 衣柜/柜前净空（目录默认 600–700mm） | blocking |
+| `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | significant |
+| `clearance.sanitary_front` | 洁具前净空 600mm | significant |
+| `clearance.kitchen_aisle` | 厨房台面/水槽前通道 900mm | significant |
+| `catalog.unknown_kind` | 家具 kind 不在目录里（`not_verifiable`） | improvement |
+| `mep.unknown_type` | 水电点位类型未知（`not_verifiable`） | improvement |
+| `mep.not_recorded` | 有用水器具但未录入任何点位（`not_verifiable`） | significant |
+| `mep.wet_appliance_services` | 用水电器 1500mm 内缺给水/排水点 | improvement |
 | `daylight.window_ratio` | 窗面积 ≥ 地面面积 ÷ 8 | significant |
 | `programme.min_area` | 房间面积不低于默认值 | significant |
 | `robustness.tolerance` | 净空余量 ≥ 20mm | significant |
 | `ventilation.service_room` | 恒返回 `not_verifiable` | blocking |
+
+家具与电器的语义来自 `src/octop/infra/design/catalog.py`（类别、默认尺寸、靠墙/湿区/电气/给排水标记、前净空阈值）。`host` 表示嵌入关系（水槽在台面里、烟机在灶上）：嵌入链内的重叠不算冲突，净空按被嵌入件计算，支持嵌套。
 
 尚未实现的规则（通道净宽、座椅间距、隐私路径、采光细分等）在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
 

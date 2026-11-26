@@ -25,6 +25,7 @@
 - 小程序公开面统一由表级 `public_visible` 控制，取消 `published` row scope：发布弹窗新增公开范围预览（表数/行数/敏感列），个人表标记为「个人表」且公开开关禁用；需要只公开部分行时使用独立公开表/投影
 
 ### 新增
+- 装修设计的家具/电器/水电支持：新增品类目录 `octop.infra.design.catalog`（30 余种标准 kind，含默认尺寸、类别、靠墙/湿区/电气/给排水标记与前净空阈值，别名自动归一），IR 增加 `furniture[].host`（嵌入关系，水槽在台面里、烟机在灶上，嵌入链内不算冲突）与 `mep` 水电点位（插座/开关/给水/排水/空调/燃气）；新增规则 `clearance.appliance_front`、`clearance.sanitary_front`、`clearance.kitchen_aisle`、`catalog.unknown_kind`、`mep.unknown_type`、`mep.not_recorded`、`mep.wet_appliance_services`，`safety.splash_zone` 同时识别 MEP 点位。页面按品类着色并显示图例、绘制水电点位、嵌入件以虚线区分。未知 kind 不再静默失效，而是报 `not_verifiable`
 - 对话式装修设计（规划中）：MiniApp 系统模板「装修方案」（`interior-plan`，平面图 SVG + 诊断清单 + 工程量表）、装修设计专家（`interior-design`，含意图澄清与检查清单两个 skill）、以及确定性几何内核 `octop.infra.design`（IR 模型、14 条可计算规则、算量、IR 原子操作，可独立启动为 REST / MCP 服务）。四条链路（页面 → 内核走 extension service、专家 → 内核走 MCP、专家经 custom-mcp 连接器延迟装载工具、页面 IR 契约）均有真服务/真浏览器测试，并在全新实例上做过真机验证。设计与契约见 `docs/interior-design-miniapp-plan.md`。
 - MiniApp 公开链接弹窗会显示当前链接并支持复制：owner/admin 重新打开「只读公开链接」时，`GET /api/apps/{id}/publication` 返回当前 URL（不轮换 token）；view 协作者只拿到状态。复制按钮改用带非安全上下文回退的 `copyText`。
 - MiniApp 公开链接分享卡片：`/p/{token}` 服务端输出 `og:title/description/image/url`、`description` 与 `image_src`，并在宿主页 body 顶部渲染一张可见的首图 `<img>`（微信爬虫不执行 JS，iframe 内的应用内容不能作为缩略图）；新增 `GET /api/public/apps/{token}/share.png`，优先把 `share.*` / `cover.*` / `preview.*` 资产完整缩放并居中留边为 300×300 PNG，否则返回默认品牌卡。应用若提供 `icon.png` 等小图标，40px header 预览直接使用它，OG 仍用 `share.png`；header 图标保留 300×300 布局盒，`<noscript>` 另放 300×300 `share.png` 兜底不执行 JS 的抓取器；大小图标应分开设计。`public_base_url` 需为对外可达的 HTTPS 地址。

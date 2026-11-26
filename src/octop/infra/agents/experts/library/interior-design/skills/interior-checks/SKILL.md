@@ -36,7 +36,10 @@ argument-hint: "<要核对的方案或问题>"
 | rule_id | 检查什么 | 判据 | 级别 | 内核 |
 |---|---|---|---|---|
 | `route.continuity` | 从入口到每个使用区的连续通道 | 各房间经门洞与入口连通 | blocking | 已实现 |
-| `clearance.wardrobe_front` | 衣柜、储物柜前净空 | ≥ 700mm | blocking | 已实现 |
+| `clearance.wardrobe_front` | 衣柜、储物柜前净空 | 目录默认 600–700mm | blocking | 已实现 |
+| `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | 按目录 `front_clearance` | significant | 已实现 |
+| `clearance.sanitary_front` | 洁具前净空（马桶/洗手盆/淋浴/浴缸） | 600mm | significant | 已实现 |
+| `clearance.kitchen_aisle` | 厨房操作通道（台面、水槽前） | 900mm | significant | 已实现 |
 | `clearance.seat_stand` | 座椅后站立空间 | 距座面边缘 ≥ 750mm | significant | 待实现 |
 | `clearance.seat_walk` | 座椅后通行空间 | 距座面边缘 ≥ 900mm | significant | 待实现 |
 | `clearance.pair_min` | 元素对的最小间距 | 按家具类别取阈值 | significant | 待实现 |
@@ -57,7 +60,7 @@ argument-hint: "<要核对的方案或问题>"
 
 | rule_id | 检查什么 | 判据 | 级别 | 内核 |
 |---|---|---|---|---|
-| `safety.splash_zone` | 湿区溅水范围内无电气件 | 淋浴/浴缸侧 600mm 内无插座 | blocking | 已实现 |
+| `safety.splash_zone` | 湿区溅水范围内无电气件 | 淋浴/浴缸侧 600mm 内无插座（家具或 MEP 点位都算） | blocking | 已实现 |
 | `safety.blocked_egress` | 门扇开启不堵疏散 | 开门后不侵占走道 | blocking | 待实现 |
 | `privacy.path` | 共区不穿卧室 | 从入口到客厅不必穿过卧室或卫生间 | significant | 待实现 |
 | `privacy.entry_sightline` | 入口不直视 WC / 床 | 从入户视点看不到 | significant | 待实现 |
@@ -71,6 +74,19 @@ argument-hint: "<要核对的方案或问题>"
 | `robustness.tolerance` | 摆放容差鲁棒性 | 净空余量 ≥ 20mm | significant | 已实现 |
 | `brief.constraint` | 用户明确提出的约束 | 如"电视不靠窗" | significant | 人工（对话） |
 | `requirement.trace` | 每条需求可追溯 | 需求有对应检查项证明 | improvement | 人工 |
+
+## 家具、电器与水电点位
+
+| rule_id | 检查什么 | 判据 | 级别 | 内核 |
+|---|---|---|---|---|
+| `catalog.unknown_kind` | 家具类型不在品类目录里 | 不在 `catalog.py` 的 kind 列表（含别名） | improvement | 已实现（状态 `not_verifiable`） |
+| `mep.unknown_type` | 水电点位类型未知 | 不在 socket/switch/water/drain/ac/gas | improvement | 已实现（`not_verifiable`） |
+| `mep.not_recorded` | 有用水器具但没录入任何点位 | `mep` 为空且存在需给排水器具 | significant | 已实现（`not_verifiable`） |
+| `mep.wet_appliance_services` | 用水电器缺给水/排水点 | 距器具 1500mm 内必须有对应点位 | improvement | 已实现 |
+
+**嵌入件（`host`）**：水槽在台面里、烟机在灶上，属于正常嵌入。`host` 关系内的重叠不算冲突，净空按被嵌入的件算；**不要为了躲规则把水槽挪出台面**。嵌入可以嵌套（烟机→灶台→台面）。
+
+**阈值可调**：以上净空与半径都是默认值，用户所在地或项目另有要求时按用户要求执行，并在交付里注明依据。
 
 ## 读诊断的规矩
 
