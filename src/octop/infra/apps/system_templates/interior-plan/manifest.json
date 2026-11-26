@@ -1,0 +1,14 @@
+{
+  "id": "interior-plan",
+  "version": 1,
+  "name": { "zh": "装修方案", "en": "Interior Plan" },
+  "description": {
+    "zh": "对话式装修方案的复核台：平面图、确定性诊断清单与工程量表。几何内核跑在独立服务，本页只做展示与复核。",
+    "en": "Review desk for a conversational interior plan: floorplan, deterministic diagnostics and quantity take-off. The geometry kernel runs in a separate service; this page only presents and reviews."
+  },
+  "category": "design",
+  "tags": ["interior", "floorplan", "design", "external-service"],
+  "capabilities": ["data.read", "data.write", "external.fetch", "external.write"],
+  "schema": "schema.json",
+  "html": "app.html"
+}

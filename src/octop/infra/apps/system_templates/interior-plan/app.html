@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>装修方案</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --accent: #2563eb;
+    --ok: #059669;
+    --warn: #d97706;
+    --bad: #dc2626;
+    --info: #0ea5e9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1020;
+      --card: #141a2e;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --line: #263043;
+      --accent: #60a5fa;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --info: #38bdf8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 18px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  p { margin: 0; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .plan-wrap { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+  .plan-wrap svg { display: block; width: 100%; height: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
+  .chip.blocking { color: var(--bad); border-color: var(--bad); }
+  .chip.significant { color: var(--warn); border-color: var(--warn); }
+  .chip.improvement { color: var(--info); border-color: var(--info); }
+  .diag { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+  .diag .rule { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); }
+  .notice { border: 1px solid var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; color: var(--warn); }
+  .notice.info { border-color: var(--info); color: var(--info); }
+  .hidden { display: none; }
+  .empty { color: var(--muted); padding: 8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>装修方案</h1>
+    <p class="muted" id="summary">加载中…</p>
+  </div>
+  <div class="row">
+    <button id="btnRefresh">刷新</button>
+    <button id="btnCheck" class="primary">重新校验</button>
+  </div>
+</header>
+
+<div id="notice" class="notice hidden"></div>
+
+<div class="layout">
+  <section class="card">
+    <h2>平面图</h2>
+    <div class="plan-wrap">
+      <svg id="plan" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" role="img" aria-label="装修平面图"></svg>
+    </div>
+    <p class="muted" id="planNote"></p>
+  </section>
+
+  <section class="card">
+    <h2>诊断</h2>
+    <div class="row" id="diagStats"></div>
+    <div id="diagList"></div>
+  </section>
+</div>
+
+<section class="card">
+  <h2>房间</h2>
+  <div id="roomWrap"></div>
+</section>
+
+<section class="card">
+  <h2>工程量</h2>
+  <div id="bomWrap"></div>
+</section>
+
+<script>
+(function () {
+  "use strict";
+
+  var APP = window.octopApp;
+  var SVGNS = "http://www.w3.org/2000/svg";
+
+  var T = {
+    loading: "加载中…",
+    empty: "暂无数据。让装修设计专家先完成户型录入。",
+    noGeometry: "还没有可绘制的几何元素。",
+    noDiag: "暂无诊断记录。",
+    checking: "校验中…",
+    done: "校验完成。",
+    failed: "校验失败",
+    needConfirm: "该操作需要确认。",
+    serviceMissing: "未配置几何内核服务（cad）。请在应用详情 → 服务 中添加 provider=extension 的服务（base_url 指向内核服务），并在能力清单中开启 external.write。",
+    missingTables: "缺少 rooms / diagnostics / bom 表。请让装修设计专家用 app_add_table 创建这三张表后再校验。",
+    confirm: "确认执行"
+  };
+
+  var SEV = { blocking: 3, significant: 2, improvement: 1 };
+  var SEV_ORDER = ["blocking", "significant", "improvement"];
+  var SEV_COLOR = { blocking: "#dc2626", significant: "#d97706" };
+  var WALL_DEFAULT = "#334155";
+  var OPENING_COLOR = "#0ea5e9";
+  var FURNITURE_COLOR = "#6366f1";
+
+  var state = { elements: [], rooms: [], diagnostics: [], bom: [] };
+  var tableKeys = {};
+  var pending = null;
+
+  function $(id) { return document.getElementById(id); }
+  function vals(row) { return (row && row.values) ? row.values : (row || {}); }
+  function num(value, dflt) { var n = Number(value); return isFinite(n) ? n : (dflt === undefined ? 0 : dflt); }
+  function parseJSON(raw, dflt) { if (!raw) return dflt; try { return JSON.parse(raw); } catch (e) { return dflt; } }
+  function setText(node, value) { node.textContent = value == null ? "" : String(value); }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function svgEl(tag, attrs) {
+    var node = document.createElementNS(SVGNS, tag);
+    if (attrs) {
+      for (var key in attrs) {
+        if (Object.prototype.hasOwnProperty.call(attrs, key)) node.setAttribute(key, String(attrs[key]));
+      }
+    }
+    return node;
+  }
+
+  async function readTable(table) {
+    try {
+      var page = await APP.listRows({ table: table, limit: 500 });
+      return (page && Array.isArray(page.rows)) ? page.rows : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function loadAll() {
+    var loaded = await Promise.all([
+      readTable("main"),
+      readTable("rooms"),
+      readTable("diagnostics"),
+      readTable("bom")
+    ]);
+    state.elements = loaded[0];
+    state.rooms = loaded[1];
+    state.diagnostics = loaded[2];
+    state.bom = loaded[3];
+
+    tableKeys = {};
+    try {
+      var tables = await APP.tables();
+      (tables || []).forEach(function (table) {
+        tableKeys[String(table.table_key || "")] = true;
+      });
+    } catch (e) {
+      tableKeys = {};
+    }
+  }
+
+  function missingTables() {
+    return ["rooms", "diagnostics", "bom"].filter(function (key) { return !tableKeys[key]; });
+  }
+
+  function geometry() {
+    var walls = [];
+    var openings = [];
+    var furniture = [];
+    state.elements.forEach(function (row) {
+      var v = vals(row);
+      var kind = String(v.kind || "").toLowerCase();
+      var payload = parseJSON(v.payload, {}) || {};
+      var id = String(v.element_id || row.row_id || "");
+      if (kind === "wall") {
+        walls.push({
+          id: id,
+          name: String(v.name || ""),
+          x1: num(payload.x1), y1: num(payload.y1),
+          x2: num(payload.x2), y2: num(payload.y2),
+          t: num(payload.t, 120)
+        });
+      } else if (kind === "opening") {
+        openings.push({
+          id: id,
+          name: String(v.name || ""),
+          type: String(payload.type || "door"),
+          x: num(payload.x), y: num(payload.y),
+          width: num(payload.width, 900),
+          angle: num(payload.angle, 0)
+        });
+      } else if (kind === "furniture") {
+        furniture.push({
+          id: id,
+          name: String(v.name || payload.kind || ""),
+          x: num(payload.x), y: num(payload.y),
+          w: num(payload.w, 600), d: num(payload.d, 400),
+          rot: num(payload.rot, 0)
+        });
+      }
+    });
+    return { walls: walls, openings: openings, furniture: furniture };
+  }
+
+  function severityMap() {
+    var map = {};
+    state.diagnostics.forEach(function (row) {
+      var v = vals(row);
+      var severity = String(v.severity || "").toLowerCase();
+      var rank = SEV[severity] || 0;
+      String(v.elements || "").split(",").forEach(function (raw) {
+        var id = raw.trim();
+        if (!id) return;
+        var current = map[id];
+        if (!current || (SEV[severity] || 0) > (SEV[current] || 0)) map[id] = severity;
+      });
+    });
+    return map;
+  }
+
+  function renderPlan() {
+    var svg = $("plan");
+    clear(svg);
+    var geo = geometry();
+    var severity = severityMap();
+    var points = [];
+    geo.walls.forEach(function (w) { points.push([w.x1, w.y1]); points.push([w.x2, w.y2]); });
+    geo.openings.forEach(function (o) { points.push([o.x, o.y]); });
+    geo.furniture.forEach(function (f) { points.push([f.x, f.y]); points.push([f.x + f.w, f.y + f.d]); });
+
+    if (!points.length) {
+      setText($("planNote"), T.noGeometry);
+      svg.setAttribute("viewBox", "0 0 900 620");
+      return;
+    }
+    setText($("planNote"), "单位：毫米（mm）。红色为 blocking 级问题涉及的元素，橙色为 significant 级。");
+
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    points.forEach(function (p) {
+      if (p[0] < minX) minX = p[0];
+      if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minY) minY = p[1];
+      if (p[1] > maxY) maxY = p[1];
+    });
+    var width = 900, height = 620, pad = 48;
+    var spanX = Math.max(maxX - minX, 500);
+    var spanY = Math.max(maxY - minY, 500);
+    var scale = Math.min((width - 2 * pad) / spanX, (height - 2 * pad) / spanY);
+    var tx = pad - scale * minX;
+    var ty = height - pad + scale * minY;
+
+    var group = svgEl("g", { transform: "translate(" + tx + "," + ty + ") scale(" + scale + ",-" + scale + ")" });
+    svg.appendChild(group);
+
+    geo.walls.forEach(function (w) {
+      group.appendChild(svgEl("line", {
+        x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2,
+        stroke: SEV_COLOR[severity[w.id]] || WALL_DEFAULT,
+        "stroke-width": Math.max(w.t, 40),
+        "stroke-linecap": "square"
+      }));
+    });
+
+    geo.openings.forEach(function (o) {
+      var color = SEV_COLOR[severity[o.id]] || OPENING_COLOR;
+      var rad = o.angle * Math.PI / 180;
+      var x2 = o.x + Math.cos(rad) * o.width;
+      var y2 = o.y + Math.sin(rad) * o.width;
+      if (o.type === "window" || o.type === "opening") {
+        group.appendChild(svgEl("line", {
+          x1: o.x, y1: o.y, x2: x2, y2: y2,
+          stroke: color, "stroke-width": 60, "stroke-linecap": "butt"
+        }));
+      } else {
+        group.appendChild(svgEl("line", {
+          x1: o.x, y1: o.y, x2: x2, y2: y2,
+          stroke: color, "stroke-width": 40
+        }));
+        group.appendChild(svgEl("path", {
+          d: "M " + o.x + " " + o.y + " A " + o.width + " " + o.width + " 0 0 1 " + x2 + " " + y2,
+          fill: "none", stroke: color, "stroke-width": 25, opacity: "0.45"
+        }));
+      }
+    });
+
+    geo.furniture.forEach(function (f) {
+      var color = SEV_COLOR[severity[f.id]] || FURNITURE_COLOR;
+      var rect = svgEl("rect", {
+        x: f.x, y: f.y,
+        width: Math.max(f.w, 60), height: Math.max(f.d, 60),
+        fill: "rgba(99,102,241,0.16)", stroke: color, "stroke-width": 20, rx: 12
+      });
+      if (f.rot) {
+        rect.setAttribute("transform", "rotate(" + f.rot + "," + (f.x + f.w / 2) + "," + (f.y + f.d / 2) + ")");
+      }
+      group.appendChild(rect);
+      if (f.name) {
+        var label = svgEl("text", {
+          x: tx + scale * (f.x + f.w / 2),
+          y: ty - scale * (f.y + f.d / 2),
+          "text-anchor": "middle", "font-size": 11, fill: "currentColor"
+        });
+        label.textContent = f.name;
+        svg.appendChild(label);
+      }
+    });
+
+    var barLength = 1000 * scale;
+    var barY = height - 18;
+    svg.appendChild(svgEl("line", {
+      x1: 24, y1: barY, x2: 24 + barLength, y2: barY,
+      stroke: "currentColor", "stroke-width": 2, opacity: "0.5"
+    }));
+    var barLabel = svgEl("text", {
+      x: 24, y: barY - 6, "font-size": 11, fill: "currentColor", opacity: "0.6"
+    });
+    barLabel.textContent = "1 m";
+    svg.appendChild(barLabel);
+  }
+
+  function renderDiagnostics() {
+    var stats = $("diagStats");
+    var list = $("diagList");
+    clear(stats);
+    clear(list);
+
+    var counts = {};
+    state.diagnostics.forEach(function (row) {
+      var severity = String(vals(row).severity || "").toLowerCase();
+      counts[severity] = (counts[severity] || 0) + 1;
+    });
+    SEV_ORDER.forEach(function (key) {
+      var chip = document.createElement("span");
+      chip.className = "chip " + key;
+      chip.textContent = key + " " + (counts[key] || 0);
+      stats.appendChild(chip);
+    });
+
+    if (!state.diagnostics.length) {
+      var empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = T.noDiag;
+      list.appendChild(empty);
+      return;
+    }
+
+    var items = state.diagnostics.map(function (row) {
+      return { row: row, v: vals(row) };
+    });
+    items.sort(function (a, b) {
+      var left = SEV_ORDER.indexOf(String(a.v.severity || "").toLowerCase());
+      var right = SEV_ORDER.indexOf(String(b.v.severity || "").toLowerCase());
+      return (left < 0 ? 99 : left) - (right < 0 ? 99 : right);
+    });
+
+    items.forEach(function (item) {
+      var v = item.v;
+      var box = document.createElement("div");
+      box.className = "diag";
+
+      var head = document.createElement("div");
+      head.className = "row";
+      var chip = document.createElement("span");
+      chip.className = "chip " + String(v.severity || "").toLowerCase();
+      chip.textContent = String(v.severity || "");
+      head.appendChild(chip);
+      var rule = document.createElement("span");
+      rule.className = "rule";
+      rule.textContent = String(v.rule_id || "");
+      head.appendChild(rule);
+      box.appendChild(head);
+
+      var message = document.createElement("p");
+      message.textContent = String(v.message || "");
+      box.appendChild(message);
+
+      if (v.elements) {
+        var refs = document.createElement("p");
+        refs.className = "muted";
+        refs.textContent = "元素：" + String(v.elements);
+        box.appendChild(refs);
+      }
+      list.appendChild(box);
+    });
+  }
+
+  function renderTable(wrap, rows, columns) {
+    clear(wrap);
+    if (!rows.length) {
+      var empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = T.empty;
+      wrap.appendChild(empty);
+      return;
+    }
+    var table = document.createElement("table");
+    var head = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    columns.forEach(function (column) {
+      var th = document.createElement("th");
+      th.textContent = column.label;
+      headRow.appendChild(th);
+    });
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    var body = document.createElement("tbody");
+    rows.forEach(function (row) {
+      var v = vals(row);
+      var tr = document.createElement("tr");
+      columns.forEach(function (column) {
+        var td = document.createElement("td");
+        var value = v[column.key];
+        td.textContent = value == null ? "" : String(value);
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    wrap.appendChild(table);
+  }
+
+  function buildIR() {
+    var geo = geometry();
+    var rooms = [];
+    state.rooms.forEach(function (row) {
+      var v = vals(row);
+      var payload = parseJSON(v.payload, {}) || {};
+      rooms.push({
+        id: String(v.room_id || row.row_id || ""),
+        name: String(v.name || ""),
+        area_mm2: num(v.area_mm2, 0),
+        polygon: payload.polygon || []
+      });
+    });
+    return {
+      version: 1,
+      walls: geo.walls,
+      openings: geo.openings,
+      furniture: geo.furniture,
+      rooms: rooms
+    };
+  }
+
+  function showNotice(message, kind) {
+    var node = $("notice");
+    clear(node);
+    if (!message) {
+      node.className = "notice hidden";
+      return;
+    }
+    node.className = "notice" + (kind === "info" ? " info" : "");
+    var text = document.createElement("p");
+    text.textContent = message;
+    node.appendChild(text);
+    if (pending) {
+      var button = document.createElement("button");
+      button.textContent = T.confirm;
+      button.className = "primary";
+      button.style.marginTop = "8px";
+      button.addEventListener("click", function () { confirmPending(); });
+      node.appendChild(button);
+    }
+  }
+
+  async function writeDiagnostics(list) {
+    var existing = await readTable("diagnostics");
+    for (var i = 0; i < existing.length; i += 1) {
+      await APP.deleteRow(existing[i].row_id, {
+        table: "diagnostics",
+        expectedVersion: existing[i].version
+      });
+    }
+    for (var j = 0; j < list.length; j += 1) {
+      var d = list[j] || {};
+      await APP.appendRow({
+        rule_id: String(d.rule_id || ""),
+        severity: String(d.severity || "improvement"),
+        status: String(d.status || "non_compliant"),
+        message: String(d.message || ""),
+        elements: Array.isArray(d.elements) ? d.elements.join(",") : String(d.elements || ""),
+        acknowledged: false
+      }, { table: "diagnostics" });
+    }
+  }
+
+  function render() {
+    setText($("summary"), "元素 " + state.elements.length + " 个 · 诊断 " + state.diagnostics.length + " 条 · 房间 " + state.rooms.length + " 个");
+    renderPlan();
+    renderDiagnostics();
+    renderTable($("roomWrap"), state.rooms, [
+      { key: "name", label: "房间" },
+      { key: "area_mm2", label: "面积 (mm²)" },
+      { key: "source", label: "来源" }
+    ]);
+    renderTable($("bomWrap"), state.bom, [
+      { key: "category", label: "类别" },
+      { key: "item", label: "项目" },
+      { key: "qty", label: "数量" },
+      { key: "unit", label: "单位" },
+      { key: "source_element", label: "来源元素" }
+    ]);
+  }
+
+  async function refresh() {
+    setText($("summary"), T.loading);
+    await loadAll();
+    render();
+  }
+
+  async function runCheck(extra) {
+    var button = $("btnCheck");
+    button.disabled = true;
+    pending = null;
+    showNotice(T.checking, "info");
+    try {
+      var absent = missingTables();
+      if (absent.length) {
+        showNotice(T.missingTables);
+        return;
+      }
+      var service = APP.service("cad");
+      var args = { ir: buildIR() };
+      var options = {};
+      if (extra && extra.token) {
+        options.confirmationToken = extra.token;
+        options.idempotencyKey = extra.idempotencyKey;
+      }
+      var out = await service.invoke("check_drawing", args, options);
+      if (out && out.confirmation_required) {
+        pending = { token: out.confirmation_token, idempotencyKey: "confirm_" + String(out.op_id || "") };
+        showNotice(T.needConfirm);
+        return;
+      }
+      if (!out || out.status !== "succeeded") {
+        showNotice(T.failed + "：" + String((out && out.error_message) || "未知错误"));
+        return;
+      }
+      var result = out.result || {};
+      await writeDiagnostics(result.diagnostics || []);
+      await loadAll();
+      render();
+      showNotice(T.done, "info");
+    } catch (error) {
+      showNotice(T.serviceMissing + "（" + String((error && error.message) || error) + "）");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function confirmPending() {
+    if (!pending) return;
+    var token = pending.token;
+    var key = pending.idempotencyKey;
+    pending = null;
+    runCheck({ token: token, idempotencyKey: key });
+  }
+
+  $("btnRefresh").addEventListener("click", function () { refresh(); });
+  $("btnCheck").addEventListener("click", function () { runCheck(null); });
+
+  APP.onDataChange(function () { refresh(); });
+
+  refresh();
+})();
+</script>
+</body>
+</html>

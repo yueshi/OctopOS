@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img" aria-label="装修方案">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ffffff"/><stop offset="100%" stop-color="#EEF2FF"/></linearGradient>
+</defs>
+<rect width="1200" height="630" fill="url(#bg)"/>
+<text x="64" y="96" font-family="system-ui, sans-serif" font-size="42" font-weight="700" fill="#111827">装修方案</text>
+<text x="64" y="134" font-family="system-ui, sans-serif" font-size="20" fill="#6b7280">对话式装修设计的复核台：平面图 · 确定性诊断 · 工程量</text>
+<g transform="translate(64,180)">
+<rect x="0" y="0" width="640" height="380" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
+<g transform="translate(60,40)">
+<rect x="0" y="0" width="240" height="140" fill="none" stroke="#334155" stroke-width="7"/>
+<rect x="240" y="0" width="200" height="140" fill="none" stroke="#334155" stroke-width="7"/>
+<rect x="0" y="140" width="440" height="160" fill="none" stroke="#334155" stroke-width="7"/>
+<path d="M 120 0 A 70 70 0 0 1 120 70" fill="none" stroke="#0ea5e9" stroke-width="5"/>
+<line x1="120" y1="0" x2="120" y2="70" stroke="#0ea5e9" stroke-width="5"/>
+<line x1="300" y1="10" x2="400" y2="10" stroke="#0ea5e9" stroke-width="9"/>
+<rect x="40" y="180" width="150" height="60" rx="10" fill="rgba(99,102,241,0.18)" stroke="#6366f1" stroke-width="4"/>
+<rect x="260" y="60" width="110" height="55" rx="10" fill="rgba(220,38,38,0.16)" stroke="#dc2626" stroke-width="4"/>
+<circle cx="500" cy="70" r="13" fill="#d97706"/>
+</g>
+</g>
+<g transform="translate(760,190)">
+<rect x="0" y="0" width="376" height="96" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
+<rect x="18" y="20" width="76" height="22" rx="11" fill="#fee2e2" stroke="#dc2626"/>
+<text x="56" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#dc2626">blocking 2</text>
+<rect x="106" y="20" width="96" height="22" rx="11" fill="#fef3c7" stroke="#d97706"/>
+<text x="154" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#d97706">significant 5</text>
+<rect x="214" y="20" width="104" height="22" rx="11" fill="#e0f2fe" stroke="#0ea5e9"/>
+<text x="266" y="36" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#0ea5e9">improvement 3</text>
+<text x="18" y="72" font-family="system-ui, sans-serif" font-size="15" fill="#111827">通道净宽 520mm，小于 600mm</text>
+</g>
+<g transform="translate(760,320)">
+<rect x="0" y="0" width="376" height="200" rx="12" fill="#ffffff" stroke="#e5e7eb"/>
+<text x="18" y="34" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#111827">工程量</text>
+<text x="18" y="72" font-family="system-ui, sans-serif" font-size="14" fill="#6b7280">墙面面积</text>
+<text x="330" y="72" text-anchor="end" font-family="system-ui, sans-serif" font-size="14" fill="#111827">86.4 m²</text>
+<text x="18" y="104" font-family="system-ui, sans-serif" font-size="14" fill="#6b7280">地面面积</text>
+<text x="330" y="104" text-anchor="end" font-family="system-ui, sans-serif" font-size="14" fill="#111827">42.0 m²</text>
+<text x="18" y="136" font-family="system-ui, sans-serif" font-size="14" fill="#6b7280">踢脚线</text>
+<text x="330" y="136" text-anchor="end" font-family="system-ui, sans-serif" font-size="14" fill="#111827">38.6 m</text>
+<text x="18" y="168" font-family="system-ui, sans-serif" font-size="14" fill="#6b7280">门窗</text>
+<text x="330" y="168" text-anchor="end" font-family="system-ui, sans-serif" font-size="14" fill="#111827">7 樘</text>
+</g>
+</svg>

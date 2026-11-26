@@ -1,0 +1,83 @@
+{
+  "id": "interior-design",
+  "label": {
+    "zh": "装修设计专家",
+    "en": "Interior Design"
+  },
+  "description": {
+    "zh": "对话式装修设计：把模糊的居住需求澄清成一套可被确定性内核校验的几何方案，交付平面图、诊断清单与工程量。规范与人体工学由独立内核判定，效果图只做表达层，不回写几何。",
+    "en": "Conversational interior design: turns vague living requirements into a geometric plan a deterministic kernel can check, and delivers a floorplan, a diagnostics list and a quantity take-off. Code compliance and ergonomics are decided by a separate kernel; renders are presentation only and never write back to geometry."
+  },
+  "welcome_message": {
+    "zh": "说说户型和你的居住需求，我把它画成能算、能验的方案，并标清哪些已校验、哪些是我的假设",
+    "en": "Tell me the floor plan and how you live — I'll turn it into a plan that can be measured and checked, and mark what is verified versus what is my assumption"
+  },
+  "icon_name": "home",
+  "icon_url": "/experts/avatars/scene-lifestyle.svg",
+  "color": "#b45309",
+  "prompt_files": ["SOUL.md", "AGENTS.md"],
+  "quick_prompts": [
+    {
+      "title": {
+        "zh": "从户型开始",
+        "en": "Start from a floor plan"
+      },
+      "description": {
+        "zh": "上传户型图或描述户型，先出几何与校验",
+        "en": "Upload or describe a floor plan; start with geometry and checks"
+      },
+      "prompt": {
+        "zh": "我先给你户型。请先只做三件事：把墙体、门窗录入方案，标出每条信息的来源（我给的 / 你推断的），然后跑一次确定性校验，把 blocking 和 significant 级问题列出来给我看。先不要提风格和软装。",
+        "en": "Here is my floor plan. Do three things first: enter the walls, doors and windows into the plan, tag where each fact came from (given by me / inferred by you), then run a deterministic check and show me the blocking and significant findings. Do not talk about style or soft furnishings yet."
+      },
+      "color": "#fef3c7",
+      "icon_name": "home"
+    },
+    {
+      "title": {
+        "zh": "预算怎么落",
+        "en": "Fit the budget"
+      },
+      "description": {
+        "zh": "给定预算，给两套可比较的方案",
+        "en": "Two comparable options for a given budget"
+      },
+      "prompt": {
+        "zh": "我的装修预算是 15 万，户型和常住人数我马上发你。请给我两套能落到地面的方案（比如经济型 / 舒适型），每套都要有工程量清单和与上一套的差额对比，差额要用算出来的数字，不要用形容词。",
+        "en": "My renovation budget is 150k; I will send the floor plan and who lives there. Give me two buildable options (e.g. economy / comfort), each with a quantity take-off and the numeric difference against the other. Use computed numbers for the differences, not adjectives."
+      },
+      "color": "#dcfce7",
+      "icon_name": "list-todo"
+    },
+    {
+      "title": {
+        "zh": "这版哪里有问题",
+        "en": "What is wrong with this layout"
+      },
+      "description": {
+        "zh": "对现有方案做体检",
+        "en": "Diagnose the current layout"
+      },
+      "prompt": {
+        "zh": "请对当前方案做一次完整体检：几何是否闭合、通道和净空是否够、采光和通风是否达标、隐私路径是否合理。每条问题给出规则 ID、涉及的具体元素、实测值和要求值，并告诉我哪些必须改、哪些可以接受。",
+        "en": "Do a full check of the current plan: is the geometry closed, are routes and clearances sufficient, are daylight and ventilation acceptable, is the privacy path sensible. For each finding give the rule id, the elements involved, the measured value and the required value, and tell me which must be fixed and which can be accepted."
+      },
+      "color": "#fee2e2",
+      "icon_name": "shield-check"
+    }
+  ],
+  "task_examples": {
+    "zh": [
+      "主卧想要衣帽间，但过道至少留 1.2 米，怎么改？",
+      "客厅飘窗那一面能不能做 2.4 米的通顶柜？",
+      "帮我把这个户型做两版：预算 12 万和 18 万，差别列清楚",
+      "厨房这版布局按人体工学站不站得开？给我实测净空"
+    ],
+    "en": [
+      "I want a walk-in wardrobe in the main bedroom but at least 1.2m of corridor — how should I change it?",
+      "Can I put a 2.4m full-height cabinet along the bay window in the living room?",
+      "Give me two versions of this layout at 120k and 180k, with the differences spelled out",
+      "Does this kitchen layout give a person enough room to work? Give me the measured clearances"
+    ]
+  }
+}

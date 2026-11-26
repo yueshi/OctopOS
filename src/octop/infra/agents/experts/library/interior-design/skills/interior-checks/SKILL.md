@@ -1,0 +1,85 @@
+---
+name: interior-checks
+description: 装修方案的确定性检查清单——每条规则的 rule_id、判据阈值、严重级别与判定方（几何内核自动 / 需人工确认 / 待实现）。用于解释诊断结果、核对交付清单、或回答"这版哪里有问题"。触发词：检查、校验、诊断、规范、净空、通道、采光、隐私、验收。
+argument-hint: "<要核对的方案或问题>"
+---
+
+# 装修方案检查清单
+
+> 规则的**判定权在几何内核**，不在对话。这份清单用来让你读懂诊断、说清依据、以及判断哪些必须交给专业人员。
+>
+> **「内核」列是当前实现的真实状态**：`已实现` = 几何内核会算并在诊断里返回；`待实现` = 内核暂不支持，需要你自己按判据人工判断，并在交付时标注"未经确定性校验"；`人工` = 本来就要现场或专业核算。
+
+## 严重级别
+
+| 级别 | 含义 | 你怎么处理 |
+|---|---|---|
+| `blocking` | 违反硬约束，不改就不能用 | 必须让用户看见并明确接受，不能自己绕过去 |
+| `significant` | 明显影响使用体验 | 主动给 2–3 个改法与代价，让用户选 |
+| `improvement` | 可以更好，不影响成立 | 列出来即可，别占用对话篇幅 |
+
+## 几何与结构
+
+| rule_id | 检查什么 | 判据 | 级别 | 内核 |
+|---|---|---|---|---|
+| `geometry.wall_gap` | 墙体之间不断开 | 相邻墙端点间隙 ≤ 20mm | blocking | 已实现 |
+| `geometry.wall_overlap` | 墙体不互相重叠 | 共线墙段不交叠 | blocking | 已实现 |
+| `geometry.room_not_enclosed` | 房间边界闭合 | 房间每条边都有对应墙体 | blocking | 已实现 |
+| `geometry.opening_not_in_wall` | 门窗开洞落在墙上 | 洞口中心到墙中心线 ≤ 墙厚 | blocking | 已实现 |
+| `geometry.opening_past_wall_end` | 开洞不超出墙端 | 洞口两端在墙段内 | blocking | 已实现 |
+| `geometry.openings_overlap` | 同一墙上的开洞不重叠 | 洞口沿墙的区间互不相交 | blocking | 已实现 |
+| `geometry.element_overlap` | 家具互不重叠、不穿墙 | 家具轮廓不相交；墙体不贯穿家具 | blocking | 已实现 |
+| `geometry.fixed_off_wall` | 固定家具（冰箱/灶具/洁具）贴墙安装 | 需靠墙的件背面贴墙 | significant | 待实现 |
+
+## 通行与净空
+
+| rule_id | 检查什么 | 判据 | 级别 | 内核 |
+|---|---|---|---|---|
+| `route.continuity` | 从入口到每个使用区的连续通道 | 各房间经门洞与入口连通 | blocking | 已实现 |
+| `clearance.wardrobe_front` | 衣柜、储物柜前净空 | ≥ 700mm | blocking | 已实现 |
+| `clearance.seat_stand` | 座椅后站立空间 | 距座面边缘 ≥ 750mm | significant | 待实现 |
+| `clearance.seat_walk` | 座椅后通行空间 | 距座面边缘 ≥ 900mm | significant | 待实现 |
+| `clearance.pair_min` | 元素对的最小间距 | 按家具类别取阈值 | significant | 待实现 |
+| `clearance.handle` | 门把手与门框在 90° 时的净空 | ≥ 100mm | improvement | 待实现 |
+
+## 采光、通风、面积
+
+| rule_id | 检查什么 | 判据 | 级别 | 内核 |
+|---|---|---|---|---|
+| `daylight.window_ratio` | 窗地比 | 窗面积 ≥ 地面面积 ÷ 8 | significant | 已实现 |
+| `daylight.service_window` | 主要居住房间有直接采光 | 每个主要房间至少 1 扇外窗 | significant | 待实现 |
+| `ventilation.service_room` | 卫生间、厨房通风 | 按当地规范判定 | blocking | 人工（内核返回 not_verifiable） |
+| `room.occupancy` | 房间家具占用率 | 10%–40% | improvement | 待实现 |
+| `programme.min_area` | 各房间最小面积 | 内置默认值（客厅 12㎡ / 卧室 9㎡ / 厨房 5㎡ / 卫生间 3㎡），随地区变化 | significant | 已实现（默认值可调） |
+| `programme.service_empty` | 服务房间不放无关家具 | 厨卫不放餐桌/床 | improvement | 人工 |
+
+## 安全与隐私
+
+| rule_id | 检查什么 | 判据 | 级别 | 内核 |
+|---|---|---|---|---|
+| `safety.splash_zone` | 湿区溅水范围内无电气件 | 淋浴/浴缸侧 600mm 内无插座 | blocking | 已实现 |
+| `safety.blocked_egress` | 门扇开启不堵疏散 | 开门后不侵占走道 | blocking | 待实现 |
+| `privacy.path` | 共区不穿卧室 | 从入口到客厅不必穿过卧室或卫生间 | significant | 待实现 |
+| `privacy.entry_sightline` | 入口不直视 WC / 床 | 从入户视点看不到 | significant | 待实现 |
+
+## 人体工学与可施工性
+
+| rule_id | 检查什么 | 判据 | 级别 | 内核 |
+|---|---|---|---|---|
+| `ergonomics.seat_height` | 座高与台面高匹配 | 差值在舒适区间 | improvement | 待实现 |
+| `assembly.tall_furniture` | 高柜能否搬进房间 | 柜体可斜立通过门洞与走廊 | significant | 人工 |
+| `robustness.tolerance` | 摆放容差鲁棒性 | 净空余量 ≥ 20mm | significant | 已实现 |
+| `brief.constraint` | 用户明确提出的约束 | 如"电视不靠窗" | significant | 人工（对话） |
+| `requirement.trace` | 每条需求可追溯 | 需求有对应检查项证明 | improvement | 人工 |
+
+## 读诊断的规矩
+
+1. **先看 status，再看 severity**。`not_verifiable`（无法验证）和 `not_applicable`（不适用）不是问题，别当问题报给用户——但要在"待专业确认"里提一句。
+2. **给实测值和阈值**，不要只说"不符合"。用户要能自己判断能不能接受。
+3. **一个 blocking 问题给 2–3 个改法**，每个改法都要有代价（工程量、造价、牺牲了什么）。
+4. **不确定是不是问题，就去读实测值**。判定在核心里，别自己目测。
+5. **内核没实现的规则**（标"待实现"）：你可以按判据自己判断，但**必须在交付清单里写明"未经确定性校验"**，不要说成"已通过检查"。
+
+## 必须交给专业人员（你不要下结论）
+
+结构改动与承重、燃气、防水与闭水试验、暖通与新风（负荷、风管、坡度）、强弱电点位与线径选型、消防与防火分区、隔声与楼板冲击、物业管理与业委会规范。这些在交付时统一放进"待专业确认"。
