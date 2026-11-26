@@ -25,6 +25,7 @@
 - 小程序公开面统一由表级 `public_visible` 控制，取消 `published` row scope：发布弹窗新增公开范围预览（表数/行数/敏感列），个人表标记为「个人表」且公开开关禁用；需要只公开部分行时使用独立公开表/投影
 
 ### 新增
+- 装修设计补齐六条几何规则：`geometry.fixed_off_wall`（冰箱/灶具/洗碗机/洗衣机/马桶/洗手盆/浴缸/台面必须贴墙；品类目录新增 `fixed` 标记）、`daylight.service_window`（每个居住房间须在自己的外墙上开窗，内墙上的窗不计）、`privacy.entry_sightline`（从入户门沿进门方向的射线在被墙截断前不得直视床或马桶）、`safety.blocked_egress`（门扇 90° 开启扫掠不撞家具）、`room.occupancy`（家具占用率 10%–40%）、`programme.service_empty`（厨卫内不得放床/沙发/餐桌/衣柜/电视柜）
 - 装修设计的座椅、通道与隐私规则：新增 `clearance.seat_stand`（座椅前 750mm 站立空间）、`clearance.seat_walk`（750–900mm 可站不可过）、`route.width`（100mm 栅格上验证从入口到各房间存在连续 600mm 净宽通路；15m×12m 方案约 240ms）、`privacy.path`（公共区域无需穿过卧室/卫生间，按房间名推断）；家具新增可选 `facing`（使用朝向，0=+x），未声明时座椅规则取四面最好的一面，避免误报
 - 装修设计的家具/电器/水电支持：新增品类目录 `octop.infra.design.catalog`（30 余种标准 kind，含默认尺寸、类别、靠墙/湿区/电气/给排水标记与前净空阈值，别名自动归一），IR 增加 `furniture[].host`（嵌入关系，水槽在台面里、烟机在灶上，嵌入链内不算冲突）与 `mep` 水电点位（插座/开关/给水/排水/空调/燃气）；新增规则 `clearance.appliance_front`、`clearance.sanitary_front`、`clearance.kitchen_aisle`、`catalog.unknown_kind`、`mep.unknown_type`、`mep.not_recorded`、`mep.wet_appliance_services`，`safety.splash_zone` 同时识别 MEP 点位。页面按品类着色并显示图例、绘制水电点位、嵌入件以虚线区分。未知 kind 不再静默失效，而是报 `not_verifiable`
 - 对话式装修设计（规划中）：MiniApp 系统模板「装修方案」（`interior-plan`，平面图 SVG + 诊断清单 + 工程量表）、装修设计专家（`interior-design`，含意图澄清与检查清单两个 skill）、以及确定性几何内核 `octop.infra.design`（IR 模型、14 条可计算规则、算量、IR 原子操作，可独立启动为 REST / MCP 服务）。四条链路（页面 → 内核走 extension service、专家 → 内核走 MCP、专家经 custom-mcp 连接器延迟装载工具、页面 IR 契约）均有真服务/真浏览器测试，并在全新实例上做过真机验证。设计与契约见 `docs/interior-design-miniapp-plan.md`。

@@ -29,7 +29,7 @@ argument-hint: "<要核对的方案或问题>"
 | `geometry.opening_past_wall_end` | 开洞不超出墙端 | 洞口两端在墙段内 | blocking | 已实现 |
 | `geometry.openings_overlap` | 同一墙上的开洞不重叠 | 洞口沿墙的区间互不相交 | blocking | 已实现 |
 | `geometry.element_overlap` | 家具互不重叠、不穿墙 | 家具轮廓不相交；墙体不贯穿家具 | blocking | 已实现 |
-| `geometry.fixed_off_wall` | 固定家具（冰箱/灶具/洁具）贴墙安装 | 需靠墙的件背面贴墙 | significant | 待实现 |
+| `geometry.fixed_off_wall` | 固定设备（冰箱/灶具/洗碗机/洗衣机/马桶/洗手盆/浴缸/台面）贴墙 | 背面距墙 ≤ 墙厚（用户明确要岛台时按用户口径） | significant | 已实现 |
 
 ## 通行与净空
 
@@ -51,20 +51,20 @@ argument-hint: "<要核对的方案或问题>"
 | rule_id | 检查什么 | 判据 | 级别 | 内核 |
 |---|---|---|---|---|
 | `daylight.window_ratio` | 窗地比 | 窗面积 ≥ 地面面积 ÷ 8 | significant | 已实现 |
-| `daylight.service_window` | 主要居住房间有直接采光 | 每个主要房间至少 1 扇外窗 | significant | 待实现 |
+| `daylight.service_window` | 主要居住房间有直接采光 | 每个房间自己的**外墙**上至少 1 扇窗；内墙上的窗不算 | significant | 已实现 |
 | `ventilation.service_room` | 卫生间、厨房通风 | 按当地规范判定 | blocking | 人工（内核返回 not_verifiable） |
-| `room.occupancy` | 房间家具占用率 | 10%–40% | improvement | 待实现 |
+| `room.occupancy` | 房间家具占用率 | 10%–40% | improvement | 已实现 |
 | `programme.min_area` | 各房间最小面积 | 内置默认值（客厅 12㎡ / 卧室 9㎡ / 厨房 5㎡ / 卫生间 3㎡），随地区变化 | significant | 已实现（默认值可调） |
-| `programme.service_empty` | 服务房间不放无关家具 | 厨卫不放餐桌/床 | improvement | 人工 |
+| `programme.service_empty` | 服务房间不放无关家具 | 厨卫里没有床/沙发/餐桌/衣柜/电视柜 | improvement | 已实现 |
 
 ## 安全与隐私
 
 | rule_id | 检查什么 | 判据 | 级别 | 内核 |
 |---|---|---|---|---|
 | `safety.splash_zone` | 湿区溅水范围内无电气件 | 淋浴/浴缸侧 600mm 内无插座（家具或 MEP 点位都算） | blocking | 已实现 |
-| `safety.blocked_egress` | 门扇开启不堵疏散 | 开门后不侵占走道 | blocking | 待实现 |
+| `safety.blocked_egress` | 门扇开启不撞家具 | 90° 开启扫掠范围内没有家具 | blocking | 已实现 |
 | `privacy.path` | 共区不穿私密房间 | 从入口到公共区域（客厅/餐厅/厨房/门厅…）不必穿过卧室/卫生间/书房 | significant | 已实现（按房间名推断属性） |
-| `privacy.entry_sightline` | 入口不直视 WC / 床 | 从入户视点看不到 | significant | 待实现 |
+| `privacy.entry_sightline` | 入口不直视床 / 马桶 | 从入户门沿进门方向射线（被墙截断）内没有床或马桶 | significant | 已实现 |
 
 ## 人体工学与可施工性
 

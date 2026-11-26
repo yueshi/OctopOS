@@ -332,6 +332,12 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `clearance.seat_stand` | 座椅前站立空间 ≥ 750mm（无 `facing` 时取最好一面） | significant |
 | `clearance.seat_walk` | 座椅前通行空间 750–900mm | improvement |
 | `privacy.path` | 公共区域无需穿过私密房间（按房间名推断） | significant |
+| `privacy.entry_sightline` | 入户门方向射线（被墙截断）内没有床或马桶 | significant |
+| `safety.blocked_egress` | 门扇 90° 开启扫掠不撞家具 | blocking |
+| `geometry.fixed_off_wall` | 固定设备（冰箱/灶具/洁具/台面）背面贴墙 | significant |
+| `daylight.service_window` | 每个居住房间在自己的外墙上至少 1 扇窗（内墙窗不算） | significant |
+| `room.occupancy` | 房间家具占用率 10%–40% | improvement |
+| `programme.service_empty` | 厨卫内没有床/沙发/餐桌/衣柜/电视柜 | improvement |
 | `safety.splash_zone` | 淋浴/浴缸侧 600mm 内无电气件 | blocking |
 | `clearance.wardrobe_front` | 衣柜/柜前净空（目录逐类：衣柜/储物柜 700、书架/电视柜 600、床头柜 0） | blocking |
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | significant |
@@ -350,7 +356,7 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 `route.width` 用 100mm 栅格 + 300mm 内缩近似"连续 600mm 净宽"，因此存在一个栅格步长的误差；15m×12m、24 件家具的方案实测约 240ms。`privacy.path` 依赖房间名（中英文关键词）判断私密性，房间命名不规范时该规则会跳过而不是误报。
 
-尚未实现的规则（采光细分、门把手净空、入口视线等）在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
+尚未实现的规则（采光系数、门把手与门框净空、座高匹配、高柜搬运可行性——后两者需要 IR 增加高度字段）在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
 
 ### 4.5 增量校验
 

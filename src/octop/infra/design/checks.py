@@ -27,6 +27,7 @@ from octop.infra.design.geometry import (
     point_to_polygon_distance,
     point_to_segment_distance,
     polygon_area,
+    polygon_centroid,
     ray_segment_distance,
     segments_intersect,
     snap_point,
@@ -127,6 +128,36 @@ MIN_ROOM_AREA_MM2: Final[dict[str, float]] = {
 }
 
 
+#: Rooms that need their own exterior window.
+DAYLIGHT_ROOM_WORDS: Final = (
+    "客厅",
+    "起居",
+    "卧室",
+    "主卧",
+    "次卧",
+    "儿童房",
+    "书房",
+    "厨房",
+    "living",
+    "bedroom",
+    "study",
+    "kitchen",
+)
+
+#: Service rooms should not hold these.
+SERVICE_ROOM_WORDS: Final = ("厨房", "卫生间", "浴室", "客卫", "主卫", "kitchen", "bath", "toilet")
+UNRELATED_IN_SERVICE: Final = frozenset(
+    {"bed_double", "bed_king", "bed_single", "crib", "sofa", "dining_table", "wardrobe", "tv_stand"}
+)
+
+#: Furniture footprint share of a room, as a sanity band.
+ROOM_OCCUPANCY_MIN: Final = 0.10
+ROOM_OCCUPANCY_MAX: Final = 0.40
+
+#: How far an entry sightline is traced.
+ENTRY_SIGHT_RANGE_MM: Final = 10_000.0
+
+
 @dataclass(frozen=True)
 class RuleSpec:
     """Static description of one rule, used for docs and reporting."""
@@ -193,6 +224,12 @@ RULES: dict[str, RuleSpec] = {
         RuleSpec("clearance.seat_walk", "座椅前通行空间不足", SEVERITY_IMPROVEMENT),
         RuleSpec("route.width", "600mm 净宽通路无法到达", SEVERITY_BLOCKING),
         RuleSpec("privacy.path", "公共区域需穿过私密房间", SEVERITY_SIGNIFICANT),
+        RuleSpec("geometry.fixed_off_wall", "固定设备未贴墙", SEVERITY_SIGNIFICANT),
+        RuleSpec("daylight.service_window", "居住房间缺少外窗", SEVERITY_SIGNIFICANT),
+        RuleSpec("privacy.entry_sightline", "入户直视床或马桶", SEVERITY_SIGNIFICANT),
+        RuleSpec("safety.blocked_egress", "门扇开启撞到家具", SEVERITY_BLOCKING),
+        RuleSpec("room.occupancy", "房间家具占用率异常", SEVERITY_IMPROVEMENT),
+        RuleSpec("programme.service_empty", "服务房间放了无关家具", SEVERITY_IMPROVEMENT),
     )
 }
 
@@ -1123,6 +1160,283 @@ def _check_route_width(ir: IR) -> list[Diagnostic]:
     return findings
 
 
+def _wall_has_rooms_on_both_sides(ir: IR, wall: Wall) -> bool:
+    """True for an interior wall: rooms sit on both sides of it."""
+    length = wall.length
+    if length < 1e-9:
+        return False
+    normal = (-(wall.y2 - wall.y1) / length, (wall.x2 - wall.x1) / length)
+    midpoint = ((wall.x1 + wall.x2) / 2, (wall.y1 + wall.y2) / 2)
+    sides: set[int] = set()
+    for room in ir.rooms:
+        for point in room.polygon:
+            side = dot(normal, (point[0] - midpoint[0], point[1] - midpoint[1]))
+            if abs(side) > wall.t:
+                sides.add(1 if side > 0 else -1)
+            if len(sides) == 2:
+                return True
+    return False
+
+
+def _inward_normal(ir: IR, opening: Opening) -> tuple[Point, Room] | None:
+    """Normal of the wall through *opening*, pointing into the adjacent room."""
+    rooms = [room for room in ir.rooms if room.polygon]
+    if not rooms:
+        return None
+    room = _room_of_point(rooms, (opening.x, opening.y))
+    if room is None:
+        return None
+    direction = (math.cos(opening.heading), math.sin(opening.heading))
+    normal = (-direction[1], direction[0])
+    centroid = polygon_centroid(room.polygon)
+    towards = (centroid[0] - opening.x, centroid[1] - opening.y)
+    if dot(normal, towards) < 0:
+        normal = (-normal[0], -normal[1])
+    return normal, room
+
+
+def _ray_hit_polygon(origin: Point, direction: Point, polygon: list[Point]) -> float | None:
+    best: float | None = None
+    for index in range(len(polygon)):
+        hit = ray_segment_distance(
+            origin, direction, polygon[index], polygon[(index + 1) % len(polygon)]
+        )
+        if hit is not None and (best is None or hit < best):
+            best = hit
+    return best
+
+
+def _wall_stop_distance(ir: IR, origin: Point, direction: Point) -> float:
+    """Distance along the ray to the first wall that actually blocks."""
+    best = ENTRY_SIGHT_RANGE_MM
+    for wall in ir.walls:
+        if wall.is_degenerate:
+            continue
+        hit = ray_segment_distance(origin, direction, (wall.x1, wall.y1), (wall.x2, wall.y2))
+        if hit is None:
+            continue
+        length = wall.length
+        unit = ((wall.x2 - wall.x1) / length, (wall.y2 - wall.y1) / length)
+        point = (origin[0] + direction[0] * hit, origin[1] + direction[1] * hit)
+        position = (point[0] - wall.x1) * unit[0] + (point[1] - wall.y1) * unit[1]
+        if any(low <= position <= high for low, high in _passable_spans(ir, wall)):
+            continue
+        best = min(best, max(0.0, hit - wall.t / 2))
+    return best
+
+
+def _check_fixed_off_wall(ir: IR) -> list[Diagnostic]:
+    findings: list[Diagnostic] = []
+    for item in ir.furniture:
+        if item.host:
+            continue
+        info = resolve(item.kind)
+        if info is None or not info.fixed:
+            continue
+        wall, gap = _supporting_wall(item, ir.walls)
+        if wall is not None and gap <= max(wall.t, 40.0):
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="geometry.fixed_off_wall",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_SIGNIFICANT,
+                message=(
+                    f"{item.name or info.label_zh} 未贴墙安装"
+                    + (f"（距最近墙 {_mm(gap)}）" if wall is not None else "（附近没有墙）")
+                    + "；固定设备需靠墙以便接水电"
+                ),
+                elements=[item.id],
+                measured=gap if wall is not None else None,
+                required=0.0,
+            )
+        )
+    return findings
+
+
+def _window_serves_room(ir: IR, opening: Opening, room: Room) -> bool:
+    """A window only lights a room when it sits on that room's *exterior* wall."""
+    wall, _gap = _nearest_wall(ir, (opening.x, opening.y))
+    if wall is None:
+        return False
+    if _wall_has_rooms_on_both_sides(ir, wall):
+        return False
+    return point_to_polygon_distance((opening.x, opening.y), room.polygon) <= max(wall.t, 60.0)
+
+
+def _check_service_window(ir: IR) -> list[Diagnostic]:
+    windows = [opening for opening in ir.openings if opening.is_window]
+    findings: list[Diagnostic] = []
+    for room in ir.rooms:
+        if not room.polygon or not _room_is(room, DAYLIGHT_ROOM_WORDS):
+            continue
+        if any(_window_serves_room(ir, window, room) for window in windows):
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="daylight.service_window",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_SIGNIFICANT,
+                message=f"{room.name} 没有直接采光的外窗（窗必须开在该房间自己的外墙上）",
+                elements=[room.id],
+            )
+        )
+    return findings
+
+
+def _check_entry_sightline(ir: IR) -> list[Diagnostic]:
+    door = _entrance_door(ir)
+    if door is None:
+        return []
+    normal = _inward_normal(ir, door)
+    if normal is None:
+        return []
+    direction, _room = normal
+    origin = (door.x, door.y)
+    limit = _wall_stop_distance(ir, origin, direction)
+    targets: list[Furniture] = []
+    by_id = {item.id: item for item in ir.furniture}
+    for item in ir.furniture:
+        info = resolve(item.kind)
+        if info is None or item.host:
+            continue
+        if info.category not in {"bed", "sanitary"}:
+            continue
+        if info.category == "sanitary" and info.kind != "toilet":
+            continue
+        hit = _ray_hit_polygon(origin, direction, item.corners())
+        if hit is not None and hit <= limit:
+            targets.append(item)
+    if not targets:
+        return []
+    names = "、".join(item.name or (by_id[item.id].kind) for item in targets)
+    return [
+        Diagnostic(
+            rule_id="privacy.entry_sightline",
+            status=STATUS_NON_COMPLIANT,
+            severity=SEVERITY_SIGNIFICANT,
+            message=f"从入户门直视到：{names}；建议用玄关柜、屏风或改门位遮挡",
+            elements=[door.id, *[item.id for item in targets]],
+        )
+    ]
+
+
+def _check_door_swing(ir: IR) -> list[Diagnostic]:
+    findings: list[Diagnostic] = []
+    by_id = {item.id: item for item in ir.furniture}
+    for door in ir.openings:
+        if door.type != "door":
+            continue
+        normal = _inward_normal(ir, door)
+        if normal is None:
+            continue
+        inward, _room = normal
+        hinge = (door.x, door.y)
+        leaf = (math.cos(door.heading), math.sin(door.heading))
+        collided: Furniture | None = None
+        for step in range(0, 91, 15):
+            rad = math.radians(step)
+            direction = (
+                math.cos(rad) * leaf[0] + math.sin(rad) * inward[0],
+                math.cos(rad) * leaf[1] + math.sin(rad) * inward[1],
+            )
+            for fraction in (0.5, 1.0):
+                point = (
+                    hinge[0] + door.width * fraction * direction[0],
+                    hinge[1] + door.width * fraction * direction[1],
+                )
+                for item in ir.furniture:
+                    if item.host:
+                        continue
+                    if point_in_polygon(point, item.corners()):
+                        collided = item
+                        break
+                if collided:
+                    break
+            if collided:
+                break
+        if collided is None:
+            continue
+        info = resolve(collided.kind)
+        label = collided.name or (info.label_zh if info else by_id[collided.id].kind)
+        findings.append(
+            Diagnostic(
+                rule_id="safety.blocked_egress",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_BLOCKING,
+                message=(
+                    f"门 {door.id or '未命名'} 开启时撞到{label}；"
+                    f"{_mm(door.width)} 门扇需要完整开启空间"
+                ),
+                elements=[door.id, collided.id],
+                measured=door.width,
+                required=door.width,
+            )
+        )
+    return findings
+
+
+def _check_room_occupancy(ir: IR) -> list[Diagnostic]:
+    findings: list[Diagnostic] = []
+    for room in ir.rooms:
+        area = abs(polygon_area(room.polygon))
+        if area <= 0:
+            continue
+        used = 0.0
+        for item in ir.furniture:
+            if item.host:
+                continue
+            if point_in_polygon(item.center, room.polygon):
+                used += item.w * item.d
+        ratio = used / area
+        if ROOM_OCCUPANCY_MIN <= ratio <= ROOM_OCCUPANCY_MAX:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="room.occupancy",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_IMPROVEMENT,
+                message=(
+                    f"{room.name or room.id} 家具占用率 {ratio * 100:.0f}%，"
+                    f"建议保持在 {ROOM_OCCUPANCY_MIN * 100:.0f}%–{ROOM_OCCUPANCY_MAX * 100:.0f}%"
+                ),
+                elements=[room.id],
+                measured=ratio,
+                required=ROOM_OCCUPANCY_MAX if ratio > ROOM_OCCUPANCY_MAX else ROOM_OCCUPANCY_MIN,
+            )
+        )
+    return findings
+
+
+def _check_service_room_use(ir: IR) -> list[Diagnostic]:
+    findings: list[Diagnostic] = []
+    for room in ir.rooms:
+        if not room.polygon or not _room_is(room, SERVICE_ROOM_WORDS):
+            continue
+        intruders = [
+            item
+            for item in ir.furniture
+            if not item.host
+            and item.kind in UNRELATED_IN_SERVICE
+            and point_in_polygon(item.center, room.polygon)
+        ]
+        if not intruders:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="programme.service_empty",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_IMPROVEMENT,
+                message=(
+                    f"{room.name} 里放了不该有的家具："
+                    + "、".join(item.name or item.kind for item in intruders)
+                ),
+                elements=[room.id, *[item.id for item in intruders]],
+            )
+        )
+    return findings
+
+
 def _check_window_ratio(ir: IR) -> list[Diagnostic]:
     floor_area = sum(abs(polygon_area(room.polygon)) for room in ir.rooms)
     if floor_area <= 0.0:
@@ -1442,6 +1756,12 @@ def check_drawing(ir: IR, changed_ids: Sequence[str] | None = None) -> list[Diag
     findings.extend(_check_sanitary_clearance(ir))
     findings.extend(_check_kitchen_aisle(ir))
     findings.extend(_check_unknown_kinds(ir))
+    findings.extend(_check_fixed_off_wall(ir))
+    findings.extend(_check_service_window(ir))
+    findings.extend(_check_entry_sightline(ir))
+    findings.extend(_check_door_swing(ir))
+    findings.extend(_check_room_occupancy(ir))
+    findings.extend(_check_service_room_use(ir))
     findings.extend(_check_mep_types(ir))
     findings.extend(_check_wet_appliance_services(ir))
     findings.extend(_check_window_ratio(ir))

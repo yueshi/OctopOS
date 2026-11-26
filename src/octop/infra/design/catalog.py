@@ -60,6 +60,8 @@ class CatalogItem:
     #: ``None`` means "use the category default"; ``0`` means "no requirement"
     #: (a bedside table is reached from the bed, not from the floor).
     front_clearance: float | None = None
+    #: Fixed installations must touch a wall (they are plumbed or wired in).
+    fixed: bool = False
 
 
 def _item(
@@ -172,6 +174,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             600,
             against_wall=True,
             front_clearance=900,
+            fixed=True,
         ),
         _item(
             "sink",
@@ -184,6 +187,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=900,
+            fixed=True,
         ),
         _item(
             "stove",
@@ -196,6 +200,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             appliance=True,
             electrical=True,
             front_clearance=900,
+            fixed=True,
         ),
         _item(
             "hood",
@@ -219,6 +224,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             appliance=True,
             electrical=True,
             front_clearance=900,
+            fixed=True,
         ),
         _item(
             "oven",
@@ -231,6 +237,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             appliance=True,
             electrical=True,
             front_clearance=600,
+            fixed=True,
         ),
         _item(
             "dishwasher",
@@ -245,6 +252,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=600,
+            fixed=True,
         ),
         # laundry
         _item(
@@ -260,6 +268,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=600,
+            fixed=True,
         ),
         _item(
             "dryer",
@@ -272,6 +281,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             appliance=True,
             electrical=True,
             front_clearance=600,
+            fixed=True,
         ),
         # sanitary
         _item(
@@ -285,6 +295,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=600,
+            fixed=True,
         ),
         _item(
             "basin",
@@ -297,6 +308,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=600,
+            fixed=True,
         ),
         _item(
             "shower",
@@ -322,6 +334,7 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             needs_water=True,
             needs_drain=True,
             front_clearance=600,
+            fixed=True,
         ),
         # electrical points that used to be modelled as furniture
         _item("socket", "electrical", "插座", "socket", 86, 86, electrical=True),
@@ -418,6 +431,7 @@ def catalog_rows() -> list[dict[str, object]]:
             "needs_water": item.needs_water,
             "needs_drain": item.needs_drain,
             "front_clearance": item.front_clearance,
+            "fixed": item.fixed,
         }
         for item in CATALOG.values()
     ]

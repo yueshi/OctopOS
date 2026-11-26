@@ -518,3 +518,205 @@ def test_shared_room_reached_through_a_bedroom_is_reported() -> None:
     findings = _findings(ir, "privacy.path")
     assert findings
     assert findings[0].elements[0] == "R-003"
+
+
+# --- remaining geometric rules -------------------------------------------
+
+
+def _two_room_with_window() -> Any:
+    return parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 8000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 8000, "y1": 0, "x2": 8000, "y2": 4000, "t": 120},
+                {"id": "W-003", "x1": 8000, "y1": 4000, "x2": 0, "y2": 4000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 4000, "x2": 0, "y2": 0, "t": 120},
+                {"id": "W-005", "x1": 4000, "y1": 0, "x2": 4000, "y2": 4000, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 1800, "width": 900, "angle": 90},
+                {"id": "D-002", "type": "door", "x": 4000, "y": 1800, "width": 900, "angle": 90},
+                {"id": "N-001", "type": "window", "x": 1000, "y": 0, "width": 1200, "angle": 0},
+            ],
+            "furniture": [],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "客厅",
+                    "polygon": [[0, 0], [4000, 0], [4000, 4000], [0, 4000]],
+                },
+                {
+                    "id": "R-002",
+                    "name": "卧室",
+                    "polygon": [[4000, 0], [8000, 0], [8000, 4000], [4000, 4000]],
+                },
+            ],
+        }
+    )
+
+
+def test_fixed_appliance_must_touch_a_wall() -> None:
+    ir = parse_ir(
+        {
+            "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 6000, "y2": 0, "t": 120}],
+            "openings": [],
+            "rooms": [],
+            "furniture": [
+                {"id": "F-001", "kind": "fridge", "x": 2000, "y": 1500, "w": 700, "d": 700}
+            ],
+        }
+    )
+    findings = _findings(ir, "geometry.fixed_off_wall")
+    assert findings
+    assert findings[0].severity == "significant"
+
+
+def test_fixed_appliance_against_a_wall_passes() -> None:
+    ir = parse_ir(
+        {
+            "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 6000, "y2": 0, "t": 120}],
+            "openings": [],
+            "rooms": [],
+            "furniture": [{"id": "F-001", "kind": "fridge", "x": 2000, "y": 0, "w": 700, "d": 700}],
+        }
+    )
+    assert not _findings(ir, "geometry.fixed_off_wall")
+
+
+def test_room_without_its_own_window_is_reported() -> None:
+    ir = _two_room_with_window()
+    findings = _findings(ir, "daylight.service_window")
+    assert [item.elements for item in findings] == [["R-002"]]
+
+
+def test_interior_window_does_not_count_as_daylight() -> None:
+    ir = _two_room_with_window()
+    # Move the window onto the interior partition: it must not light a room.
+    ir = parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 8000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 8000, "y1": 0, "x2": 8000, "y2": 4000, "t": 120},
+                {"id": "W-003", "x1": 8000, "y1": 4000, "x2": 0, "y2": 4000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 4000, "x2": 0, "y2": 0, "t": 120},
+                {"id": "W-005", "x1": 4000, "y1": 0, "x2": 4000, "y2": 4000, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 1800, "width": 900, "angle": 90},
+                {"id": "N-001", "type": "window", "x": 4000, "y": 2000, "width": 1200, "angle": 90},
+            ],
+            "furniture": [],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "客厅",
+                    "polygon": [[0, 0], [4000, 0], [4000, 4000], [0, 4000]],
+                },
+                {
+                    "id": "R-002",
+                    "name": "卧室",
+                    "polygon": [[4000, 0], [8000, 0], [8000, 4000], [4000, 4000]],
+                },
+            ],
+        }
+    )
+    findings = _findings(ir, "daylight.service_window")
+    assert {tuple(item.elements) for item in findings} == {("R-001",), ("R-002",)}
+
+
+def test_entry_sightline_to_the_bed_is_reported() -> None:
+    ir = parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 6000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 6000, "y1": 0, "x2": 6000, "y2": 4000, "t": 120},
+                {"id": "W-003", "x1": 6000, "y1": 4000, "x2": 0, "y2": 4000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 4000, "x2": 0, "y2": 0, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 1800, "width": 900, "angle": 90},
+            ],
+            "furniture": [
+                {"id": "F-001", "kind": "bed_double", "x": 2000, "y": 1000, "w": 1500, "d": 2000},
+            ],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "卧室",
+                    "polygon": [[0, 0], [6000, 0], [6000, 4000], [0, 4000]],
+                },
+            ],
+        }
+    )
+    findings = _findings(ir, "privacy.entry_sightline")
+    assert findings
+    assert "F-001" in findings[0].elements
+
+
+def test_door_swing_hitting_furniture_is_reported() -> None:
+    ir = parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 6000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 6000, "y1": 0, "x2": 6000, "y2": 4000, "t": 120},
+                {"id": "W-003", "x1": 6000, "y1": 4000, "x2": 0, "y2": 4000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 4000, "x2": 0, "y2": 0, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 1000, "width": 900, "angle": 90},
+            ],
+            "furniture": [
+                {"id": "F-001", "kind": "cabinet", "x": 300, "y": 1200, "w": 400, "d": 400},
+            ],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "客厅",
+                    "polygon": [[0, 0], [6000, 0], [6000, 4000], [0, 4000]],
+                },
+            ],
+        }
+    )
+    findings = _findings(ir, "safety.blocked_egress")
+    assert findings
+    assert findings[0].severity == "blocking"
+
+
+def test_empty_room_occupancy_is_flagged() -> None:
+    ir = parse_ir(
+        {
+            "walls": [],
+            "openings": [],
+            "furniture": [{"id": "F-001", "kind": "chair", "x": 100, "y": 100, "w": 450, "d": 450}],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "客厅",
+                    "polygon": [[0, 0], [6000, 0], [6000, 4000], [0, 4000]],
+                },
+            ],
+        }
+    )
+    assert _findings(ir, "room.occupancy")
+
+
+def test_bed_in_the_kitchen_is_reported() -> None:
+    ir = parse_ir(
+        {
+            "walls": [],
+            "openings": [],
+            "furniture": [
+                {"id": "F-001", "kind": "bed_single", "x": 100, "y": 100, "w": 1000, "d": 2000}
+            ],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "厨房",
+                    "polygon": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]],
+                },
+            ],
+        }
+    )
+    findings = _findings(ir, "programme.service_empty")
+    assert findings
+    assert "F-001" in findings[0].elements
