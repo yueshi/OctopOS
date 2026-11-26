@@ -171,3 +171,36 @@ def test_rows_carry_thresholds_too() -> None:
     # The setting row is not IR itself; the page folds it in. Keep the row
     # round-trip honest: a setting row must not crash the parser.
     assert ir.walls == []
+
+
+def test_seat_table_delta_override() -> None:
+    plan = {
+        "furniture": [
+            {"id": "F-001", "kind": "chair", "x": 0, "y": 0, "w": 450, "d": 450},
+            {
+                "id": "F-002",
+                "kind": "dining_table",
+                "x": 600,
+                "y": 0,
+                "w": 1400,
+                "d": 800,
+                "h": 680,
+            },
+        ],
+    }
+    assert _findings(parse_ir(plan), "ergonomics.seat_height")
+    relaxed = _with_thresholds(plan, **{"ergonomics.seat_table_delta_min": 200.0})
+    assert not _findings(relaxed, "ergonomics.seat_height")
+
+
+def test_tall_item_override() -> None:
+    plan = {
+        "ceiling_height": 1600,
+        "furniture": [
+            {"id": "F-001", "kind": "wardrobe", "x": 0, "y": 0, "w": 1800, "d": 600, "h": 1600},
+        ],
+    }
+    # 1600 is below the default 1800 tall threshold.
+    assert not _findings(parse_ir(plan), "assembly.tall_furniture")
+    strict = _with_thresholds(plan, **{"assembly.tall_item_mm": 1500.0})
+    assert _findings(strict, "assembly.tall_furniture")

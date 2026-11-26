@@ -1537,6 +1537,9 @@ def _check_service_room_use(ir: IR) -> list[Diagnostic]:
 def _check_seat_height(ir: IR) -> list[Diagnostic]:
     """A seat and the table it serves need a comfortable height gap."""
     findings: list[Diagnostic] = []
+    delta_min = _limit(ir, "ergonomics.seat_table_delta_min", SEAT_TABLE_DELTA_MIN)
+    delta_max = _limit(ir, "ergonomics.seat_table_delta_max", SEAT_TABLE_DELTA_MAX)
+    reach = _limit(ir, "ergonomics.seat_table_reach_mm", SEAT_TABLE_REACH_MM)
     tables = [
         item for item in ir.furniture if not item.host and item.kind in {"dining_table", "desk"}
     ]
@@ -1546,7 +1549,7 @@ def _check_seat_height(ir: IR) -> list[Diagnostic]:
             continue
         seat_height = info.seat_height or item.h
         nearest: Furniture | None = None
-        best_gap = SEAT_TABLE_REACH_MM
+        best_gap = reach
         for table in tables:
             gap = distance(item.center, table.center)
             if gap < best_gap:
@@ -1556,7 +1559,7 @@ def _check_seat_height(ir: IR) -> list[Diagnostic]:
             continue
         table_info = resolve(nearest.kind)
         delta = nearest.h - seat_height
-        if SEAT_TABLE_DELTA_MIN <= delta <= SEAT_TABLE_DELTA_MAX:
+        if delta_min <= delta <= delta_max:
             continue
         findings.append(
             Diagnostic(
@@ -1567,13 +1570,11 @@ def _check_seat_height(ir: IR) -> list[Diagnostic]:
                     f"{item.name or info.label_zh} 座高 {_mm(seat_height)}，"
                     f"{nearest.name or (table_info.label_zh if table_info else nearest.kind)} "
                     f"高 {_mm(nearest.h)}，相差 {_mm(delta)}，"
-                    f"建议 {_mm(SEAT_TABLE_DELTA_MIN)}–{_mm(SEAT_TABLE_DELTA_MAX)}"
+                    f"建议 {_mm(delta_min)}–{_mm(delta_max)}"
                 ),
                 elements=[item.id, nearest.id],
                 measured=delta,
-                required=SEAT_TABLE_DELTA_MAX
-                if delta > SEAT_TABLE_DELTA_MAX
-                else SEAT_TABLE_DELTA_MIN,
+                required=delta_max if delta > delta_max else delta_min,
             )
         )
     return findings
@@ -1583,8 +1584,9 @@ def _check_tall_furniture(ir: IR) -> list[Diagnostic]:
     """Tall pieces must be able to stand up under the ceiling."""
     findings: list[Diagnostic] = []
     ceiling = ir.ceiling_height or 2800.0
+    tall = _limit(ir, "assembly.tall_item_mm", TALL_ITEM_MM)
     for item in ir.furniture:
-        if item.host or item.h < TALL_ITEM_MM:
+        if item.host or item.h < tall:
             continue
         info = resolve(item.kind)
         if info is None or not (info.fixed or info.category in {"storage", "kitchen"}):

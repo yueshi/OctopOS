@@ -106,6 +106,9 @@ argument-hint: "<要核对的方案或问题>"
 | `mep.service_radius_mm` | 1500 | 用水器具到给排水点的最大距离 |
 | `programme.min_area.<kind>` | 内置 | 房间最小面积（mm²），kind 为 living/bedroom/kitchen/bathroom/balcony/study |
 | `clearance.pair_min.<a>|<b>` | 内置表 | 指定配对的最小间距，如 `clearance.pair_min.bed_double|bed_double` |
+| `ergonomics.seat_table_delta_min` / `_max` | 250 / 320 | 座面到桌面的高差区间 |
+| `ergonomics.seat_table_reach_mm` | 1200 | 只配对这个距离内的餐桌/书桌 |
+| `assembly.tall_item_mm` | 1800 | 超过此高度才检查能否立起 |
 
 **门合页方向**：门可以写 `hinge`（`start` 或 `end`，默认 `start`），决定门扇打开 90° 后把手落在哪一侧；写错会让把手净空判在错误的位置。
 

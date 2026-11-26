@@ -377,6 +377,10 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `mep.service_radius_mm` | 1500 |
 | `programme.min_area.<kind>` | 内置表（mm²） |
 | `clearance.pair_min.<a>|<b>` | 内置表 |
+| `ergonomics.seat_table_delta_min` / `_max` / `_reach_mm` | 250 / 320 / 1200 |
+| `assembly.tall_item_mm` | 1800 |
+
+> **给装修领域顾问的逐条校准清单见 [interior-design-thresholds.md](./interior-design-thresholds.md)**：每个阈值的默认值、依据、影响与建议值回填列；改值写成 `setting` 行即可，不需要改代码。
 
 两套 fixture 在默认阈值下的诊断与算量由 `test_plan_fixtures.py` 冻结，改动默认值会立刻在快照里显示。
 
