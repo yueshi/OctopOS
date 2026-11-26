@@ -163,6 +163,24 @@ def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
     return inside
 
 
+def ray_segment_distance(origin: Point, direction: Point, a: Point, b: Point) -> float | None:
+    """Distance along a ray to a segment, or ``None`` when it does not hit.
+
+    ``direction`` must be a unit vector; hits behind the origin are ignored.
+    """
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    denominator = direction[0] * dy - direction[1] * dx
+    if abs(denominator) < 1e-9:
+        return None
+    origin_to_a = (a[0] - origin[0], a[1] - origin[1])
+    t = (origin_to_a[0] * dy - origin_to_a[1] * dx) / denominator
+    u = (origin_to_a[0] * direction[1] - origin_to_a[1] * direction[0]) / denominator
+    if t <= 1e-6 or u < -1e-6 or u > 1 + 1e-6:
+        return None
+    return t
+
+
 def point_to_polygon_distance(point: Point, polygon: list[Point]) -> float:
     """Shortest distance from *point* to a polygon's boundary."""
     if len(polygon) < 2:

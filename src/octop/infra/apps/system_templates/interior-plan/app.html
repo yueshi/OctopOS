@@ -272,7 +272,8 @@
           w: num(payload.w, 600), d: num(payload.d, 400),
           rot: num(payload.rot, 0),
           kind: String(payload.kind || ""),
-          host: String(payload.host || "")
+          host: String(payload.host || ""),
+          facing: payload.facing == null ? null : num(payload.facing, 0)
         });
       } else if (kind === "mep") {
         mep.push({

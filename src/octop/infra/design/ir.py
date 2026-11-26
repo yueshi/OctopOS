@@ -89,6 +89,9 @@ class Furniture:
     #: Id of the item this one sits on or inside (a sink in a counter run).
     #: Hosted items are allowed to overlap their host and borrow its clearance.
     host: str = ""
+    #: Direction the user faces when using the item, in degrees (0 = +x).
+    #: Unset means "no declared front"; seat rules then try every side.
+    facing: float | None = None
 
     @property
     def center(self) -> tuple[float, float]:
@@ -221,6 +224,7 @@ def parse_furniture(raw: dict[str, Any]) -> Furniture:
         kind=kind,
         name=str(raw.get("name") or ""),
         host=str(raw.get("host") or ""),
+        facing=(_num(raw.get("facing")) if raw.get("facing") is not None else None),
     )
 
 
@@ -302,6 +306,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "kind": f.kind,
                 "name": f.name,
                 "host": f.host,
+                "facing": f.facing,
             }
             for f in ir.furniture
         ],

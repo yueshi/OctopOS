@@ -145,6 +145,7 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
 - **标准 kind**（写这些，别自创）：`bed_double` / `bed_single` / `bed_king` / `crib`；`sofa` / `armchair` / `chair` / `stool` / `bench`；`dining_table` / `coffee_table` / `desk` / `side_table`；`wardrobe` / `cabinet` / `bookshelf` / `shoe_cabinet` / `tv_stand` / `bedside_table`；`kitchen_counter` / `sink` / `stove` / `hood` / `fridge` / `oven` / `dishwasher`；`washer` / `dryer`；`toilet` / `basin` / `shower` / `bathtub`。
 - **默认尺寸**：省略 `w` / `d` 时内核按目录补全（如 `fridge` 700×700、`wardrobe` 1800×600）。你仍应显式写尺寸，除非用户没给。
 - **嵌入关系**：台面上的水槽、灶台、灶上的烟机用 `host` 指向被嵌入的件。**被嵌入的件允许与 host 重叠**，净空按 host 计算；不要把水槽挪出台面来"避免重叠"。
+- **座椅朝向**：椅子、沙发、单椅可以写 `facing`（角度，0 朝 +x，逆时针为正）。写了就按这个方向检查站立/通行净空；不写则取四面中最好的一面——所以只有一面被堵的椅子不会误报，但挤在墙角里会报。面对桌子/电视的座椅建议显式写朝向。
 - **旧写法兼容**：`closet`→`wardrobe`、`refrigerator`→`fridge`、`washing machine`→`washer` 等别名会自动归一；但新方案请直接用标准名。
 - **水电点位**：插座、开关、给水、排水、空调、燃气一律记成 `kind=mep` 的 `P-xxx` 行，**不要再把插座当家具**（旧数据仍能识别）。用水电器（洗衣机、洗碗机、水槽、洁具）的给排水点要在 1500mm 内，否则会报 `mep.wet_appliance_services`。
 

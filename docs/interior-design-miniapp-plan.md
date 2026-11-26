@@ -309,6 +309,10 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `geometry.openings_overlap` | 洞口沿墙的区间互不相交 | blocking |
 | `geometry.element_overlap` | 家具轮廓不相交；墙体不贯穿家具 | blocking |
 | `route.continuity` | 各房间经门洞与入口连通 | blocking |
+| `route.width` | 100mm 栅格上从入口可达（自由空间内缩 300mm ≈ 600mm 净宽） | blocking |
+| `clearance.seat_stand` | 座椅前站立空间 ≥ 750mm（无 `facing` 时取最好一面） | significant |
+| `clearance.seat_walk` | 座椅前通行空间 750–900mm | improvement |
+| `privacy.path` | 公共区域无需穿过私密房间（按房间名推断） | significant |
 | `safety.splash_zone` | 淋浴/浴缸侧 600mm 内无电气件 | blocking |
 | `clearance.wardrobe_front` | 衣柜/柜前净空（目录默认 600–700mm） | blocking |
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | significant |
@@ -325,7 +329,9 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 家具与电器的语义来自 `src/octop/infra/design/catalog.py`（类别、默认尺寸、靠墙/湿区/电气/给排水标记、前净空阈值）。`host` 表示嵌入关系（水槽在台面里、烟机在灶上）：嵌入链内的重叠不算冲突，净空按被嵌入件计算，支持嵌套。
 
-尚未实现的规则（通道净宽、座椅间距、隐私路径、采光细分等）在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
+`route.width` 用 100mm 栅格 + 300mm 内缩近似"连续 600mm 净宽"，因此存在一个栅格步长的误差；15m×12m、24 件家具的方案实测约 240ms。`privacy.path` 依赖房间名（中英文关键词）判断私密性，房间命名不规范时该规则会跳过而不是误报。
+
+尚未实现的规则（采光细分、门把手净空、入口视线等）在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
 
 ### 4.5 增量校验
 

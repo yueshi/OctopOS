@@ -295,3 +295,178 @@ def test_categories_are_stable(kind: str, category: str) -> None:
     item = resolve(kind)
     assert item is not None
     assert item.category == category
+
+
+# --- seats, routes and privacy --------------------------------------------
+
+
+def _two_room_plan(
+    *,
+    front: list[dict[str, Any]],
+    door_y: int = 1200,
+    door_w: int = 900,
+) -> Any:
+    """Two 4x3 rooms split at x=4000, joined by one door."""
+    return parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 8000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 8000, "y1": 0, "x2": 8000, "y2": 3000, "t": 120},
+                {"id": "W-003", "x1": 8000, "y1": 3000, "x2": 0, "y2": 3000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 3000, "x2": 0, "y2": 0, "t": 120},
+                {"id": "W-005", "x1": 4000, "y1": 0, "x2": 4000, "y2": 3000, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 1000, "width": 900, "angle": 90},
+                {
+                    "id": "D-002",
+                    "type": "door",
+                    "x": 4000,
+                    "y": door_y,
+                    "width": door_w,
+                    "angle": 90,
+                },
+            ],
+            "furniture": front,
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "门厅",
+                    "polygon": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]],
+                },
+                {
+                    "id": "R-002",
+                    "name": "客厅",
+                    "polygon": [[4000, 0], [8000, 0], [8000, 3000], [4000, 3000]],
+                },
+            ],
+        }
+    )
+
+
+def test_seat_needs_room_to_stand_up() -> None:
+    ir = parse_ir(
+        {
+            "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 4000, "y2": 0, "t": 120}],
+            "openings": [],
+            "rooms": [],
+            "furniture": [
+                {
+                    "id": "F-001",
+                    "kind": "chair",
+                    "x": 500,
+                    "y": 1000,
+                    "w": 450,
+                    "d": 450,
+                    "facing": 90,
+                },
+                {"id": "F-002", "kind": "table", "x": 500, "y": 1550, "w": 800, "d": 500},
+            ],
+        }
+    )
+    findings = _findings(ir, "clearance.seat_stand")
+    assert findings
+    assert findings[0].measured is not None and findings[0].measured < 750
+
+
+def test_seat_with_walking_room_is_an_improvement_not_a_failure() -> None:
+    ir = parse_ir(
+        {
+            "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 4000, "y2": 0, "t": 120}],
+            "openings": [],
+            "rooms": [],
+            "furniture": [
+                {
+                    "id": "F-001",
+                    "kind": "chair",
+                    "x": 500,
+                    "y": 1000,
+                    "w": 450,
+                    "d": 450,
+                    "facing": 0,
+                },
+                {
+                    "id": "F-002",
+                    "kind": "cabinet",
+                    "x": 500 + 450 + 800,
+                    "y": 1000,
+                    "w": 300,
+                    "d": 400,
+                },
+            ],
+        }
+    )
+    assert not _findings(ir, "clearance.seat_stand")
+    assert _findings(ir, "clearance.seat_walk")
+
+
+def test_seat_without_facing_uses_the_best_side() -> None:
+    ir = parse_ir(
+        {
+            "walls": [],
+            "openings": [],
+            "rooms": [],
+            "furniture": [
+                {"id": "F-001", "kind": "chair", "x": 1000, "y": 1000, "w": 450, "d": 450}
+            ],
+        }
+    )
+    assert not _findings(ir, "clearance.seat_stand")
+    assert not _findings(ir, "clearance.seat_walk")
+
+
+def test_route_width_is_blocked_by_furniture_in_the_doorway() -> None:
+    ir = _two_room_plan(
+        front=[
+            {"id": "F-001", "kind": "wardrobe", "x": 4100, "y": 1450, "w": 600, "d": 650},
+        ]
+    )
+    findings = _findings(ir, "route.width")
+    assert findings
+    assert findings[0].elements == ["R-002"]
+
+
+def test_route_width_passes_for_a_clear_door() -> None:
+    ir = _two_room_plan(front=[])
+    assert not _findings(ir, "route.width")
+
+
+def test_shared_room_reached_through_a_bedroom_is_reported() -> None:
+    ir = parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 6000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 6000, "y1": 0, "x2": 6000, "y2": 3000, "t": 120},
+                {"id": "W-003", "x1": 6000, "y1": 3000, "x2": 0, "y2": 3000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 3000, "x2": 0, "y2": 0, "t": 120},
+                {"id": "W-005", "x1": 2000, "y1": 0, "x2": 2000, "y2": 3000, "t": 120},
+                {"id": "W-006", "x1": 4000, "y1": 0, "x2": 4000, "y2": 3000, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 0, "y": 1000, "width": 900, "angle": 90},
+                {"id": "D-002", "type": "door", "x": 2000, "y": 1000, "width": 900, "angle": 90},
+                {"id": "D-003", "type": "door", "x": 4000, "y": 1000, "width": 900, "angle": 90},
+            ],
+            "furniture": [],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "门厅",
+                    "polygon": [[0, 0], [2000, 0], [2000, 3000], [0, 3000]],
+                },
+                {
+                    "id": "R-002",
+                    "name": "卧室",
+                    "polygon": [[2000, 0], [4000, 0], [4000, 3000], [2000, 3000]],
+                },
+                {
+                    "id": "R-003",
+                    "name": "客厅",
+                    "polygon": [[4000, 0], [6000, 0], [6000, 3000], [4000, 3000]],
+                },
+            ],
+        }
+    )
+    findings = _findings(ir, "privacy.path")
+    assert findings
+    assert findings[0].elements[0] == "R-003"

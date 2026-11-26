@@ -27,6 +27,7 @@ from octop.infra.design.geometry import (
     point_to_polygon_distance,
     point_to_segment_distance,
     polygon_area,
+    ray_segment_distance,
     segments_intersect,
     snap_point,
     support_width,
@@ -60,6 +61,53 @@ JOINT_SEARCH_RADIUS_MM: Final = 300.0
 
 #: A wet appliance should have water and drain within this distance.
 WET_APPLIANCE_SERVICE_RADIUS_MM: Final = 1500.0
+
+#: Clear space in front of a seat to stand up / to walk behind it.
+SEAT_STAND_MM: Final = 750.0
+SEAT_WALK_MM: Final = 900.0
+#: How far a seat rule looks for a blocker.
+SEAT_PROBE_MM: Final = 3000.0
+
+#: Continuous route width required from the entrance to every use zone.
+ROUTE_WIDTH_MM: Final = 600.0
+#: Grid step for the route raster (half of it is the measurement error).
+ROUTE_GRID_MM: Final = 100.0
+
+#: Room-name keywords used by the privacy rule (Chinese and English).
+PRIVATE_ROOM_WORDS: Final = (
+    "卧室",
+    "主卧",
+    "次卧",
+    "儿童房",
+    "老人房",
+    "书房",
+    "卫生间",
+    "浴室",
+    "客卫",
+    "主卫",
+    "卧室",
+    "bedroom",
+    "bath",
+    "toilet",
+    "study",
+)
+SHARED_ROOM_WORDS: Final = (
+    "客厅",
+    "起居",
+    "餐厅",
+    "厨房",
+    "门厅",
+    "玄关",
+    "过道",
+    "走廊",
+    "living",
+    "dining",
+    "kitchen",
+    "hall",
+    "corridor",
+    "entry",
+    "lobby",
+)
 
 #: Kind-name sets the rules relied on before the catalog existed. Kept as a
 #: fallback for kinds the catalog does not know yet.
@@ -141,6 +189,10 @@ RULES: dict[str, RuleSpec] = {
         RuleSpec("mep.unknown_type", "水电点位类型未知", SEVERITY_IMPROVEMENT),
         RuleSpec("mep.not_recorded", "未录入水电点位", SEVERITY_SIGNIFICANT),
         RuleSpec("mep.wet_appliance_services", "用水电器缺少给排水点位", SEVERITY_IMPROVEMENT),
+        RuleSpec("clearance.seat_stand", "座椅前站立空间不足", SEVERITY_SIGNIFICANT),
+        RuleSpec("clearance.seat_walk", "座椅前通行空间不足", SEVERITY_IMPROVEMENT),
+        RuleSpec("route.width", "600mm 净宽通路无法到达", SEVERITY_BLOCKING),
+        RuleSpec("privacy.path", "公共区域需穿过私密房间", SEVERITY_SIGNIFICANT),
     )
 }
 
@@ -719,6 +771,337 @@ def _front_edge_point(item: Furniture, normal: Point) -> Point:
     return (center[0] + normal[0] * half, center[1] + normal[1] * half)
 
 
+def _passable_spans(ir: IR, wall: Wall) -> list[tuple[float, float]]:
+    """Parameter spans along *wall* where a door lets a person through."""
+    length = wall.length
+    if length < 1e-9:
+        return []
+    unit = ((wall.x2 - wall.x1) / length, (wall.y2 - wall.y1) / length)
+    spans: list[tuple[float, float]] = []
+    for opening in ir.openings:
+        if opening.type not in {"door", "sliding_door", "opening"}:
+            continue
+        nearest, gap = _nearest_wall(ir, (opening.x, opening.y))
+        if nearest is None or nearest.id != wall.id or gap > max(wall.t, 20.0):
+            continue
+        positions = [
+            (point[0] - wall.x1) * unit[0] + (point[1] - wall.y1) * unit[1]
+            for point in ((opening.x, opening.y), opening.end)
+        ]
+        spans.append((min(positions), max(positions)))
+    return spans
+
+
+def _direction_clearance(ir: IR, item: Furniture, direction: Point) -> float:
+    """How far the space in front of *item* stays clear in *direction*."""
+    half = support_width(
+        item.w / 2,
+        item.d / 2,
+        (math.cos(math.radians(item.rot)), math.sin(math.radians(item.rot))),
+        (-math.sin(math.radians(item.rot)), math.cos(math.radians(item.rot))),
+        direction,
+    )
+    origin = (item.center[0] + direction[0] * half, item.center[1] + direction[1] * half)
+    best = SEAT_PROBE_MM
+
+    for other in ir.furniture:
+        if other.id == item.id:
+            continue
+        corners = other.corners()
+        for index in range(len(corners)):
+            hit = ray_segment_distance(
+                origin, direction, corners[index], corners[(index + 1) % len(corners)]
+            )
+            if hit is not None and hit < best:
+                best = hit
+
+    for wall in ir.walls:
+        if wall.is_degenerate:
+            continue
+        hit = ray_segment_distance(origin, direction, (wall.x1, wall.y1), (wall.x2, wall.y2))
+        if hit is None:
+            continue
+        # A door in this wall is an opening, not a blocker.
+        length = wall.length
+        unit = ((wall.x2 - wall.x1) / length, (wall.y2 - wall.y1) / length)
+        hit_point = (origin[0] + direction[0] * hit, origin[1] + direction[1] * hit)
+        position = (hit_point[0] - wall.x1) * unit[0] + (hit_point[1] - wall.y1) * unit[1]
+        if any(low <= position <= high for low, high in _passable_spans(ir, wall)):
+            continue
+        free = max(0.0, hit - wall.t / 2)
+        if free < best:
+            best = free
+    return best
+
+
+def _seat_directions(item: Furniture) -> list[Point]:
+    if item.facing is not None:
+        rad = math.radians(item.facing)
+        return [(math.cos(rad), math.sin(rad))]
+    rad = math.radians(item.rot)
+    u = (math.cos(rad), math.sin(rad))
+    v = (-math.sin(rad), math.cos(rad))
+    return [u, (-u[0], -u[1]), v, (-v[0], -v[1])]
+
+
+def _check_seat_clearance(ir: IR) -> list[Diagnostic]:
+    """A seat needs room to stand up (and better, to walk behind)."""
+    findings: list[Diagnostic] = []
+    for item in ir.furniture:
+        info = resolve(item.kind)
+        if item.host or info is None or info.category != "seat":
+            continue
+        best = max(_direction_clearance(ir, item, d) for d in _seat_directions(item))
+        if best >= SEAT_WALK_MM:
+            continue
+        walk = best >= SEAT_STAND_MM
+        findings.append(
+            Diagnostic(
+                rule_id="clearance.seat_walk" if walk else "clearance.seat_stand",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_IMPROVEMENT if walk else SEVERITY_SIGNIFICANT,
+                message=(
+                    f"{item.name or info.label_zh} 前净空 {_mm(best)}，"
+                    + (
+                        f"可站立但通行不足 {_mm(SEAT_WALK_MM)}"
+                        if walk
+                        else f"不足站立所需的 {_mm(SEAT_STAND_MM)}"
+                    )
+                ),
+                elements=[item.id],
+                measured=best,
+                required=SEAT_WALK_MM if walk else SEAT_STAND_MM,
+            )
+        )
+    return findings
+
+
+def _room_is(room: Room, words: tuple[str, ...]) -> bool:
+    name = (room.name or "").lower()
+    return any(word.lower() in name for word in words)
+
+
+def _room_adjacency(ir: IR) -> dict[str, set[str]]:
+    rooms = [room for room in ir.rooms if room.polygon]
+    adjacency: dict[str, set[str]] = {room.id: set() for room in rooms}
+    for opening in ir.openings:
+        if opening.type not in {"door", "sliding_door", "opening"}:
+            continue
+        touching = [
+            room
+            for room in rooms
+            if point_in_polygon((opening.x, opening.y), room.polygon)
+            or point_in_polygon(opening.end, room.polygon)
+        ]
+        for i, first in enumerate(touching):
+            for second in touching[i + 1 :]:
+                adjacency.setdefault(first.id, set()).add(second.id)
+                adjacency.setdefault(second.id, set()).add(first.id)
+    return adjacency
+
+
+def _reachable(
+    adjacency: dict[str, set[str]],
+    start: str,
+    *,
+    blocked: set[str] | None = None,
+) -> set[str]:
+    """Rooms reachable from *start* without passing through *blocked*."""
+    blocked = blocked or set()
+    seen = {start}
+    stack = [start]
+    while stack:
+        current = stack.pop()
+        for neighbour in adjacency.get(current, set()):
+            if neighbour in seen or neighbour in blocked:
+                continue
+            seen.add(neighbour)
+            stack.append(neighbour)
+    return seen
+
+
+def _check_privacy_path(ir: IR) -> list[Diagnostic]:
+    """Shared rooms must not be reached by walking through a bedroom or bath."""
+    rooms = [room for room in ir.rooms if room.polygon]
+    if not rooms:
+        return []
+    entrance = _entrance_room(ir, rooms)
+    if entrance is None:
+        return []
+    adjacency = _room_adjacency(ir)
+    full = _reachable(adjacency, entrance.id)
+    private = {room.id for room in rooms if _room_is(room, PRIVATE_ROOM_WORDS)}
+    shared = [room for room in rooms if _room_is(room, SHARED_ROOM_WORDS)]
+    if not private or not shared:
+        return []
+    allowed = _reachable(adjacency, entrance.id, blocked=private)
+    findings: list[Diagnostic] = []
+    for room in shared:
+        if room.id not in full or room.id in allowed:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="privacy.path",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_SIGNIFICANT,
+                message=(
+                    f"从入口到{room.name}必须穿过私密房间"
+                    f"（{'、'.join(sorted(room_id for room_id in private))}）"
+                ),
+                elements=[room.id, *sorted(private)],
+            )
+        )
+    return findings
+
+
+def _check_route_width(ir: IR) -> list[Diagnostic]:
+    """A continuous ``ROUTE_WIDTH_MM`` route must reach every reachable room.
+
+    Free space is eroded by half the required width, then flooded from the
+    entrance cell: a room counts as reachable when any cell inside it survives
+    the erosion. Cells are 100 mm, so the measured width carries that error.
+    """
+    rooms = [room for room in ir.rooms if room.polygon]
+    if len(rooms) < 2:
+        return []
+    adjacency = _room_adjacency(ir)
+    entrance = _entrance_room(ir, rooms)
+    if entrance is None:
+        return []
+    connected = _reachable(adjacency, entrance.id)
+
+    xs = [point[0] for room in rooms for point in room.polygon]
+    ys = [point[1] for room in rooms for point in room.polygon]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    step = ROUTE_GRID_MM
+    half_width = ROUTE_WIDTH_MM / 2
+    cols = int((max_x - min_x) / step) + 1
+    rows = int((max_y - min_y) / step) + 1
+    if cols <= 0 or rows <= 0 or cols * rows > 400_000:
+        return []
+
+    def cell_center(col: int, row: int) -> Point:
+        return (min_x + (col + 0.5) * step, min_y + (row + 0.5) * step)
+
+    def cell_range(low_x: float, low_y: float, high_x: float, high_y: float) -> tuple[range, range]:
+        first_col = max(0, int((low_x - min_x) / step) - 1)
+        last_col = min(cols - 1, int((high_x - min_x) / step) + 1)
+        first_row = max(0, int((low_y - min_y) / step) - 1)
+        last_row = min(rows - 1, int((high_y - min_y) / step) + 1)
+        return range(first_col, last_col + 1), range(first_row, last_row + 1)
+
+    free: list[list[bool]] = []
+    for row in range(rows):
+        line: list[bool] = []
+        for col in range(cols):
+            point = cell_center(col, row)
+            line.append(any(point_in_polygon(point, room.polygon) for room in rooms))
+        free.append(line)
+
+    # Mark blocked cells from each obstacle's bounding box instead of testing
+    # every obstacle against every cell.
+    for item in ir.furniture:
+        corners = item.corners()
+        item_xs = [point[0] for point in corners]
+        item_ys = [point[1] for point in corners]
+        cols_range, rows_range = cell_range(
+            min(item_xs) - half_width,
+            min(item_ys) - half_width,
+            max(item_xs) + half_width,
+            max(item_ys) + half_width,
+        )
+        for row in rows_range:
+            for col in cols_range:
+                if not free[row][col]:
+                    continue
+                if point_to_polygon_distance(cell_center(col, row), corners) <= half_width:
+                    free[row][col] = False
+
+    for wall in ir.walls:
+        if wall.is_degenerate:
+            continue
+        spans = _passable_spans(ir, wall)
+        length = wall.length
+        unit = ((wall.x2 - wall.x1) / length, (wall.y2 - wall.y1) / length)
+        cols_range, rows_range = cell_range(
+            min(wall.x1, wall.x2) - half_width - wall.t,
+            min(wall.y1, wall.y2) - half_width - wall.t,
+            max(wall.x1, wall.x2) + half_width + wall.t,
+            max(wall.y1, wall.y2) + half_width + wall.t,
+        )
+        for row in rows_range:
+            for col in cols_range:
+                if not free[row][col]:
+                    continue
+                x, y = cell_center(col, row)
+                gap = point_to_segment_distance((x, y), (wall.x1, wall.y1), (wall.x2, wall.y2))
+                if gap > half_width + wall.t / 2:
+                    continue
+                position = (x - wall.x1) * unit[0] + (y - wall.y1) * unit[1]
+                if any(low <= position <= high for low, high in spans):
+                    continue
+                free[row][col] = False
+
+    start_cell = None
+    for row in range(rows):
+        for col in range(cols):
+            if free[row][col] and point_in_polygon(cell_center(col, row), entrance.polygon):
+                start_cell = (row, col)
+                break
+        if start_cell:
+            break
+    if start_cell is None:
+        return [
+            Diagnostic(
+                rule_id="route.width",
+                status=STATUS_NOT_VERIFIABLE,
+                severity=SEVERITY_BLOCKING,
+                message="入口处没有满足净宽要求的空间，无法判定通路",
+                elements=[entrance.id],
+            )
+        ]
+
+    seen = {start_cell}
+    stack = [start_cell]
+    while stack:
+        row, col = stack.pop()
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < rows and 0 <= nc < cols and free[nr][nc] and (nr, nc) not in seen:
+                seen.add((nr, nc))
+                stack.append((nr, nc))
+
+    findings: list[Diagnostic] = []
+    for room in rooms:
+        if room.id not in connected or room.id == entrance.id:
+            continue
+        reached = False
+        for row, col in seen:
+            x = min_x + (col + 0.5) * step
+            y = min_y + (row + 0.5) * step
+            if point_in_polygon((x, y), room.polygon):
+                reached = True
+                break
+        if reached:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="route.width",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_BLOCKING,
+                message=(
+                    f"在 {_mm(ROUTE_WIDTH_MM)} 净宽要求下，从入口无法到达{room.name or room.id}"
+                    "（门洞存在，但通路被家具或墙体收窄）"
+                ),
+                elements=[room.id],
+                measured=ROUTE_WIDTH_MM,
+                required=ROUTE_WIDTH_MM,
+            )
+        )
+    return findings
+
+
 def _check_window_ratio(ir: IR) -> list[Diagnostic]:
     floor_area = sum(abs(polygon_area(room.polygon)) for room in ir.rooms)
     if floor_area <= 0.0:
@@ -1036,6 +1419,9 @@ def check_drawing(ir: IR, changed_ids: Sequence[str] | None = None) -> list[Diag
     findings.extend(_check_window_ratio(ir))
     findings.extend(_check_min_area(ir))
     findings.extend(_check_route_continuity(ir))
+    findings.extend(_check_route_width(ir))
+    findings.extend(_check_privacy_path(ir))
+    findings.extend(_check_seat_clearance(ir))
     findings.extend(_check_splash_zone(ir))
     findings.extend(_check_robustness(ir))
     findings.extend(_always_not_verifiable())

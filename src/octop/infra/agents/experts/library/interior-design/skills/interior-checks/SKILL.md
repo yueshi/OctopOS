@@ -35,13 +35,14 @@ argument-hint: "<要核对的方案或问题>"
 
 | rule_id | 检查什么 | 判据 | 级别 | 内核 |
 |---|---|---|---|---|
-| `route.continuity` | 从入口到每个使用区的连续通道 | 各房间经门洞与入口连通 | blocking | 已实现 |
+| `route.continuity` | 门洞是否存在通路 | 各房间经门洞与入口连通 | blocking | 已实现 |
+| `route.width` | 连续 600mm 净宽通路 | 自由空间按 300mm 内缩后仍能从入口到达（100mm 栅格） | blocking | 已实现 |
 | `clearance.wardrobe_front` | 衣柜、储物柜前净空 | 目录默认 600–700mm | blocking | 已实现 |
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | 按目录 `front_clearance` | significant | 已实现 |
 | `clearance.sanitary_front` | 洁具前净空（马桶/洗手盆/淋浴/浴缸） | 600mm | significant | 已实现 |
 | `clearance.kitchen_aisle` | 厨房操作通道（台面、水槽前） | 900mm | significant | 已实现 |
-| `clearance.seat_stand` | 座椅后站立空间 | 距座面边缘 ≥ 750mm | significant | 待实现 |
-| `clearance.seat_walk` | 座椅后通行空间 | 距座面边缘 ≥ 900mm | significant | 待实现 |
+| `clearance.seat_stand` | 座椅前站立空间 | 未声明朝向取四面最好的一面；< 750mm 报 | significant | 已实现 |
+| `clearance.seat_walk` | 座椅前通行空间 | 750–900mm 报"可站不可过" | improvement | 已实现 |
 | `clearance.pair_min` | 元素对的最小间距 | 按家具类别取阈值 | significant | 待实现 |
 | `clearance.handle` | 门把手与门框在 90° 时的净空 | ≥ 100mm | improvement | 待实现 |
 
@@ -62,7 +63,7 @@ argument-hint: "<要核对的方案或问题>"
 |---|---|---|---|---|
 | `safety.splash_zone` | 湿区溅水范围内无电气件 | 淋浴/浴缸侧 600mm 内无插座（家具或 MEP 点位都算） | blocking | 已实现 |
 | `safety.blocked_egress` | 门扇开启不堵疏散 | 开门后不侵占走道 | blocking | 待实现 |
-| `privacy.path` | 共区不穿卧室 | 从入口到客厅不必穿过卧室或卫生间 | significant | 待实现 |
+| `privacy.path` | 共区不穿私密房间 | 从入口到公共区域（客厅/餐厅/厨房/门厅…）不必穿过卧室/卫生间/书房 | significant | 已实现（按房间名推断属性） |
 | `privacy.entry_sightline` | 入口不直视 WC / 床 | 从入户视点看不到 | significant | 待实现 |
 
 ## 人体工学与可施工性
@@ -87,6 +88,10 @@ argument-hint: "<要核对的方案或问题>"
 **嵌入件（`host`）**：水槽在台面里、烟机在灶上，属于正常嵌入。`host` 关系内的重叠不算冲突，净空按被嵌入的件算；**不要为了躲规则把水槽挪出台面**。嵌入可以嵌套（烟机→灶台→台面）。
 
 **阈值可调**：以上净空与半径都是默认值，用户所在地或项目另有要求时按用户要求执行，并在交付里注明依据。
+
+**座椅朝向**：座椅/沙发可以写 `facing`（角度，0 朝 +x，逆时针为正）声明使用时的朝向；不写则取四面中最好的一面判定——所以"只有一面被堵"的椅子不会误报，但明显挤在墙角里会报。
+
+**隐私与房间命名**：`privacy.path` 用房间名判断公共/私密（客厅/餐厅/厨房/门厅 vs 卧室/卫生间/书房），所以房间 `name` 要写规范中文或英文名（如"主卧""卫生间"），不要写成"房间1""Room A"。
 
 ## 读诊断的规矩
 
