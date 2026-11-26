@@ -264,7 +264,8 @@
           width: num(payload.width, 900),
           angle: num(payload.angle, 0),
           host: String(payload.host || ""),
-          h: payload.h == null ? null : num(payload.h, 0)
+          h: payload.h == null ? null : num(payload.h, 0),
+          hinge: String(payload.hinge || "start")
         });
       } else if (kind === "furniture") {
         furniture.push({

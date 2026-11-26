@@ -43,8 +43,8 @@ argument-hint: "<要核对的方案或问题>"
 | `clearance.kitchen_aisle` | 厨房操作通道（台面、水槽前） | 900mm | significant | 已实现 |
 | `clearance.seat_stand` | 座椅前站立空间 | 未声明朝向取四面最好的一面；< 750mm 报 | significant | 已实现 |
 | `clearance.seat_walk` | 座椅前通行空间 | 750–900mm 报"可站不可过" | improvement | 已实现 |
-| `clearance.pair_min` | 元素对的最小间距 | 按家具类别取阈值 | significant | 待实现 |
-| `clearance.handle` | 门把手与门框在 90° 时的净空 | ≥ 100mm | improvement | 待实现 |
+| `clearance.pair_min` | 特定家具对的最小间距 | 床–床 600、床–书桌 500、沙发/单椅–茶几 300（默认口径，可按项目覆盖）；未列出的组合不判 | significant | 已实现 |
+| `clearance.handle` | 门全开时把手侧净空 | ≥ 100mm（需 `hinge` 说明合页在 start 还是 end） | improvement | 已实现 |
 
 ## 采光、通风、面积
 
@@ -90,6 +90,8 @@ argument-hint: "<要核对的方案或问题>"
 **阈值可调**：以上净空与半径都是默认值，用户所在地或项目另有要求时按用户要求执行，并在交付里注明依据。
 
 **高度**：家具可写 `h`（毫米），省略时按品类目录的默认高度（衣柜 2200、餐桌 750、椅面 450…）。门窗也可写 `h`（门默认 2100、窗默认 1800），**窗面积按 `width × h` 计算**，所以层高或窗型特殊时要显式写。层高用一条 `kind=setting` 的行记录：`{"ceiling_height": 2600}`，不写按 2800。
+
+**门合页方向**：门可以写 `hinge`（`start` 或 `end`，默认 `start`），决定门扇打开 90° 后把手落在哪一侧；写错会让把手净空判在错误的位置。
 
 **座椅朝向**：座椅/沙发可以写 `facing`（角度，0 朝 +x，逆时针为正）声明使用时的朝向；不写则取四面中最好的一面判定——所以"只有一面被堵"的椅子不会误报，但明显挤在墙角里会报。
 

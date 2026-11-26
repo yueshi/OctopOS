@@ -59,6 +59,8 @@ class Opening:
     host: str = ""
     #: Opening height in millimetres (door 2100, window 1800 by default).
     h: float = 1800.0
+    #: Hinge side for a door: ``start`` (at x,y) or ``end`` (at the far jamb).
+    hinge: str = "start"
 
     @property
     def is_window(self) -> bool:
@@ -205,6 +207,9 @@ def parse_opening(raw: dict[str, Any]) -> Opening:
     if kind not in OPENING_TYPES:
         kind = "opening"
     default_h = 2100.0 if kind in {"door", "sliding_door"} else 1800.0
+    hinge = str(raw.get("hinge") or "start").strip().lower()
+    if hinge not in {"start", "end"}:
+        hinge = "start"
     return Opening(
         id=str(raw.get("id") or ""),
         type=kind,
@@ -214,6 +219,7 @@ def parse_opening(raw: dict[str, Any]) -> Opening:
         angle=_num(raw.get("angle")),
         host=str(raw.get("host") or ""),
         h=_num(raw.get("h"), default_h) or default_h,
+        hinge=hinge,
     )
 
 
@@ -305,6 +311,7 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "angle": o.angle,
                 "host": o.host,
                 "h": o.h,
+                "hinge": o.hinge,
             }
             for o in ir.openings
         ],

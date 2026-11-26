@@ -28,6 +28,7 @@ from octop.infra.design.geometry import (
     point_to_segment_distance,
     polygon_area,
     polygon_centroid,
+    polygon_distance,
     ray_segment_distance,
     segments_intersect,
     snap_point,
@@ -166,6 +167,25 @@ SEAT_TABLE_REACH_MM: Final = 1200.0
 #: Items at least this tall have to be tilted up inside the room.
 TALL_ITEM_MM: Final = 1800.0
 
+#: Space a door handle needs when the leaf stands open at 90 degrees.
+HANDLE_CLEARANCE_MM: Final = 100.0
+
+#: Minimum gap between specific furniture pairs. Defaults, not regulation.
+PAIR_CLEARANCE_MM: Final[dict[tuple[str, str], float]] = {
+    ("bed_double", "bed_double"): 600.0,
+    ("bed_double", "bed_single"): 600.0,
+    ("bed_king", "bed_single"): 600.0,
+    ("bed_king", "bed_double"): 600.0,
+    ("bed_single", "bed_single"): 600.0,
+    ("bed_double", "crib"): 600.0,
+    ("bed_single", "crib"): 600.0,
+    ("armchair", "coffee_table"): 300.0,
+    ("coffee_table", "sofa"): 300.0,
+    ("armchair", "sofa"): 300.0,
+    ("bed_double", "desk"): 500.0,
+    ("bed_single", "desk"): 500.0,
+}
+
 
 @dataclass(frozen=True)
 class RuleSpec:
@@ -240,6 +260,7 @@ RULES: dict[str, RuleSpec] = {
         RuleSpec("room.occupancy", "房间家具占用率异常", SEVERITY_IMPROVEMENT),
         RuleSpec("programme.service_empty", "服务房间放了无关家具", SEVERITY_IMPROVEMENT),
         RuleSpec("assembly.tall_furniture", "高柜无法在房间内立起", SEVERITY_SIGNIFICANT),
+        RuleSpec("clearance.pair_min", "家具配对间距不足", SEVERITY_SIGNIFICANT),
     )
 }
 
@@ -1523,6 +1544,84 @@ def _check_tall_furniture(ir: IR) -> list[Diagnostic]:
     return findings
 
 
+def _check_door_handle(ir: IR) -> list[Diagnostic]:
+    """A fully open door leaf must leave the handle clear of walls and furniture."""
+    findings: list[Diagnostic] = []
+    for door in ir.openings:
+        if door.type != "door":
+            continue
+        normal = _inward_normal(ir, door)
+        if normal is None:
+            continue
+        inward, _room = normal
+        hinge = door.end if door.hinge == "end" else (door.x, door.y)
+        handle = (hinge[0] + inward[0] * door.width, hinge[1] + inward[1] * door.width)
+
+        clearance = math.inf
+        for wall in ir.walls:
+            if wall.is_degenerate:
+                continue
+            gap = point_to_segment_distance(handle, (wall.x1, wall.y1), (wall.x2, wall.y2))
+            clearance = min(clearance, max(0.0, gap - wall.t / 2))
+        for item in ir.furniture:
+            if item.host:
+                continue
+            clearance = min(clearance, point_to_polygon_distance(handle, item.corners()))
+        if clearance >= HANDLE_CLEARANCE_MM:
+            continue
+        findings.append(
+            Diagnostic(
+                rule_id="clearance.handle",
+                status=STATUS_NON_COMPLIANT,
+                severity=SEVERITY_IMPROVEMENT,
+                message=(
+                    f"门 {door.id or '未命名'} 全开时把手侧净空 {_mm(clearance)}，"
+                    f"小于 {_mm(HANDLE_CLEARANCE_MM)}"
+                ),
+                elements=[door.id],
+                measured=clearance,
+                required=HANDLE_CLEARANCE_MM,
+            )
+        )
+    return findings
+
+
+def _check_pair_clearance(ir: IR) -> list[Diagnostic]:
+    """Specific furniture pairs need a minimum gap between them."""
+    findings: list[Diagnostic] = []
+    for index, first in enumerate(ir.furniture):
+        if first.host:
+            continue
+        for second in ir.furniture[index + 1 :]:
+            if second.host:
+                continue
+            key = tuple(sorted((first.kind, second.kind)))
+            required = PAIR_CLEARANCE_MM.get(key)  # type: ignore[arg-type]
+            if required is None:
+                continue
+            gap = polygon_distance(first.corners(), second.corners())
+            if gap >= required:
+                continue
+            first_info = resolve(first.kind)
+            second_info = resolve(second.kind)
+            findings.append(
+                Diagnostic(
+                    rule_id="clearance.pair_min",
+                    status=STATUS_NON_COMPLIANT,
+                    severity=SEVERITY_SIGNIFICANT,
+                    message=(
+                        f"{first.name or (first_info.label_zh if first_info else first.kind)} 与 "
+                        f"{second.name or (second_info.label_zh if second_info else second.kind)} "
+                        f"间距 {_mm(gap)}，小于建议的 {_mm(required)}"
+                    ),
+                    elements=[first.id, second.id],
+                    measured=gap,
+                    required=required,
+                )
+            )
+    return findings
+
+
 def _check_window_ratio(ir: IR) -> list[Diagnostic]:
     floor_area = sum(abs(polygon_area(room.polygon)) for room in ir.rooms)
     if floor_area <= 0.0:
@@ -1847,6 +1946,8 @@ def check_drawing(ir: IR, changed_ids: Sequence[str] | None = None) -> list[Diag
     findings.extend(_check_room_occupancy(ir))
     findings.extend(_check_seat_height(ir))
     findings.extend(_check_tall_furniture(ir))
+    findings.extend(_check_door_handle(ir))
+    findings.extend(_check_pair_clearance(ir))
     findings.extend(_check_service_room_use(ir))
     findings.extend(_check_mep_types(ir))
     findings.extend(_check_wet_appliance_services(ir))

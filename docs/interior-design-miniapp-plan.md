@@ -205,7 +205,7 @@ python -m octop.infra.design --mcp            # MCP  8849：给专家
 }
 ```
 
-- `openings[].type` ∈ `door` / `window` / `sliding_door` / `opening`
+- `openings[].type` ∈ `door` / `window` / `sliding_door` / `opening`；`openings[].hinge` ∈ `start` / `end`（门扇合页侧）
 - `furniture[].kind` **必须来自品类目录**（`src/octop/infra/design/catalog.py`）：床、座椅、桌台、储物、厨房、洗衣、洁具共 30 余种，带默认尺寸与语义标记；写目录外的名字会报 `catalog.unknown_kind`（`not_verifiable`），不会静默失效。常见别名（`refrigerator` / `washing machine` / `closet`…）会自动归一。
 - `furniture[].host`：嵌入关系（水槽在台面里、烟机在灶上）。嵌入链内的重叠不算冲突、净空按被嵌入件计算，支持嵌套（烟机→灶台→台面）。
 - `ceiling_height`（可选，默认 2800）、`furniture[].h`、`openings[].h`：高度以毫米计；省略时家具用品类默认高度，门 2100、窗 1800。窗面积按 `width × h` 计算。
@@ -341,6 +341,8 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `programme.service_empty` | 厨卫内没有床/沙发/餐桌/衣柜/电视柜 | improvement |
 | `ergonomics.seat_height` | 座面到桌面高差 250–320mm（配对 1200mm 内的餐桌/书桌） | improvement |
 | `assembly.tall_furniture` | 高柜 √(短边²+高²) ≤ 层高 | significant |
+| `clearance.handle` | 门全开时把手侧净空 ≥ 100mm（`openings[].hinge` 决定把手侧） | improvement |
+| `clearance.pair_min` | 床–床 600、床–书桌 500、沙发/单椅–茶几 300（默认表，未列组合不判） | significant |
 | `safety.splash_zone` | 淋浴/浴缸侧 600mm 内无电气件 | blocking |
 | `clearance.wardrobe_front` | 衣柜/柜前净空（目录逐类：衣柜/储物柜 700、书架/电视柜 600、床头柜 0） | blocking |
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | significant |
@@ -359,7 +361,7 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 `route.width` 用 100mm 栅格 + 300mm 内缩近似"连续 600mm 净宽"，因此存在一个栅格步长的误差；15m×12m、24 件家具的方案实测约 240ms。`privacy.path` 依赖房间名（中英文关键词）判断私密性，房间命名不规范时该规则会跳过而不是误报。
 
-尚未实现的规则（采光系数、门把手与门框净空、以及需要对话语义的 `brief.constraint` / `requirement.trace`）在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
+尚未实现的规则只剩需要对话语义的两条：`brief.constraint`（用户约束）与 `requirement.trace`（需求追溯）；它们属于专家/平台层，不是几何。在专家的 `skills/interior-checks/SKILL.md` 里标为"待实现"，由专家人工判断并在交付时注明"未经确定性校验"。规则清单与实现状态必须一致——**专家不得把没跑的规则说成已通过**。
 
 ### 4.5 增量校验
 

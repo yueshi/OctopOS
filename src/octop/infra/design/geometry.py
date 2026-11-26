@@ -48,6 +48,24 @@ def polygon_perimeter(points: list[Point]) -> float:
     return total
 
 
+def polygon_distance(a: list[Point], b: list[Point]) -> float:
+    """Shortest gap between two polygons (0 when they overlap or touch)."""
+    if len(a) < 3 or len(b) < 3:
+        return math.inf
+    for point in a:
+        if point_in_polygon(point, b):
+            return 0.0
+    for point in b:
+        if point_in_polygon(point, a):
+            return 0.0
+    best = math.inf
+    for point in a:
+        best = min(best, point_to_polygon_distance(point, b))
+    for point in b:
+        best = min(best, point_to_polygon_distance(point, a))
+    return best
+
+
 def polygon_centroid(points: list[Point]) -> Point:
     if not points:
         return (0.0, 0.0)

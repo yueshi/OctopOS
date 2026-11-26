@@ -800,3 +800,96 @@ def test_tall_wardrobe_must_stand_up_under_the_ceiling() -> None:
     findings = _findings(plan(2350), "assembly.tall_furniture")
     assert findings
     assert findings[0].required == pytest.approx(2400)
+
+
+# --- handle and pair clearance -------------------------------------------
+
+
+def _door_plan(handle_wall_x: int, *, hinge: str = "start") -> Any:
+    return parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 6000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 6000, "y1": 0, "x2": 6000, "y2": 4000, "t": 120},
+                {"id": "W-003", "x1": 6000, "y1": 4000, "x2": 0, "y2": 4000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 4000, "x2": 0, "y2": 0, "t": 120},
+                # a return wall the open leaf can hit
+                {
+                    "id": "W-005",
+                    "x1": handle_wall_x,
+                    "y1": 800,
+                    "x2": handle_wall_x,
+                    "y2": 1400,
+                    "t": 120,
+                },
+            ],
+            "openings": [
+                {
+                    "id": "D-001",
+                    "type": "door",
+                    "x": 0,
+                    "y": 1000,
+                    "width": 900,
+                    "angle": 90,
+                    "hinge": hinge,
+                },
+            ],
+            "furniture": [],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "客厅",
+                    "polygon": [[0, 0], [6000, 0], [6000, 4000], [0, 4000]],
+                },
+            ],
+        }
+    )
+
+
+def test_door_handle_clearance_is_checked() -> None:
+    # Leaf opens to x=900; a return wall at 950 leaves the handle nothing.
+    assert _findings(_door_plan(950), "clearance.handle")
+    # At 1200 the handle keeps ~240mm and passes.
+    assert not _findings(_door_plan(1200), "clearance.handle")
+
+
+def test_hinge_side_moves_the_handle() -> None:
+    # Hinged at the far jamb, the leaf ends at y=1900, so a wall at x=950 is
+    # irrelevant and the handle is clear.
+    assert not _findings(_door_plan(950, hinge="end"), "clearance.handle")
+
+
+def test_pair_clearance_between_beds() -> None:
+    close = parse_ir(
+        {
+            "furniture": [
+                {"id": "F-001", "kind": "bed_double", "x": 0, "y": 0, "w": 1500, "d": 2000},
+                {"id": "F-002", "kind": "bed_double", "x": 1800, "y": 0, "w": 1500, "d": 2000},
+            ]
+        }
+    )
+    findings = _findings(close, "clearance.pair_min")
+    assert findings
+    assert findings[0].measured == pytest.approx(300)
+
+    far = parse_ir(
+        {
+            "furniture": [
+                {"id": "F-001", "kind": "bed_double", "x": 0, "y": 0, "w": 1500, "d": 2000},
+                {"id": "F-002", "kind": "bed_double", "x": 2200, "y": 0, "w": 1500, "d": 2000},
+            ]
+        }
+    )
+    assert not _findings(far, "clearance.pair_min")
+
+
+def test_pair_clearance_ignores_pairs_without_a_threshold() -> None:
+    ir = parse_ir(
+        {
+            "furniture": [
+                {"id": "F-001", "kind": "chair", "x": 0, "y": 0, "w": 450, "d": 450},
+                {"id": "F-002", "kind": "cabinet", "x": 500, "y": 0, "w": 600, "d": 400},
+            ]
+        }
+    )
+    assert not _findings(ir, "clearance.pair_min")
