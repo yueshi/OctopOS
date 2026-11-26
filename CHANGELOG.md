@@ -25,7 +25,7 @@
 - 小程序公开面统一由表级 `public_visible` 控制，取消 `published` row scope：发布弹窗新增公开范围预览（表数/行数/敏感列），个人表标记为「个人表」且公开开关禁用；需要只公开部分行时使用独立公开表/投影
 
 ### 新增
-- 对话式装修设计（规划中）：MiniApp 系统模板「装修方案」（`interior-plan`，平面图 SVG + 诊断清单 + 工程量表）、装修设计专家（`interior-design`，含意图澄清与检查清单两个 skill）、以及确定性几何内核 `octop.infra.design`（IR 模型、14 条可计算规则、算量、IR 原子操作，可独立启动为 REST / MCP 服务）。设计与契约见 `docs/interior-design-miniapp-plan.md`。
+- 对话式装修设计（规划中）：MiniApp 系统模板「装修方案」（`interior-plan`，平面图 SVG + 诊断清单 + 工程量表）、装修设计专家（`interior-design`，含意图澄清与检查清单两个 skill）、以及确定性几何内核 `octop.infra.design`（IR 模型、14 条可计算规则、算量、IR 原子操作，可独立启动为 REST / MCP 服务）。三条链路（页面 → 内核走 extension service、专家 → 内核走 MCP、页面 IR 契约）均有真服务/真浏览器的集成测试。设计与契约见 `docs/interior-design-miniapp-plan.md`。
 - MiniApp 公开链接弹窗会显示当前链接并支持复制：owner/admin 重新打开「只读公开链接」时，`GET /api/apps/{id}/publication` 返回当前 URL（不轮换 token）；view 协作者只拿到状态。复制按钮改用带非安全上下文回退的 `copyText`。
 - MiniApp 公开链接分享卡片：`/p/{token}` 服务端输出 `og:title/description/image/url`、`description` 与 `image_src`，并在宿主页 body 顶部渲染一张可见的首图 `<img>`（微信爬虫不执行 JS，iframe 内的应用内容不能作为缩略图）；新增 `GET /api/public/apps/{token}/share.png`，优先把 `share.*` / `cover.*` / `preview.*` 资产完整缩放并居中留边为 300×300 PNG，否则返回默认品牌卡。应用若提供 `icon.png` 等小图标，40px header 预览直接使用它，OG 仍用 `share.png`；header 图标保留 300×300 布局盒，`<noscript>` 另放 300×300 `share.png` 兜底不执行 JS 的抓取器；大小图标应分开设计。`public_base_url` 需为对外可达的 HTTPS 地址。
 - MiniApp 外部写服务（V2 平台地基，schema v52）：`light_app_services` 增加 `mode` / `base_url` / `extension_id` / `secret_ref` / `read_tools_json` / `write_tools_json` / 超时与请求响应上限 / 确认声明 / `allow_private_network`；新增 `light_app_service_operations` 薄幂等账本；新增 `external.write` 能力位、`provider=extension` 与 `POST /api/apps/{id}/services/{name}/invoke`、`GET /api/apps/{id}/services/{name}/operations/{op_id}`；幂等键按 `(service, tool, actor)` 作用域，同 key 不同参数返回 409；高风险工具两阶段确认；服务 token 加密存储且不回传页面。
@@ -87,6 +87,7 @@
 - 专家和团队都可以设定目标与预期产物；执行后可回填实际文件、链接或文本，看板直接查看和下载
 
 ### 修复
+- 装修方案模板页面构建 IR 时漏传 `furniture[].kind` 与 `openings[].host`，导致衣柜净空、湿区电气、开洞减扣等依赖 `kind` 的规则从页面路径永远不会触发（专家路径正常，单测与 REST 集成测试都发现不了）。补上两个字段，并新增 Chromium 回归测试（`tests/integration/test_interior_plan_page.py`）守护页面与内核之间的 IR 契约
 - 安全：OIDC 一次性登录码只能由真实 IdP 回调签发的状态（带 nonce/PKCE）附加与兑换；直接写库伪造的 `sso_login_states` 即使带 `login_code` 也无法登录，堵住 Agent 通过 `execute` 生成完整 admin 登录链接的越权路径。新增工具守卫规则 `TOOL_CMD_FORGED_SSO_LOGIN_CODE`（CRITICAL），并在 `app_share_link` 描述与小程序提示词中明确禁止生成 SSO/OIDC 登录链接
 - 小程序 Excel/CSV 导入：直接导入路径也跳过合计/小计行；快速创建未显式传 `header_row` 时使用检查报告检测到的表头行，避免标题行被当成表头、合计行被写成业务数据
 - 小程序访问申请支持应用所有者与专家所有者分离：双方各完成自己那一半，只有申请人同时可访问专家与应用后才标记批准，避免「approved 但进不去」；并发重复申请由 `pending` 唯一索引兜底（schema v35）

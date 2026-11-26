@@ -40,7 +40,20 @@
 | ② MiniApp 模板 `interior-plan` | ✅ 页面、schema、封面完成（`src/octop/infra/apps/system_templates/interior-plan/`） |
 | ① 装修设计专家 | ✅ manifest + SOUL + AGENTS + 2 个 skill（`src/octop/infra/agents/experts/library/interior-design/`） |
 | ③ 几何内核 | ✅ IR / 校验 / 算量 / 操作 / REST / MCP 已实现，25 个用例（`src/octop/infra/design/`） |
-| 端到端联通 | ⛔ 未做：内核服务未部署，extension service 未配置，`custom-mcp` 连接器未建 |
+| 端到端联通 | ✅ 三条链路已在集成测试中真跑通，见下方「端到端验证」 |
+| 真实部署 | ⛔ 待做：起内核服务、建 `custom-mcp` 连接器、Owner 配 extension service |
+
+### 端到端验证（已跑通）
+
+`tests/integration/test_interior_design_flow.py` 与 `tests/integration/test_interior_plan_page.py` 用真实服务验证了三条链路，不是 mock：
+
+| 链路 | 怎么验的 |
+|---|---|
+| 页面 → 内核（extension service） | 起真内核 HTTP 服务 + 真 `AppService`：建模板应用 → 建四张表 → 灌 IR 行 → 配 `provider=extension` 服务 → `invoke_service("check_drawing")` → 诊断写回 `diagnostics` 表 → 经 `/rows` 读回；并断言诊断引用的元素 id 都存在于 `main` 表（否则页面无从高亮） |
+| 专家 → 内核（MCP） | 真起 FastMCP `streamable-http`，用 MCP client `initialize` → `list_tools` → `call_tool("check_drawing")`，与 REST 返回同一组 `rule_id` |
+| 页面 IR 契约 | 真 Chromium 加载模板页，桩桥记录页面发出的 IR：断言 `furniture[].kind` 与 `openings[].host` 都带上了、房间多边形正确、诊断写回后 blocking 元素被染成红色 |
+
+**这轮抓到的真 bug**：页面构建 IR 时漏掉了 `furniture[].kind` 和 `openings[].host`，导致衣柜净空、湿区电气这些**依赖 kind 的整族规则从页面路径永远不触发**（专家路径正常，所以单测和 REST 集成测试都发现不了）。已修，并加了 Chromium 回归测试；用"临时回退修复"验证过该测试确实会变红。
 
 ---
 
@@ -279,12 +292,16 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 ### 6.2 专家侧的连接器
 
-专家通过 `custom-mcp` 连接器（`streamable_http`，指向 `http://127.0.0.1:8848/mcp`）拿到内核工具。回环/局域网地址免 SSRF（`custom_mcp.py:149`）。
+专家通过 `custom-mcp` 连接器（`streamable_http`，指向 `http://127.0.0.1:8849/mcp`）拿到内核工具。回环/局域网地址免 SSRF（`custom_mcp.py:149`）。
+
+注意 REST 与 MCP 是两个端口（默认 8848 / 8849），别把 MCP 地址指到 REST 端口上。
 
 ### 6.3 能力位与权限
 
 - 页面需要 `data.read`（读 IR）、`data.write`（写诊断）、`external.write`（调内核）。
 - 三个里 `external.write` 需 Owner 手动开；`data.read`/`data.write` 是新应用默认集。
+
+**已在集成测试中确认的细节**：模板 manifest 声明了 `external.write`，但只有 **Dashboard 的 owner 创建路径**会带上它（`create_from_template(grant_template_capabilities=True)`，`api/routers/apps.py:1856`）；Agent 工具建的模板应用**不会**获得这个能力位，必须 Owner 手动开。端到端测试也走的是 owner 路径，否则 `invoke_service` 直接报 `app does not allow external.write`。
 
 ---
 
@@ -316,8 +333,8 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 ## 9. 未决项
 
-1. **模板能否自动绑定 `custom-mcp` 连接器**（还是每个用户手建）——这是"独立微服务"路线最大的落地摩擦，阶段 0 必须验掉。
+1. **模板能否自动绑定 `custom-mcp` 连接器**（还是每个用户手建）——这是"独立微服务"路线最大的落地摩擦，阶段 0 必须验掉。**仍未验**：这需要真实部署环境，集成测试绕过了连接器（直接调内核）。
 2. **是否给 `services.json` / `app_add_service` 增加 extension 支持**——决定 extension 服务是"每应用手动配一次"还是"模板自带"。
-3. **IRR 体量**：100㎡ 户型 IR JSON 约 100–300KB，对 `max_request_bytes=1MB` 够用，但需实测元素数上限。
-4. **家具库**：`furniture[].kind` 的标准清单由谁定（领域顾问）——影响内核与前端渲染的一致性。
+3. **IR 体量**：100㎡ 户型 IR JSON 约 100–300KB，对 `max_request_bytes=1MB` 够用，但需实测元素数上限。
+4. **家具库**：`furniture[].kind` 的标准清单由谁定（领域顾问）——影响内核与前端渲染的一致性。**注意**：`kind` 缺失会让衣柜/湿区/电气整族规则静默失效，页面侧已有回归测试守着，专家侧需要在 AGENTS.md 的写入规范里继续强调。
 5. **验收户型集**：需要 3–5 套真实户型 fixture 作为回归基线。

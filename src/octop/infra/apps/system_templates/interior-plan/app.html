@@ -225,7 +225,8 @@
           type: String(payload.type || "door"),
           x: num(payload.x), y: num(payload.y),
           width: num(payload.width, 900),
-          angle: num(payload.angle, 0)
+          angle: num(payload.angle, 0),
+          host: String(payload.host || "")
         });
       } else if (kind === "furniture") {
         furniture.push({
@@ -233,7 +234,8 @@
           name: String(v.name || payload.kind || ""),
           x: num(payload.x), y: num(payload.y),
           w: num(payload.w, 600), d: num(payload.d, 400),
-          rot: num(payload.rot, 0)
+          rot: num(payload.rot, 0),
+          kind: String(payload.kind || "")
         });
       }
     });

@@ -51,7 +51,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 - 单行读取上限 500；单文件 HTML 上限 1 MB；素材单文件 5 MB；扩展服务上传上限 50 MB（SDK 4 MB 分片）。
 - 14 个应用能力位：13 个已接入执行链路，1 个为后续预留（`schedules.manage`）。
 - 页面 SDK 23 个顶层方法；`service(name)` 下 8 个子方法（`call` / `callDetailed` / `image` / `invoke` / `operation` / `resolveOperation` / `upload` / `mediaUrl`）。
-- 系统模板 7 个（客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片）。
+- 系统模板 8 个（客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片、装修方案）。
 - 后端 `infra/apps/` 39 个模块、约 2.36 万行（`service.py` 1.06 万行、`tools.py` 3,017 行）；应用 API 路由约 5,641 行；前端 MiniApp 页面/宿主约 2.5 万行（不含桌面 Shell；含桌面 Shell 约 3.1 万行）。
 - 最近验证（2026-11-24）：schema v52 断言已更新（`tests/unit/db/test_db_pool.py` 全部为 52）；V1-B 外部写服务定向验证——`tests/unit/apps` + `tests/integration/test_apps_api.py` 全绿，`make lint` / `make typecheck` 通过。全量 `make all` 在本机因资源受限未跑完，尚未得到一次完整全绿记录。
 
@@ -98,7 +98,7 @@ MiniApp 是 **Agent 交付物的着陆场**：Agent 用一组 `app_*` 工具创�
 |---|---|---|
 | Agent 工具 | `app_create` 定义字段并建主表；`app_write_html` 写界面；`app_append_row` 灌数据 | ✅ |
 | 快速模式 | 工作台「创建」→ 上传 xlsx/xls/csv/tsv/json → 服务端 inspect → 用户确认字段 → 选视图 → 确定性渲染 HTML | ✅ |
-| 本地模板 | 系统模板（包内 6 个）+ Agent 工作区 `app_templates/<id>/` | ✅ |
+| 本地模板 | 系统模板（包内 8 个）+ Agent 工作区 `app_templates/<id>/` | ✅ |
 | 从模板创建 | `POST /api/apps/from-template`、`app_create_from_template`（`source` 为 `system` 或 `agent`） | ✅ |
 | 云端市场 | 前端「云端市场」页签只有占位文案 | ⛔ |
 
@@ -969,7 +969,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 |---|---|---|---|
 | 创建 | Agent 工具创建 | ✅ | `app_create` + `app_write_html` |
 | 创建 | Excel 快速模式 | ✅ | 确定性渲染，不打 LLM |
-| 创建 | 系统模板 | ✅ | 7 个：客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片（`video-workbench`） |
+| 创建 | 系统模板 | ✅ | 8 个：客户跟进、月度开支、库存盘点、项目任务、费用报销、内容审核、视频审片（`video-workbench`）、装修方案（`interior-plan`） |
 | 创建 | 专家模板 | ✅ | `app_templates/<id>/`，随专家发布/安装 |
 | 创建 | 云端市场 | ⛔ | 前端占位 |
 | 数据 | 多表 | ✅ | 最多 12 张 |
@@ -1514,7 +1514,7 @@ uv run pytest tests/unit/backup/test_system_archive.py -q  # 22 passed
 | 表格分析 | `src/octop/infra/apps/inspect.py` |
 | 导入解析 | `src/octop/infra/apps/importer.py` |
 | 快速模式渲染 | `src/octop/infra/apps/viewgen.py` |
-| 模板 | `src/octop/infra/apps/templates.py`、`src/octop/infra/apps/system_templates/`（7 个系统模板） |
+| 模板 | `src/octop/infra/apps/templates.py`、`src/octop/infra/apps/system_templates/`（8 个系统模板） |
 | 扩展上传会话 | `src/octop/infra/apps/upload_sessions.py`（分片落盘 `{tempdir}/octop-service-uploads/`） |
 | AI 任务 | `src/octop/infra/apps/tasks.py`、`task_runner.py`、`task_types.py` |
 | 成员 / 邀请 / 加入码 | `src/octop/infra/apps/members.py` |
