@@ -108,6 +108,25 @@
 - **校验结果**：冰箱前净空 100mm（要求 900，significant）、洗衣机缺排水点（improvement）、通风待专业确认——三条都指向真实问题，没有噪声。
 - **调试坑（测试夹具问题，非产品）**：桩桥复用了同一个幂等键，服务端按幂等语义直接返回旧结果，导致看起来"规则改了没生效"。真实 SDK 每次生成新 key。
 
+### 真实对话走查（2026-11-27）
+
+用 Anthropic 兼容端点（`deepseek-flash`）跑真实对话，验证"用户一句话 → 专家自主建表、录入、校验、算量、交付"：
+
+| 环节 | 实际发生 |
+|---|---|
+| 建应用 | 模型自己调 `app_create_from_template` + 4×`app_add_table`，随后 `app_read_data` 确认列结构 |
+| 录几何 | 9 道墙、10 个门窗，一次写入；每行带 `source`/`status` |
+| 校验 | 多次 `geometry_check_drawing`；**自己做了负向验证**——临时删掉卫生间门，确认内核报 `route.continuity` blocking，再恢复 |
+| 交付 | `geometry_takeoff` → `rooms`/`bom` 写回（套内 84.24㎡、墙面 153.9㎡、踢脚线 88.8m、门 5 樘 / 窗 5 樘），并按要求把 `not_verifiable` 与"内核未实现"的规则单列 |
+| 家具电器 | 按品类目录写入 17 件家具（含 `host` 嵌套：水槽/灶台→台面）与 11 个水电点位 |
+
+**这轮暴露并修掉的两个规则 bug**：
+
+1. **床头柜被要求 700mm 前净空**——它挨着床放，现实中不需要。根因是"储物类默认 700"没有区分具体品类。现在 `front_clearance` 支持逐类显式值（`None`=用类别默认，`0`=无需地面净空），床头柜设为 0。
+2. **`route.width` 从"入口房间的第一个空闲格"起泛洪**——家具在角落围出封闭空腔时，起点落进空腔，结果所有房间都被判不可达（真机上一度出现 4 条全指向同一个卡口的误报）。现在起点取**入口门附近**的空闲格；补了"封闭空腔 + 入口在另一侧"的回归用例，并用回退修复的方式确认该用例会变红。
+
+**已知限制（模型/代理侧，非平台缺陷）**：该代理在长规划时会只返回 thinking 块、不返回工具调用，导致一轮提前结束。把任务拆成小步（"只写客厅三件家具，写完就停"）即可正常推进。真实使用 Claude/OpenAI 等模型时不一定存在。
+
 ### 部署步骤（运维视角）
 
 ```bash
@@ -314,7 +333,7 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 | `clearance.seat_walk` | 座椅前通行空间 750–900mm | improvement |
 | `privacy.path` | 公共区域无需穿过私密房间（按房间名推断） | significant |
 | `safety.splash_zone` | 淋浴/浴缸侧 600mm 内无电气件 | blocking |
-| `clearance.wardrobe_front` | 衣柜/柜前净空（目录默认 600–700mm） | blocking |
+| `clearance.wardrobe_front` | 衣柜/柜前净空（目录逐类：衣柜/储物柜 700、书架/电视柜 600、床头柜 0） | blocking |
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | significant |
 | `clearance.sanitary_front` | 洁具前净空 600mm | significant |
 | `clearance.kitchen_aisle` | 厨房台面/水槽前通道 900mm | significant |

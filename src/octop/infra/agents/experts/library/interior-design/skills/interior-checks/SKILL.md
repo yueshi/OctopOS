@@ -37,7 +37,7 @@ argument-hint: "<要核对的方案或问题>"
 |---|---|---|---|---|
 | `route.continuity` | 门洞是否存在通路 | 各房间经门洞与入口连通 | blocking | 已实现 |
 | `route.width` | 连续 600mm 净宽通路 | 自由空间按 300mm 内缩后仍能从入口到达（100mm 栅格） | blocking | 已实现 |
-| `clearance.wardrobe_front` | 衣柜、储物柜前净空 | 目录默认 600–700mm | blocking | 已实现 |
+| `clearance.wardrobe_front` | 衣柜、储物柜前净空 | 目录逐类设定（衣柜/储物柜 700、书架/电视柜 600、床头柜 0）；条目显式写 0 表示无需地面净空 | blocking | 已实现 |
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | 按目录 `front_clearance` | significant | 已实现 |
 | `clearance.sanitary_front` | 洁具前净空（马桶/洗手盆/淋浴/浴缸） | 600mm | significant | 已实现 |
 | `clearance.kitchen_aisle` | 厨房操作通道（台面、水槽前） | 900mm | significant | 已实现 |

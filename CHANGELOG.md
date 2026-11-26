@@ -89,6 +89,8 @@
 - 专家和团队都可以设定目标与预期产物；执行后可回填实际文件、链接或文本，看板直接查看和下载
 
 ### 修复
+- 装修设计 `route.width` 误报：从"入口房间的第一个空闲格"起泛洪，家具在角落围出封闭空腔时起点落入空腔，导致所有房间被判 600mm 净宽不可达。改为从入口门附近的空闲格起泛洪，并补回归用例
+- 装修设计净空规则误报：床头柜（以及任何"从床/座位一侧使用"的矮柜）被套用储物柜的 700mm 前净空要求。品类目录的 `front_clearance` 现在区分三种状态——`None` 用类别默认、正数为该品类的具体值、`0` 表示无需地面净空；床头柜设为 `0`，并补了回归用例
 - 装修方案模板页面把行 id 读成 `row.row_id`，而宿主实际返回 `{rows, row_meta}`（id 在 `row_meta` 里按下标对齐），导致删除静默失败、每点一次「重新校验」诊断表就多一份重复行。改为合并 `row_meta`；Chromium 回归测试的桩桥同步改成真实响应形状。同时房间面积按 m² 显示，平面图标注房间名与面积，`not_verifiable` 诊断加「待专业确认」标签
 - 装修方案模板页面构建 IR 时漏传 `furniture[].kind` 与 `openings[].host`，导致衣柜净空、湿区电气、开洞减扣等依赖 `kind` 的规则从页面路径永远不会触发（专家路径正常，单测与 REST 集成测试都发现不了）。补上两个字段，并新增 Chromium 回归测试（`tests/integration/test_interior_plan_page.py`）守护页面与内核之间的 IR 契约
 - 安全：OIDC 一次性登录码只能由真实 IdP 回调签发的状态（带 nonce/PKCE）附加与兑换；直接写库伪造的 `sso_login_states` 即使带 `login_code` 也无法登录，堵住 Agent 通过 `execute` 生成完整 admin 登录链接的越权路径。新增工具守卫规则 `TOOL_CMD_FORGED_SSO_LOGIN_CODE`（CRITICAL），并在 `app_share_link` 描述与小程序提示词中明确禁止生成 SSO/OIDC 登录链接

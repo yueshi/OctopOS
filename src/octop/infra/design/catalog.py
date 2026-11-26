@@ -57,7 +57,9 @@ class CatalogItem:
     needs_water: bool = False
     needs_drain: bool = False
     #: Clear space measured from the item's front face, in millimetres.
-    front_clearance: float = 0.0
+    #: ``None`` means "use the category default"; ``0`` means "no requirement"
+    #: (a bedside table is reached from the bed, not from the floor).
+    front_clearance: float | None = None
 
 
 def _item(
@@ -150,7 +152,16 @@ CATALOG: Final[dict[str, CatalogItem]] = {
             against_wall=True,
             front_clearance=600,
         ),
-        _item("bedside_table", "storage", "床头柜", "bedside table", 450, 400, against_wall=True),
+        _item(
+            "bedside_table",
+            "storage",
+            "床头柜",
+            "bedside table",
+            450,
+            400,
+            against_wall=True,
+            front_clearance=0.0,
+        ),
         # kitchen
         _item(
             "kitchen_counter",

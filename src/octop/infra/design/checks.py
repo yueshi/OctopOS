@@ -644,7 +644,9 @@ def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
         if info is not None:
             if info.category != "storage":
                 return None
-            return info.front_clearance or STORAGE_FRONT_CLEARANCE_MM
+            if info.front_clearance is not None:
+                return info.front_clearance or None
+            return STORAGE_FRONT_CLEARANCE_MM
         return STORAGE_FRONT_CLEARANCE_MM if item.kind.lower() in STORAGE_KINDS else None
 
     return _front_clearance(
@@ -658,7 +660,7 @@ def _check_storage_clearance(ir: IR) -> list[Diagnostic]:
 def _check_appliance_clearance(ir: IR) -> list[Diagnostic]:
     def select(item: Furniture) -> float | None:
         info = resolve(item.kind)
-        if info is None or not info.appliance or info.front_clearance <= 0:
+        if info is None or not info.appliance or not info.front_clearance:
             return None
         return info.front_clearance
 
@@ -673,7 +675,7 @@ def _check_appliance_clearance(ir: IR) -> list[Diagnostic]:
 def _check_sanitary_clearance(ir: IR) -> list[Diagnostic]:
     def select(item: Furniture) -> float | None:
         info = resolve(item.kind)
-        if info is None or info.category != "sanitary" or info.front_clearance <= 0:
+        if info is None or info.category != "sanitary" or not info.front_clearance:
             return None
         return info.front_clearance
 
@@ -1043,14 +1045,33 @@ def _check_route_width(ir: IR) -> list[Diagnostic]:
                     continue
                 free[row][col] = False
 
+    # Start at the entrance door, not at whichever free cell happens to be
+    # scanned first: a furniture ring can enclose a free pocket in a corner,
+    # and starting inside it would report every other room as unreachable.
+    door = _entrance_door(ir)
+    anchor = (door.x, door.y) if door is not None else None
     start_cell = None
-    for row in range(rows):
-        for col in range(cols):
-            if free[row][col] and point_in_polygon(cell_center(col, row), entrance.polygon):
-                start_cell = (row, col)
+    if anchor is not None:
+        best_distance = float("inf")
+        for row in range(rows):
+            for col in range(cols):
+                if not free[row][col]:
+                    continue
+                point = cell_center(col, row)
+                if not any(point_in_polygon(point, room.polygon) for room in rooms):
+                    continue
+                gap = distance(point, anchor)
+                if gap < best_distance:
+                    best_distance = gap
+                    start_cell = (row, col)
+    else:
+        for row in range(rows):
+            for col in range(cols):
+                if free[row][col] and point_in_polygon(cell_center(col, row), entrance.polygon):
+                    start_cell = (row, col)
+                    break
+            if start_cell:
                 break
-        if start_cell:
-            break
     if start_cell is None:
         return [
             Diagnostic(
@@ -1207,6 +1228,13 @@ def _check_route_continuity(ir: IR) -> list[Diagnostic]:
             elements=[room.id for room in unreachable],
         )
     ]
+
+
+def _entrance_door(ir: IR) -> Opening | None:
+    for opening in ir.openings:
+        if opening.type == "door":
+            return opening
+    return None
 
 
 def _entrance_room(ir: IR, rooms: list[Room]) -> Room | None:

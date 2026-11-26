@@ -82,6 +82,18 @@ def test_appliance_front_clearance_is_checked() -> None:
     assert findings[0].required == 900
 
 
+def test_bedside_table_needs_no_floor_clearance() -> None:
+    # A bedside table is reached from the bed; the 700mm storage default would
+    # be a false positive next to any bed.
+    ir = _plan(
+        [
+            {"id": "F-001", "kind": "bedside_table", "x": 0, "y": 0, "w": 450, "d": 400},
+            {"id": "F-002", "kind": "bed_double", "x": 0, "y": 400, "w": 1500, "d": 2000},
+        ]
+    )
+    assert not _findings(ir, "clearance.wardrobe_front")
+
+
 def test_sanitary_front_clearance_is_checked() -> None:
     ir = _plan(
         [
@@ -428,6 +440,42 @@ def test_route_width_is_blocked_by_furniture_in_the_doorway() -> None:
 
 def test_route_width_passes_for_a_clear_door() -> None:
     ir = _two_room_plan(front=[])
+    assert not _findings(ir, "route.width")
+
+
+def test_route_width_starts_at_the_door_not_in_a_furniture_pocket() -> None:
+    """A sealed nook near the origin must not become the flood's start cell."""
+    ir = parse_ir(
+        {
+            "walls": [
+                {"id": "W-001", "x1": 0, "y1": 0, "x2": 11000, "y2": 0, "t": 120},
+                {"id": "W-002", "x1": 11000, "y1": 0, "x2": 11000, "y2": 4000, "t": 120},
+                {"id": "W-003", "x1": 11000, "y1": 4000, "x2": 0, "y2": 4000, "t": 120},
+                {"id": "W-004", "x1": 0, "y1": 4000, "x2": 0, "y2": 0, "t": 120},
+                {"id": "W-005", "x1": 8000, "y1": 0, "x2": 8000, "y2": 4000, "t": 120},
+                # a sealed nook in the kitchen's south-west corner
+                {"id": "W-006", "x1": 8000, "y1": 1800, "x2": 9800, "y2": 1800, "t": 120},
+                {"id": "W-007", "x1": 9800, "y1": 0, "x2": 9800, "y2": 1800, "t": 120},
+            ],
+            "openings": [
+                {"id": "D-001", "type": "door", "x": 11000, "y": 3000, "width": 900, "angle": 90},
+                {"id": "D-002", "type": "door", "x": 8000, "y": 3000, "width": 900, "angle": 90},
+            ],
+            "furniture": [],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "客厅",
+                    "polygon": [[0, 0], [8000, 0], [8000, 4000], [0, 4000]],
+                },
+                {
+                    "id": "R-002",
+                    "name": "厨房",
+                    "polygon": [[8000, 0], [11000, 0], [11000, 4000], [8000, 4000]],
+                },
+            ],
+        }
+    )
     assert not _findings(ir, "route.width")
 
 
