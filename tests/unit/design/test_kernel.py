@@ -158,21 +158,20 @@ def test_overlapping_furniture_is_reported() -> None:
 
 def test_wardrobe_without_front_clearance_is_reported() -> None:
     plan = _plan()
+    # Against the south wall, facing into the room; the table is in its face.
     plan["furniture"] = [
         {
             "id": "F-010",
-            "x": 0,
-            "y": 200,
+            "x": 200,
+            "y": 60,
             "w": 2000,
             "d": 600,
             "rot": 0,
             "kind": "wardrobe",
             "name": "衣柜",
-        }
+        },
+        {"id": "F-011", "x": 600, "y": 900, "w": 800, "d": 500, "rot": 0, "kind": "table"},
     ]
-    plan["furniture"].append(
-        {"id": "F-011", "x": 800, "y": 900, "w": 800, "d": 500, "rot": 0, "kind": "table"}
-    )
     finding = _finding(parse_ir(plan), "clearance.wardrobe_front")
     assert finding is not None
     assert finding.severity == "blocking"

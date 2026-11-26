@@ -468,4 +468,4 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 2. **是否给 `services.json` / `app_add_service` 增加 extension 支持**——决定 extension 服务是"每应用手动配一次"还是"模板自带"。
 3. **IR 体量**：100㎡ 户型 IR JSON 约 100–300KB，对 `max_request_bytes=1MB` 够用，但需实测元素数上限。
 4. **家具库**：`furniture[].kind` 的标准清单由谁定（领域顾问）——影响内核与前端渲染的一致性。**注意**：`kind` 缺失会让衣柜/湿区/电气整族规则静默失效，页面侧已有回归测试守着，专家侧需要在 AGENTS.md 的写入规范里继续强调。
-5. **验收户型集**：需要 3–5 套真实户型 fixture 作为回归基线。
+5. ~~**验收户型集**~~ —— 已落地两套：`tests/unit/design/fixtures/two_bedroom_81.json`（84.24㎡，应只剩通风待确认）与 `kitchen_living_39.json`（38.88㎡，固化冰箱挡门、备餐台挡冰箱、洗衣机缺排水三条已知问题），由 `test_plan_fixtures.py` 做快照断言；调整阈值时这些用例会直接指出影响。

@@ -357,6 +357,8 @@ def _two_room_plan(
 
 
 def test_seat_needs_room_to_stand_up() -> None:
+    # The chair faces the table to the north, so the user pushes it back to the
+    # south and needs standing space there.
     ir = parse_ir(
         {
             "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 4000, "y2": 0, "t": 120}],
@@ -372,7 +374,8 @@ def test_seat_needs_room_to_stand_up() -> None:
                     "d": 450,
                     "facing": 90,
                 },
-                {"id": "F-002", "kind": "table", "x": 500, "y": 1550, "w": 800, "d": 500},
+                {"id": "F-002", "kind": "dining_table", "x": 500, "y": 1550, "w": 800, "d": 500},
+                {"id": "F-003", "kind": "cabinet", "x": 500, "y": 400, "w": 800, "d": 400},
             ],
         }
     )
@@ -382,6 +385,7 @@ def test_seat_needs_room_to_stand_up() -> None:
 
 
 def test_seat_with_walking_room_is_an_improvement_not_a_failure() -> None:
+    # Facing east, so the space behind the chair is to the west.
     ir = parse_ir(
         {
             "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 4000, "y2": 0, "t": 120}],
@@ -391,25 +395,42 @@ def test_seat_with_walking_room_is_an_improvement_not_a_failure() -> None:
                 {
                     "id": "F-001",
                     "kind": "chair",
-                    "x": 500,
+                    "x": 1500,
                     "y": 1000,
                     "w": 450,
                     "d": 450,
                     "facing": 0,
                 },
-                {
-                    "id": "F-002",
-                    "kind": "cabinet",
-                    "x": 500 + 450 + 800,
-                    "y": 1000,
-                    "w": 300,
-                    "d": 400,
-                },
+                {"id": "F-002", "kind": "cabinet", "x": 400, "y": 1000, "w": 300, "d": 400},
             ],
         }
     )
     assert not _findings(ir, "clearance.seat_stand")
     assert _findings(ir, "clearance.seat_walk")
+
+
+def test_sofa_is_not_judged_by_the_seat_rule() -> None:
+    # A sofa backs onto the wall; nobody needs to stand behind it.
+    ir = parse_ir(
+        {
+            "walls": [{"id": "W-001", "x1": 0, "y1": 0, "x2": 4000, "y2": 0, "t": 120}],
+            "openings": [],
+            "rooms": [],
+            "furniture": [
+                {
+                    "id": "F-001",
+                    "kind": "sofa",
+                    "x": 500,
+                    "y": 60,
+                    "w": 2000,
+                    "d": 900,
+                    "facing": 90,
+                },
+            ],
+        }
+    )
+    assert not _findings(ir, "clearance.seat_stand")
+    assert not _findings(ir, "clearance.seat_walk")
 
 
 def test_seat_without_facing_uses_the_best_side() -> None:
@@ -698,6 +719,47 @@ def test_empty_room_occupancy_is_flagged() -> None:
         }
     )
     assert _findings(ir, "room.occupancy")
+
+
+def test_circulation_rooms_are_not_scored_for_occupancy() -> None:
+    ir = parse_ir(
+        {
+            "furniture": [],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "门厅",
+                    "polygon": [[0, 0], [2000, 0], [2000, 3000], [0, 3000]],
+                },
+            ],
+        }
+    )
+    assert not _findings(ir, "room.occupancy")
+
+
+def test_pair_clearance_does_not_cross_a_wall() -> None:
+    # Beds 300mm apart, but in different rooms: no finding.
+    ir = parse_ir(
+        {
+            "furniture": [
+                {"id": "F-001", "kind": "bed_double", "x": 0, "y": 0, "w": 1500, "d": 2000},
+                {"id": "F-002", "kind": "bed_double", "x": 1800, "y": 0, "w": 1500, "d": 2000},
+            ],
+            "rooms": [
+                {
+                    "id": "R-001",
+                    "name": "主卧",
+                    "polygon": [[0, 0], [1700, 0], [1700, 3000], [0, 3000]],
+                },
+                {
+                    "id": "R-002",
+                    "name": "卧室",
+                    "polygon": [[1700, 0], [4000, 0], [4000, 3000], [1700, 3000]],
+                },
+            ],
+        }
+    )
+    assert not _findings(ir, "clearance.pair_min")
 
 
 def test_bed_in_the_kitchen_is_reported() -> None:

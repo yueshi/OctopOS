@@ -69,6 +69,8 @@ SEAT_STAND_MM: Final = 750.0
 SEAT_WALK_MM: Final = 900.0
 #: How far a seat rule looks for a blocker.
 SEAT_PROBE_MM: Final = 3000.0
+#: Movable seats whose user pushes them back to stand; a sofa is not one.
+SEAT_RULE_KINDS: Final = frozenset({"chair", "stool", "bench", "armchair"})
 
 #: Continuous route width required from the entrance to every use zone.
 ROUTE_WIDTH_MM: Final = 600.0
@@ -154,6 +156,18 @@ UNRELATED_IN_SERVICE: Final = frozenset(
 #: Furniture footprint share of a room, as a sanity band.
 ROOM_OCCUPANCY_MIN: Final = 0.10
 ROOM_OCCUPANCY_MAX: Final = 0.40
+
+#: Circulation rooms are judged by the route rules, not by occupancy.
+CIRCULATION_ROOM_WORDS: Final = (
+    "门厅",
+    "玄关",
+    "过道",
+    "走廊",
+    "hall",
+    "corridor",
+    "entry",
+    "lobby",
+)
 
 #: How far an entry sightline is traced.
 ENTRY_SIGHT_RANGE_MM: Final = 10_000.0
@@ -640,14 +654,13 @@ def _front_clearance(
 ) -> list[Diagnostic]:
     """Generic "clear space in front of a wall-hugging item" rule.
 
-    ``select`` returns the required clearance for an item, or ``None`` to skip
-    it. The measurement is taken from the item's front face towards the room,
-    so a wide wardrobe anchored to a wall is measured from its own face.
+    The measurement runs along the item's front normal, so a piece standing
+    beside it does not count as blocking the way.
     """
     findings: list[Diagnostic] = []
+    by_id = {item.id: item for item in ir.furniture}
     for item in ir.furniture:
         if item.host:
-            # Access is measured at the host, not at the inset item.
             continue
         required = select(item)
         if not required:
@@ -658,35 +671,24 @@ def _front_clearance(
         normal = _wall_normal_towards(wall, item.center)
         if normal is None:
             continue
-        front_edge = _front_edge_point(item, normal)
-        by_id = {candidate.id: candidate for candidate in ir.furniture}
-        blockers: list[tuple[Furniture, float]] = []
-        for other in ir.furniture:
-            if other.id == item.id:
-                continue
-            if _hosted_within(other, item.id, by_id):
-                # The sink inside this counter is not something standing in
-                # front of it.
-                continue
-            distance = point_to_polygon_distance(front_edge, other.corners())
-            if distance < required:
-                blockers.append((other, distance))
-        if not blockers:
+        clearance, blocker_id = _clearance_ahead(ir, item, normal)
+        if clearance >= required:
             continue
-        closest = min(blockers, key=lambda pair: pair[1])
         info = resolve(item.kind)
         label = item.name or (info.label_zh if info else item.id)
+        blocker = by_id.get(blocker_id)
+        blocker_label = blocker.name or blocker.id if blocker else (blocker_id or "墙体")
         findings.append(
             Diagnostic(
                 rule_id=rule_id,
                 status=STATUS_NON_COMPLIANT,
                 severity=severity,
                 message=(
-                    f"{label} 前方净空 {_mm(closest[1])}，小于要求的 {_mm(required)}，"
-                    f"被 {closest[0].name or closest[0].id} 占用"
+                    f"{label} 前方净空 {_mm(clearance)}，小于要求的 {_mm(required)}，"
+                    f"被 {blocker_label} 挡住"
                 ),
-                elements=[item.id, *[other.id for other, _ in blockers]],
-                measured=closest[1],
+                elements=[item.id, blocker_id] if blocker_id else [item.id],
+                measured=clearance,
                 required=required,
             )
         )
@@ -862,8 +864,12 @@ def _passable_spans(ir: IR, wall: Wall) -> list[tuple[float, float]]:
     return spans
 
 
-def _direction_clearance(ir: IR, item: Furniture, direction: Point) -> float:
-    """How far the space in front of *item* stays clear in *direction*."""
+def _clearance_ahead(ir: IR, item: Furniture, direction: Point) -> tuple[float, str]:
+    """Distance to the first blocker along *direction*, and the blocker's id.
+
+    Walls stop the ray; a door span in a wall is passable. Items hosted by
+    *item* are part of it and never block it.
+    """
     half = support_width(
         item.w / 2,
         item.d / 2,
@@ -873,9 +879,11 @@ def _direction_clearance(ir: IR, item: Furniture, direction: Point) -> float:
     )
     origin = (item.center[0] + direction[0] * half, item.center[1] + direction[1] * half)
     best = SEAT_PROBE_MM
+    blocker = ""
+    by_id = {candidate.id: candidate for candidate in ir.furniture}
 
     for other in ir.furniture:
-        if other.id == item.id:
+        if other.id == item.id or _hosted_within(other, item.id, by_id):
             continue
         corners = other.corners()
         for index in range(len(corners)):
@@ -884,6 +892,7 @@ def _direction_clearance(ir: IR, item: Furniture, direction: Point) -> float:
             )
             if hit is not None and hit < best:
                 best = hit
+                blocker = other.id
 
     for wall in ir.walls:
         if wall.is_degenerate:
@@ -891,7 +900,6 @@ def _direction_clearance(ir: IR, item: Furniture, direction: Point) -> float:
         hit = ray_segment_distance(origin, direction, (wall.x1, wall.y1), (wall.x2, wall.y2))
         if hit is None:
             continue
-        # A door in this wall is an opening, not a blocker.
         length = wall.length
         unit = ((wall.x2 - wall.x1) / length, (wall.y2 - wall.y1) / length)
         hit_point = (origin[0] + direction[0] * hit, origin[1] + direction[1] * hit)
@@ -901,13 +909,20 @@ def _direction_clearance(ir: IR, item: Furniture, direction: Point) -> float:
         free = max(0.0, hit - wall.t / 2)
         if free < best:
             best = free
-    return best
+            blocker = wall.id
+    return best, blocker
 
 
 def _seat_directions(item: Furniture) -> list[Point]:
+    """Direction(s) to measure for a seat.
+
+    A seated person stands by pushing the chair back, so the relevant space is
+    *behind* the seat: the opposite of the declared facing. Without a facing,
+    any side will do, so all four are tried and the best one wins.
+    """
     if item.facing is not None:
         rad = math.radians(item.facing)
-        return [(math.cos(rad), math.sin(rad))]
+        return [(-math.cos(rad), -math.sin(rad))]
     rad = math.radians(item.rot)
     u = (math.cos(rad), math.sin(rad))
     v = (-math.sin(rad), math.cos(rad))
@@ -919,9 +934,9 @@ def _check_seat_clearance(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
     for item in ir.furniture:
         info = resolve(item.kind)
-        if item.host or info is None or info.category != "seat":
+        if item.host or info is None or info.kind not in SEAT_RULE_KINDS:
             continue
-        best = max(_direction_clearance(ir, item, d) for d in _seat_directions(item))
+        best = max(_clearance_ahead(ir, item, d)[0] for d in _seat_directions(item))
         if best >= SEAT_WALK_MM:
             continue
         walk = best >= SEAT_STAND_MM
@@ -1411,7 +1426,7 @@ def _check_room_occupancy(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
     for room in ir.rooms:
         area = abs(polygon_area(room.polygon))
-        if area <= 0:
+        if area <= 0 or _room_is(room, CIRCULATION_ROOM_WORDS):
             continue
         used = 0.0
         for item in ir.furniture:
@@ -1561,6 +1576,11 @@ def _check_door_handle(ir: IR) -> list[Diagnostic]:
         for wall in ir.walls:
             if wall.is_degenerate:
                 continue
+            # A leaf folded back along a parallel side wall is normal; only a
+            # wall standing across the open leaf can trap the handle.
+            wall_unit = ((wall.x2 - wall.x1) / wall.length, (wall.y2 - wall.y1) / wall.length)
+            if abs(dot(inward, wall_unit)) > 0.9:
+                continue
             gap = point_to_segment_distance(handle, (wall.x1, wall.y1), (wall.x2, wall.y2))
             clearance = min(clearance, max(0.0, gap - wall.t / 2))
         for item in ir.furniture:
@@ -1586,15 +1606,32 @@ def _check_door_handle(ir: IR) -> list[Diagnostic]:
     return findings
 
 
+def _room_id_for(item: Furniture, rooms: list[Room]) -> str:
+    for room in rooms:
+        if room.polygon and point_in_polygon(item.center, room.polygon):
+            return room.id
+    return ""
+
+
 def _check_pair_clearance(ir: IR) -> list[Diagnostic]:
-    """Specific furniture pairs need a minimum gap between them."""
+    """Specific furniture pairs need a minimum gap between them.
+
+    Only pairs in the same room are compared: a wall between them means the
+    gap is not something anyone walks through.
+    """
     findings: list[Diagnostic] = []
+    rooms = [room for room in ir.rooms if room.polygon]
     for index, first in enumerate(ir.furniture):
         if first.host:
             continue
         for second in ir.furniture[index + 1 :]:
             if second.host:
                 continue
+            if rooms:
+                first_room = _room_id_for(first, rooms)
+                second_room = _room_id_for(second, rooms)
+                if first_room and second_room and first_room != second_room:
+                    continue
             key = tuple(sorted((first.kind, second.kind)))
             required = PAIR_CLEARANCE_MM.get(key)  # type: ignore[arg-type]
             if required is None:

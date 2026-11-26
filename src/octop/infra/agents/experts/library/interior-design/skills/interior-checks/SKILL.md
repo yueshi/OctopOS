@@ -41,10 +41,10 @@ argument-hint: "<要核对的方案或问题>"
 | `clearance.appliance_front` | 电器前净空（冰箱 900、洗碗机/洗衣机 600…） | 按目录 `front_clearance` | significant | 已实现 |
 | `clearance.sanitary_front` | 洁具前净空（马桶/洗手盆/淋浴/浴缸） | 600mm | significant | 已实现 |
 | `clearance.kitchen_aisle` | 厨房操作通道（台面、水槽前） | 900mm | significant | 已实现 |
-| `clearance.seat_stand` | 座椅前站立空间 | 未声明朝向取四面最好的一面；< 750mm 报 | significant | 已实现 |
-| `clearance.seat_walk` | 座椅前通行空间 | 750–900mm 报"可站不可过" | improvement | 已实现 |
+| `clearance.seat_stand` | 座椅**背后**站立空间 | 人起身是把椅子往后推；未声明朝向取四面最好的一面；< 750mm 报。沙发不参与（靠墙放置） | significant | 已实现 |
+| `clearance.seat_walk` | 座椅**背后**通行空间 | 750–900mm 报"可站不可过" | improvement | 已实现 |
 | `clearance.pair_min` | 特定家具对的最小间距 | 床–床 600、床–书桌 500、沙发/单椅–茶几 300（默认口径，可按项目覆盖）；未列出的组合不判 | significant | 已实现 |
-| `clearance.handle` | 门全开时把手侧净空 | ≥ 100mm（需 `hinge` 说明合页在 start 还是 end） | improvement | 已实现 |
+| `clearance.handle` | 门全开时把手侧净空 | ≥ 100mm（需 `hinge` 说明合页在 start 还是 end）；门扇贴着**平行**侧墙折叠不算问题，只有横向挡住门扇的墙才算 | improvement | 已实现 |
 
 ## 采光、通风、面积
 
