@@ -153,8 +153,8 @@ python -m octop.infra.design --mcp            # MCP  8849：给专家
 
 | 事实 | 位置 | 影响 |
 |---|---|---|
-| MiniApp 页面无服务端执行、无网络、无外部脚本 | `src/octop/infra/apps/sandbox.py:31`、`src/octop/infra/apps/models.py:601-785` | 内核必须外置；Three.js 只能内联进来（`<script src>` 被拒；HTML 上限已提到 1 MB，压缩后 ≈600KB 的 three.js 仍挤不进只剩几百 KB 的业务代码空间） |
-| HTML ≤ 1MB；素材只收 PNG/JPEG/WebP/GIF；12 表/应用、50 列/表、2 万行/表、单元格 ≤10k 字符 | `src/octop/infra/apps/models.py:33-47` | IR 必须按元素分行存，不能整份塞进一个单元格 |
+| MiniApp 页面无服务端执行、无网络、无外部脚本 | `src/octop/infra/apps/sandbox.py:31`、`src/octop/infra/apps/models.py:601-785` | 内核必须外置；Three.js 只能内联进来（`<script src>` 被拒；HTML 上限已提到 2 MB，压缩后 ≈600KB 的 three.js 仍会占掉大半预算） |
+| HTML ≤ 2MB；素材只收 PNG/JPEG/WebP/GIF；12 表/应用、50 列/表、2 万行/表、单元格 ≤10k 字符 | `src/octop/infra/apps/models.py:33-47` | IR 必须按元素分行存，不能整份塞进一个单元格 |
 | 模板只能创建 **一张主表**（表名固定 `main`），其余表要靠 `app_add_table` | `src/octop/infra/apps/service.py:2321-2397` | 主表 = `elements`；`rooms`/`diagnostics`/`bom`/`operations` 由专家创建 |
 | 模板的 `services.json` **只能声明只读连接器/外部服务**，不支持 `provider=extension` | `src/octop/infra/apps/service.py:2399-2470`（`_apply_template_services` 只调 `save_service` 的只读参数集） | extension 服务必须由 Owner 在应用详情页手动配置 —— 见 §6.1 |
 | extension 服务 `base_url` 走 SSRF 校验，本地/内网地址需 `allow_private_network=true`，**且只有 admin 能开** | `src/octop/infra/apps/service.py:7918-7921` | "MiniApp 连本机微服务"是一次性的管理员配置动作 |
@@ -172,7 +172,7 @@ python -m octop.infra.design --mcp            # MCP  8849：给专家
 | `avalla/llm-interior-designer`（MIT） | 真实。校验清单与 VERIFIED / NON-COMPLIANT / NOT VERIFIABLE / NOT APPLICABLE × blocking/significant/improvement 分级与贴文一致 | **当规则清单和诊断格式模板**。但它是 **FreeCAD 1.1 图形界面 + MCP 插件 + ODA File Converter**，路径面向 macOS，无 headless/CI 模式 → 不能当生产引擎 |
 | `laurent512/opencalque`（MIT） | 真实，TypeScript 单体仓。已核实：`schema/document.schema.json`（IR）、`schema/ops.schema.json`（`add_node`/`update_node` 等编辑操作）、`packages/core/src/check.ts` → `checkDrawing()`，ProblemKind 共 8 类（`room-not-enclosed`/`wall-gap`/`walls-overlap`/`opening-not-in-wall`/`opening-past-wall-end`/`openings-overlap`/`fixed-off-wall`/`rooms-in-one-space`）、`packages/core/src/quantities.ts`（工程量）、`packages/cli/src/mcp.ts`（MCP server）、`packages/core/src/check.ts:248` `problemsMadeBy(before, after)`（**增量诊断**） | **最佳蓝本**：IR / 操作 schema / 诊断格式 / 增量校验全部照抄。移植到 Python 约 400–600 行。检查项只有 8 类，通道净宽、座椅间距、采光等 10+ 条需自行补写 |
 | `allgpt-co/openlintel` | 真实，但 **AGPL-3.0**（贴文写 MIT 有误），★6，README 自述 "Active development, not a verified hosted product"，能力表明确写"describes development areas, **not a production feature checklist**" | **不可抄进 MIT 的 Octop**。只能当产品流程参考 |
-| `wy51ai/floorplan-3d`（MIT，★3955） | 真实，纯 HTML + Three.js | Three.js 压缩后 ≈600KB，只能内联（`<script src>` 被写入期扫描拒），与业务代码合计逼近 1MB 上限 → **不建议直接用**。平面图渲染自己写在模板里 |
+| `wy51ai/floorplan-3d`（MIT，★3955） | 真实，纯 HTML + Three.js | Three.js 压缩后 ≈600KB，只能内联（`<script src>` 被写入期扫描拒），与业务代码合计逼近 2MB 上限 → **不建议直接用**。平面图渲染自己写在模板里 |
 
 ---
 
@@ -396,7 +396,7 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 ## 5. MiniApp 页面（模板 `interior-plan`）
 
-单文件 HTML，≤1MB，全内联，无外部资源。
+单文件 HTML，≤2MB，全内联，无外部资源。
 
 | 区块 | 内容 |
 |---|---|

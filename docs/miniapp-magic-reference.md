@@ -41,7 +41,7 @@ Magic 的「HTML 微应用」有三层形态：
 | **普通项目 HTML 应用**（`html-app-architect`） | 工作区文件（一键一记录） | 项目内的轻量工具、表单、看板 |
 | **Magic Project 产物**（`magic.project.js`） | 文件夹 + manifest | slide / audio / html-app 等「超级产物」面板 |
 
-Octop 的 MiniApp 是单一形态但数据层更完整：一份 HTML（≤1MB）+ 多表数据（12 表/应用、50 列、2 万行、5MB CSV）+ 能力位 + ACL + 桌面/公开页宿主。
+Octop 的 MiniApp 是单一形态但数据层更完整：一份 HTML（≤2MB）+ 多表数据（12 表/应用、50 列、2 万行、5MB CSV）+ 能力位 + ACL + 桌面/公开页宿主。
 
 ### 1.2 分层对照
 

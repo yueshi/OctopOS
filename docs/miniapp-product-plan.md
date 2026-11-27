@@ -38,7 +38,7 @@
 | 不是业务流程引擎 | 审批/编排属于 Octop 的 `infra/cron`、`infra/events`、Teams；MiniApp 只承载结果（overview §1.2） |
 | 不是 BI / 报表工具 | 无跨表 join、无钻取、无复杂筛选；表格定位是投影层，不是权威业务库（overview §1.2） |
 | 不是通用富媒体运行时 | 素材仍以图片为主；视频只支持**平台托管的同源资源**（阶段 1.5，限定路径与来源），不做任意 URL、不做页面内上传大文件、不做逐帧剪辑 |
-| 不是多页面前端 | 一个应用一份 HTML（≤1MB），无路由；多视图靠页面内 JS 切 tab |
+| 不是多页面前端 | 一个应用一份 HTML（≤2MB），无路由；多视图靠页面内 JS 切 tab |
 | 不是低代码平台 | 不提供任意服务端 JS；声明式规则（校验/枚举/状态机）已足够，计算字段与触发器延后（roadmap §2 决策 10） |
 | 不是原生小程序运行时 | 没有每应用进程、没有服务端执行页面代码、没有自定义域名（overview §1.2） |
 | 不是权威业务数据源 | 任务实体仍落原生表；MiniApp 是展示与装配层（overview §1.2） |
@@ -110,7 +110,7 @@ MCP Apps 换的是**界面层**；而 §3.3 的六个 P0 里，五个在数据�
 
 **三个直接冲突：**
 
-1. **256 KB vs 1 MB**：MiniApp HTML 上限 1 MB，超过 256 KB 在 WorkBuddy 里会多一次 widget 侧资源拉取
+1. **256 KB vs 2 MB**：MiniApp HTML 上限 2 MB，超过 256 KB 在 WorkBuddy 里会多一次 widget 侧资源拉取
    → **`ui://` 资源必须能被匿名或带短时 token 访问**；而 `GET /api/apps/{id}/html` 现在要 JWT
    （与阶段 6 的「平台级 capability token」是同一件事）。
 2. **授权语义重叠**：WorkBuddy 对反向调用强制弹窗，与 MiniApp 的 `data.write` 能力位不是一回事。
