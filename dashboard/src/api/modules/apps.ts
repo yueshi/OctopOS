@@ -1547,6 +1547,11 @@ export const appsApi = {
       `/apps/${encodeId(appId)}/export?table=${encodeURIComponent(table)}`,
     ),
 
+  exportDrawing: (appId: string, format: "dxf" | "dwg" = "dxf") =>
+    requestBlob(
+      `/apps/${encodeId(appId)}/drawing?format=${encodeURIComponent(format)}`,
+    ),
+
   backup: (appId: string) => requestBlob(`/apps/${encodeId(appId)}/backup`),
 
   preflightRestore: (agentId: string, file: File) => {

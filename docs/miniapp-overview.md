@@ -1134,6 +1134,7 @@ App HTML 是 Agent 生成内容，按不可信代码处理：
 | GET | `/apps/{id}/rows/{row_id}/history` | 行级变更历史 |
 | GET | `/apps/{id}/aggregate` | 服务端分组聚合 |
 | GET | `/apps/{id}/export` | CSV 导出 |
+| GET | `/apps/{id}/drawing?format=dxf\|dwg` | 平面图导出（DXF 恒可用；DWG 需 ODA File Converter） |
 | GET | `/apps/{id}/backup` | 备份 zip |
 | POST | `/apps/restore/preflight` | 恢复前扫描依赖与归档，返回阻断错误/警告 |
 | POST | `/apps/restore` | 恢复备份（内部先做预检） |

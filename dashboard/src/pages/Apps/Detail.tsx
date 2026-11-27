@@ -39,6 +39,7 @@ import {
   Sparkles,
   Trash2,
   Upload as UploadIcon,
+  FileDown,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -820,6 +821,21 @@ export default function AppDetailPage({
       URL.revokeObjectURL(url);
     } catch (err) {
       message.error(apiErrorMessage(err, t("apps.loadFailed"), t));
+    }
+  };
+
+  const exportDrawing = async (format: "dxf" | "dwg") => {
+    if (!appId) return;
+    try {
+      const blob = await appsApi.exportDrawing(appId, format);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${detail?.name || appId}-plan.${format}`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      message.error(apiErrorMessage(err, t("apps.exportDrawingFailed"), t));
     }
   };
 
@@ -1637,6 +1653,15 @@ export default function AppDetailPage({
   const moreMenu: MenuProps = {
     items: [
       { key: "rename", icon: <Edit3 size={14} />, label: t("apps.rename") },
+      {
+        key: "export-drawing",
+        icon: <FileDown size={14} />,
+        label: t("apps.exportDrawing"),
+        children: [
+          { key: "export-dxf", label: t("apps.exportDxf") },
+          { key: "export-dwg", label: t("apps.exportDwg") },
+        ],
+      },
       ...(detail.previous_html_at
         ? [
             {
@@ -1659,7 +1684,9 @@ export default function AppDetailPage({
         : []),
     ],
     onClick: ({ key }) => {
-      if (key === "rename") openRename();
+      if (key === "export-dxf") void exportDrawing("dxf");
+      else if (key === "export-dwg") void exportDrawing("dwg");
+      else if (key === "rename") openRename();
       else if (key === "restore") confirmRestoreHtml();
       else if (key === "delete") confirmDeleteApp();
     },

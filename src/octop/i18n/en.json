@@ -600,7 +600,8 @@
     "EXTERNAL_EVENT_INVALID": "External event is invalid: check event type, id and payload.",
     "EXTERNAL_SOURCE_INVALID": "External event source is invalid: check the name and kind.",
     "TEAM_TASK_LIMIT_REACHED": "Open task limit reached for this agent; finish or cancel some first.",
-    "TEAM_TASK_ASSIGNEE_INVALID": "Task assignee must be a member of this team (a digital employee may only assign itself)."
+    "TEAM_TASK_ASSIGNEE_INVALID": "Task assignee must be a member of this team (a digital employee may only assign itself).",
+    "APP_EXPORT_UNAVAILABLE": "The drawing cannot be exported: {reason}"
   },
   "desktop": {
     "install_log_deps": "Installing Python dependencies…",

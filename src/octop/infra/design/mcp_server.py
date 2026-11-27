@@ -11,12 +11,15 @@ Run it with::
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from octop.infra.design.checks import RULES
 from octop.infra.design.checks import check_drawing as run_checks
+from octop.infra.design.export import ExportUnavailable
+from octop.infra.design.export import export_drawing as run_export
 from octop.infra.design.ir import parse_ir
 from octop.infra.design.ops import apply_ops as run_ops
 from octop.infra.design.takeoff import takeoff as run_takeoff
@@ -63,6 +66,25 @@ def build_server(host: str = "127.0.0.1", port: int = 8849) -> FastMCP:
     def takeoff(ir: dict[str, Any]) -> dict[str, Any]:
         """Derive room areas and the quantity take-off from the geometry."""
         return run_takeoff(parse_ir(ir))
+
+    @mcp.tool()
+    def export_drawing(ir: dict[str, Any], format: str = "dxf", title: str = "") -> dict[str, Any]:
+        """Render the plan as DXF (text) or DWG (base64, needs ODA File Converter)."""
+        try:
+            export = run_export(parse_ir(ir), format, title=title)
+        except (ExportUnavailable, ValueError) as exc:
+            return {"error": str(exc)}
+        if export.filename.endswith(".dxf"):
+            return {
+                "format": "dxf",
+                "filename": export.filename,
+                "text": export.content.decode("utf-8"),
+            }
+        return {
+            "format": "dwg",
+            "filename": export.filename,
+            "base64": base64.b64encode(export.content).decode("ascii"),
+        }
 
     @mcp.tool()
     def apply_ops(ir: dict[str, Any], ops: list[dict[str, Any]]) -> dict[str, Any]:

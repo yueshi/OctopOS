@@ -276,7 +276,8 @@
     "AGENT_HAS_APPS": "该 Agent 名下还有小程序，请先转移或删除它们。",
     "APP_ROW_NOT_FOUND": "未找到该记录。",
     "APP_ROW_IN_USE": "该记录仍被 {{table}}.{{column}} 引用，请先解除引用。",
-    "APP_CONFLICT": "该记录已被修改，请刷新后重试。"
+    "APP_CONFLICT": "该记录已被修改，请刷新后重试。",
+    "APP_EXPORT_UNAVAILABLE": "图纸导出失败：{{reason}}"
   },
   "nav": {
     "chat": "对话",
@@ -2991,7 +2992,11 @@
     "memberPendingTitle": "你的加入申请正在等待应用所有者审批",
     "memberPendingHint": "审批通过后重新打开此小程序即可进入。",
     "memberRejected": "成员已拒绝",
-    "memberRejectConfirm": "拒绝该待审批成员？"
+    "memberRejectConfirm": "拒绝该待审批成员？",
+    "exportDrawing": "导出图纸",
+    "exportDxf": "DXF（通用）",
+    "exportDwg": "DWG（需 ODA）",
+    "exportDrawingFailed": "图纸导出失败"
   },
   "tools": {
     "unknown": "未知工具",

@@ -162,6 +162,8 @@ from octop.infra.db.repos.external_sources import ExternalSourceRepo
 from octop.infra.db.repos.external_subscriptions import ExternalSubscriptionRepo
 from octop.infra.db.repos.secrets import SecretRepo
 from octop.infra.db.repos.users import UserRepo, UserRow
+from octop.infra.design.export import DrawingExport, export_drawing
+from octop.infra.design.ir import IR, Room, ir_from_rows
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.users.principals import Principal, principal_from_user_row
 from octop.infra.utils.ssrf_guard import validate_https_url, validate_https_url_resolved
@@ -3417,6 +3419,66 @@ class AppService:
             include_all_rows=include_all_rows,
         )
         return schema, rows, total
+
+    async def export_drawing(
+        self,
+        row: AppRecord,
+        *,
+        fmt: str,
+        title: str = "",
+    ) -> DrawingExport:
+        """Export the app's design IR as a CAD drawing.
+
+        DWG needs the ODA File Converter; :class:`ExportUnavailable` propagates
+        so the HTTP layer can explain what is missing.
+        """
+        ir_rows: list[dict[str, str]] = []
+        offset = 0
+        while True:
+            _schema, page, total = await self.read_rows(
+                row, limit=MAX_ROW_READ, offset=offset, table=MAIN_TABLE_KEY
+            )
+            ir_rows.extend(page)
+            offset += len(page)
+            if not page or offset >= total:
+                break
+        ir = ir_from_rows(ir_rows)
+
+        if self._app_repo.get_table(row.app_id, "rooms") is not None:
+            room_values: list[dict[str, str]] = []
+            offset = 0
+            while True:
+                _schema, page, total = await self.read_rows(
+                    row, limit=MAX_ROW_READ, offset=offset, table="rooms"
+                )
+                room_values.extend(page)
+                offset += len(page)
+                if not page or offset >= total:
+                    break
+            rooms: list[Room] = []
+            for values in room_values:
+                try:
+                    payload = json.loads(values.get("payload") or "{}")
+                except ValueError:
+                    continue
+                polygon = [tuple(point) for point in payload.get("polygon") or []]
+                rooms.append(
+                    Room(
+                        id=values.get("room_id", ""),
+                        name=values.get("name", ""),
+                        polygon=polygon,
+                    )
+                )
+            ir = IR(
+                walls=ir.walls,
+                openings=ir.openings,
+                furniture=ir.furniture,
+                mep=ir.mep,
+                rooms=rooms,
+                ceiling_height=ir.ceiling_height,
+                thresholds=ir.thresholds,
+            )
+        return export_drawing(ir, fmt, title=title or row.name)
 
     async def read_rows_detailed(
         self,

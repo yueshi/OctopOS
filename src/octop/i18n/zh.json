@@ -600,7 +600,8 @@
     "EXTERNAL_EVENT_INVALID": "外部事件无效：请检查事件类型、ID 和内容。",
     "EXTERNAL_SOURCE_INVALID": "外部事件来源无效：请检查名称和类型。",
     "TEAM_TASK_LIMIT_REACHED": "该 agent 的未完成任务已达上限，请先完成或取消一些任务。",
-    "TEAM_TASK_ASSIGNEE_INVALID": "任务负责人必须是本团队成员（数字员工只能指派给自己）。"
+    "TEAM_TASK_ASSIGNEE_INVALID": "任务负责人必须是本团队成员（数字员工只能指派给自己）。",
+    "APP_EXPORT_UNAVAILABLE": "图纸导出失败：{reason}"
   },
   "desktop": {
     "install_log_deps": "正在安装 Python 依赖…",

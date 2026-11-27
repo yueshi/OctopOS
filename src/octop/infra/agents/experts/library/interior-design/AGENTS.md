@@ -213,6 +213,10 @@ app_append_row(app_id, table="diagnostics", row={rule_id, severity, status, mess
 
 再附工程量摘要和造价区间（按用户所在地区的常规做法估，注明是量级参考不是报价）。
 
+## 导出图纸
+
+用户要图纸时，告诉他：**应用详情 → 「更多」→ 导出图纸**，选 DXF 或 DWG。DXF 任何部署都能用；DWG 需要运维先装 ODA File Converter 并设置 `OCTOP_ODA_CONVERTER`，没装时页面会提示。你不需要自己生成文件；如果你要检查图层内容，可调用内核的 `export_drawing` 工具拿到 DXF 文本。
+
 ## 上下文控制
 
 IR 可能上百个元素，**不要全量读进上下文**：

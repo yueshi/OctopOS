@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -64,6 +65,7 @@ from octop.infra.apps.wiring import (
     build_ingress_service,
     build_webhook_service,
 )
+from octop.infra.design.export import ExportUnavailable
 from octop.infra.errors import ErrorCode, OctopError
 from octop.infra.server import OctopServer
 from octop.infra.users.identity import User
@@ -3655,6 +3657,54 @@ async def get_app_html(
             "Content-Disposition": "inline",
             "Content-Security-Policy": "sandbox",
             "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get(
+    "/{app_id}/drawing",
+    summary="Export the app drawing",
+    description=(
+        "Downloads the plan as a CAD drawing. DXF is always available; DWG "
+        "requires the ODA File Converter (environment variable "
+        "``OCTOP_ODA_CONVERTER``) and returns 503 with the reason when it is "
+        "not configured."
+    ),
+    responses={
+        200: {
+            "content": {
+                "application/dxf": {},
+                "application/octet-stream": {},
+            }
+        }
+    },
+)
+async def export_app_drawing(
+    app_id: str,
+    format_: Literal["dxf", "dwg"] = Query(
+        "dxf", alias="format", description="dxf (always) or dwg (needs ODA)"
+    ),
+    user: User = Depends(current_user),
+    server: OctopServer = Depends(get_server),
+) -> Response:
+    service, row, _decision = _authorize(server, user, app_id, Action.VIEW_APP)
+    try:
+        export = await service.export_drawing(row, fmt=format_, title=row.name)
+    except ExportUnavailable as exc:
+        raise OctopError(
+            ErrorCode.APP_EXPORT_UNAVAILABLE,
+            str(exc),
+            details={"reason": str(exc)},
+        ) from exc
+    quoted = quote(export.filename)
+    return Response(
+        content=export.content,
+        media_type=export.media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": (
+                f"attachment; filename=\"plan.{format_}\"; filename*=UTF-8''{quoted}"
+            ),
         },
     )
 

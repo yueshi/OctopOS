@@ -411,6 +411,18 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 ---
 
+### 5.1 图纸导出（DXF / DWG）
+
+| 入口 | 说明 |
+|---|---|
+| Dashboard | 应用详情 → 「更多」→ 导出图纸 → DXF / DWG（浏览器带 JWT 下载） |
+| HTTP | `GET /api/apps/{app_id}/drawing?format=dxf\|dwg`，返回附件；`VIEW_APP` 权限 |
+| 专家（MCP） | `export_drawing(ir, format, title)`：DXF 返回文本，DWG 返回 base64 |
+
+- **DXF** 由 `ezdxf` 生成，单位毫米，图层 `WALL` / `DOOR` / `WINDOW` / `FURNITURE` / `ROOM` / `MEP` / `TEXT`；图头带方案名、套内面积与「初步方案，需专业复核」声明；房间标注名称与面积，门画门扇与开启弧，嵌入件用虚线。
+- **DWG** 不是 Python 能直接写的格式：内核把 DXF 写到临时目录，再调用 **ODA File Converter** 转换（环境变量 `OCTOP_ODA_CONVERTER` 指向可执行文件）。未配置时接口返回 `503 APP_EXPORT_UNAVAILABLE`，说明需要安装 ODA，而不是给出一个坏文件。
+- 导出使用的 IR 与校验完全同源：同一张 `main` 表 + `rooms` 表，经过 `ir_from_rows` 后送进导出器，`setting` 行的层高/阈值同样生效。
+
 ## 6. 落地摩擦（必须提前处理）
 
 ### 6.1 extension 服务只能手动配置

@@ -267,6 +267,20 @@ def parse_room(raw: dict[str, Any]) -> Room:
     )
 
 
+def _parse_thresholds(raw: object) -> dict[str, float]:
+    thresholds: dict[str, float] = {}
+    if not isinstance(raw, dict):
+        return thresholds
+    for key, value in raw.items():
+        if isinstance(value, bool):
+            continue
+        try:
+            thresholds[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return thresholds
+
+
 def parse_ir(raw: object) -> IR:
     """Build an :class:`IR` from the JSON payload the page and expert send."""
     if not isinstance(raw, dict):
@@ -279,16 +293,7 @@ def parse_ir(raw: object) -> IR:
         return [item for item in value if isinstance(item, dict)]
 
     ceiling = raw.get("ceiling_height")
-    thresholds: dict[str, float] = {}
-    raw_thresholds = raw.get("thresholds")
-    if isinstance(raw_thresholds, dict):
-        for key, value in raw_thresholds.items():
-            if isinstance(value, bool):
-                continue
-            try:
-                thresholds[str(key)] = float(value)
-            except (TypeError, ValueError):
-                continue
+    thresholds = _parse_thresholds(raw.get("thresholds"))
     return IR(
         walls=[parse_wall(item) for item in items("walls")],
         openings=[parse_opening(item) for item in items("openings")],
@@ -395,6 +400,8 @@ def ir_from_rows(rows: list[dict[str, Any]]) -> IR:
     furniture: list[Furniture] = []
     rooms: list[Room] = []
     mep: list[MEPPoint] = []
+    ceiling = 2800.0
+    thresholds: dict[str, float] = {}
 
     for row in rows:
         kind = str(row.get("kind") or "").strip().lower()
@@ -426,5 +433,16 @@ def ir_from_rows(rows: list[dict[str, Any]]) -> IR:
             rooms.append(parse_room(data))
         elif kind == "mep":
             mep.append(parse_mep_point(data))
+        elif kind == "setting":
+            ceiling = _num(data.get("ceiling_height"), ceiling) or ceiling
+            thresholds.update(_parse_thresholds(data.get("thresholds")))
 
-    return IR(walls=walls, openings=openings, furniture=furniture, rooms=rooms, mep=mep)
+    return IR(
+        walls=walls,
+        openings=openings,
+        furniture=furniture,
+        rooms=rooms,
+        mep=mep,
+        ceiling_height=ceiling,
+        thresholds=thresholds,
+    )

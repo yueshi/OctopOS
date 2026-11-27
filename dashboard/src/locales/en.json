@@ -276,7 +276,8 @@
     "AGENT_HAS_APPS": "This agent still owns MiniApps. Transfer or delete them first.",
     "APP_ROW_NOT_FOUND": "Row not found.",
     "APP_ROW_IN_USE": "This row is referenced by {{table}}.{{column}}; remove those references first.",
-    "APP_CONFLICT": "The row changed since you loaded it; refresh and retry."
+    "APP_CONFLICT": "The row changed since you loaded it; refresh and retry.",
+    "APP_EXPORT_UNAVAILABLE": "The drawing cannot be exported: {{reason}}"
   },
   "nav": {
     "chat": "Conversation",
@@ -2991,7 +2992,11 @@
     "memberPendingTitle": "Your request to join is waiting for the app owner",
     "memberPendingHint": "Open this MiniApp again after it is approved.",
     "memberRejected": "Member rejected",
-    "memberRejectConfirm": "Reject this pending member?"
+    "memberRejectConfirm": "Reject this pending member?",
+    "exportDrawing": "Export drawing",
+    "exportDxf": "DXF (universal)",
+    "exportDwg": "DWG (needs ODA)",
+    "exportDrawingFailed": "Could not export the drawing"
   },
   "tools": {
     "unknown": "Unknown tool",

@@ -25,6 +25,7 @@
 - 小程序公开面统一由表级 `public_visible` 控制，取消 `published` row scope：发布弹窗新增公开范围预览（表数/行数/敏感列），个人表标记为「个人表」且公开开关禁用；需要只公开部分行时使用独立公开表/投影
 
 ### 新增
+- 装修方案支持导出 CAD 图纸：应用详情「更多 → 导出图纸」可下载 DXF 或 DWG；新增 `GET /api/apps/{id}/drawing?format=dxf|dwg`（`VIEW_APP` 权限）。DXF 由 `ezdxf` 生成（毫米单位；墙/门窗/家具/房间/水电点位分图层，门带开启弧，嵌入件虚线，图头含面积与初步方案声明）；DWG 通过 ODA File Converter 转换，未配置 `OCTOP_ODA_CONVERTER` 时返回 `503 APP_EXPORT_UNAVAILABLE` 并说明安装要求。内核 MCP 同步新增 `export_drawing` 工具
 - 装修设计支持按项目覆盖阈值：IR 增加 `thresholds`，模板的 `kind=setting` 行可携带（如 `{"route.width_mm":800,"front_clearance.fridge":1000}`），覆盖通道净宽、座椅站立/通行、门把手、储物前净空、按品类净空（`front_clearance.<kind>`）、窗地比、占用率区间、溅水半径、给排水服务半径、房间最小面积与配对间距；未写的键沿用默认值。同时修正 `programme.min_area` 只认英文房间名的问题（现在按中英文关键词识别房间类型）。新增 `docs/interior-design-thresholds.md`：逐条列出默认值、依据、影响与建议值回填列，供装修领域顾问校准
 - 装修设计补齐最后两条平面规则：`clearance.handle`（门全开时把手侧 100mm 净空；门新增 `hinge=start|end` 说明合页侧）与 `clearance.pair_min`（床–床 600、床–书桌 500、沙发/单椅–茶几 300 等默认配对表，未列组合不判）
 - 装修设计支持高度：IR 增加 `ceiling_height`（默认 2800）、`furniture[].h` 与 `openings[].h`，品类目录为全部 kind 提供默认高度与座高，模板新增 `kind=setting` 行记录层高；窗面积与墙面扣减改为按真实洞口高度计算。借此解锁两条规则：`ergonomics.seat_height`（座面到桌面高差 250–320mm）与 `assembly.tall_furniture`（高柜 √(短边²+高²) 必须 ≤ 层高）
