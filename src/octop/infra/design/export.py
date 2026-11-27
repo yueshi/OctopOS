@@ -278,13 +278,19 @@ def _convert_to_dwg(dxf_bytes: bytes, converter: str, *, timeout: int = 180) -> 
             )
         except (OSError, subprocess.SubprocessError) as exc:
             raise ExportUnavailable(f"DWG 转换失败：{exc}") from exc
-        if completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout or b"").decode("utf-8", "replace")
-            raise ExportUnavailable(f"DWG 转换失败：{detail.strip()[:300] or '未知错误'}")
+        # ODA's exit code is unreliable — it can report success for a failed
+        # conversion and failure while still writing the file. The output is
+        # the only trustworthy signal.
         produced = sorted(target.glob("*.dwg"))
-        if not produced:
-            raise ExportUnavailable("DWG 转换未生成文件，请检查 ODA File Converter 的版本参数")
-        return produced[0].read_bytes()
+        if produced:
+            return produced[0].read_bytes()
+        detail = (completed.stderr or completed.stdout or b"").decode("utf-8", "replace").strip()
+        message = "DWG 转换未生成文件"
+        if completed.returncode != 0:
+            message += f"（退出码 {completed.returncode}）"
+        if detail:
+            message += f"：{detail[:300]}"
+        raise ExportUnavailable(message)
 
 
 def export_drawing(

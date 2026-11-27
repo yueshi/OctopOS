@@ -80,3 +80,26 @@ def test_dwg_uses_the_configured_converter(tmp_path: Path) -> None:
     assert export.filename == "计划.dwg"
     assert b"0\nSECTION" in export.content[:20]
     assert export.media_type == "application/octet-stream"
+
+
+@posix_only
+def test_dwg_succeeds_even_when_oda_exits_nonzero(tmp_path: Path) -> None:
+    # ODA reports failure while still writing a valid file.
+    fake = tmp_path / "oda-noisy"
+    fake.write_text('#!/bin/sh\ncp "$1/plan.dxf" "$2/plan.dwg"\nexit 3\n', encoding="utf-8")
+    fake.chmod(0o755)
+
+    export = export_drawing(_fixture(), "dwg", oda_converter=str(fake))
+    assert b"0\nSECTION" in export.content[:20]
+
+
+@posix_only
+def test_dwg_fails_when_nothing_was_written(tmp_path: Path) -> None:
+    # A zero exit code with no output is still a failure.
+    fake = tmp_path / "oda-idle"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+
+    with pytest.raises(ExportUnavailable) as excinfo:
+        export_drawing(_fixture(), "dwg", oda_converter=str(fake))
+    assert "未生成文件" in str(excinfo.value)

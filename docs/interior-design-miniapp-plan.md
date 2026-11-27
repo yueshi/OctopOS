@@ -421,6 +421,8 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 - **DXF** 由 `ezdxf` 生成，单位毫米，图层 `WALL` / `DOOR` / `WINDOW` / `FURNITURE` / `ROOM` / `MEP` / `TEXT`；图头带方案名、套内面积与「初步方案，需专业复核」声明；房间标注名称与面积，门画门扇与开启弧，嵌入件用虚线。
 - **DWG** 不是 Python 能直接写的格式：内核把 DXF 写到临时目录，再调用 **ODA File Converter** 转换（环境变量 `OCTOP_ODA_CONVERTER` 指向可执行文件）。未配置时接口返回 `503 APP_EXPORT_UNAVAILABLE`，说明需要安装 ODA，而不是给出一个坏文件。
+- **ODA 的退出码不可靠**（失败也可能返回 0），内核以输出目录里是否真的出现 `.dwg` 为成功判据；没有产物时把 stderr 与退出码一起放进错误信息。
+- **无头 Linux**：ODA 是 Qt 应用，仍需要 X display；服务器上把 `OCTOP_ODA_CONVERTER` 指向一个包装脚本（`exec xvfb-run -a /usr/bin/ODAFileConverter "$@"`）即可。Linux 安装包为 deb/rpm/AppImage，要求 GLIBC ≥ 2.28；非 ODA 会员免费版仅限非商业用途。
 - 导出使用的 IR 与校验完全同源：同一张 `main` 表 + `rooms` 表，经过 `ir_from_rows` 后送进导出器，`setting` 行的层高/阈值同样生效。
 
 ## 6. 落地摩擦（必须提前处理）
