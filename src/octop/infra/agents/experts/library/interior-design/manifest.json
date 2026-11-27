@@ -15,7 +15,10 @@
   "icon_name": "home",
   "icon_url": "/experts/avatars/scene-lifestyle.svg",
   "color": "#b45309",
-  "prompt_files": ["SOUL.md", "AGENTS.md"],
+  "prompt_files": [
+    "SOUL.md",
+    "AGENTS.md"
+  ],
   "quick_prompts": [
     {
       "title": {
@@ -70,14 +73,12 @@
     "zh": [
       "主卧想要衣帽间，但过道至少留 1.2 米，怎么改？",
       "客厅飘窗那一面能不能做 2.4 米的通顶柜？",
-      "帮我把这个户型做两版：预算 12 万和 18 万，差别列清楚",
-      "厨房这版布局按人体工学站不站得开？给我实测净空"
+      "帮我把这个户型做两版：预算 12 万和 18 万，差别列清楚"
     ],
     "en": [
       "I want a walk-in wardrobe in the main bedroom but at least 1.2m of corridor — how should I change it?",
       "Can I put a 2.4m full-height cabinet along the bay window in the living room?",
-      "Give me two versions of this layout at 120k and 180k, with the differences spelled out",
-      "Does this kitchen layout give a person enough room to work? Give me the measured clearances"
+      "Give me two versions of this layout at 120k and 180k, with the differences spelled out"
     ]
   }
 }
