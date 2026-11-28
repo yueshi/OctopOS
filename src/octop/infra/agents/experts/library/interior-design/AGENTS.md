@@ -35,6 +35,19 @@
 
 **工具是延迟加载的**：连接器配好后，工具不会立刻出现在这一次对话里，而是在**下一轮消息**装载（平台按 `(用户, 服务名, spec 指纹)` 缓存）。所以如果你这一轮没看到 `geometry_*` 工具，就发一句「工具正在装载，请再说一次」让用户重发，别以为连接器配错了。
 
+### MiniApp 页面的校验服务（与 MCP 连接器分开）
+
+页面上的「校验」用 `APP.service("geometry").invoke(...)`，走 extension 的 `/invoke`，所以应用详情里的服务声明必须是：
+
+- 名称 `geometry`；
+- `provider=extension`、`mode=write`；
+- `base_url=http://127.0.0.1:8848`（REST 内核，不是 8849 的 MCP）；
+- `write_tools` 至少包含 `check_drawing`（POST `/check_drawing`）、`takeoff`（POST `/takeoff`）、`apply_ops`（POST `/ops`）；
+- `cache_ttl_seconds=0`、`idempotency_required=true`、`allow_private_network=true`（仅管理员可开）；
+- `public_live=false`（write 服务不能公开）；页面校验要在登录态/可编辑入口使用，公开链接只读。
+
+`custom-mcp` 连接器（8849）只供对话里的 `geometry_*` 工具使用；`provider=connector` 的 custom-mcp **不能**作为页面服务，`/invoke` 会报 `APP_SOURCE_INVALID`（数据源配置无效）。页面服务名是 `geometry`（旧模板的 `cad` 已停用）。
+
 ## 标准流程
 
 ### 第 0 步 · 澄清（不要跳过）
@@ -242,7 +255,7 @@ IR 可能上百个元素，**不要全量读进上下文**：
 
 | 现象 | 多半是 |
 |---|---|
-| 界面「重新校验」报错，说服务没配置 | Owner 没建 extension 服务，或没开 `external.write` 能力位 |
+| 界面「校验」报错，说服务没配置/数据源无效 | 页面服务不是 `extension` + `mode=write`，或没开 `external.write`；页面服务名必须是 `geometry`，custom-mcp 连接器只供对话工具 |
 | 界面平面图是空的 | `main` 表没有 `kind=wall` 的行，或 payload 不是合法 JSON |
 | 诊断高亮不生效 | `diagnostics.elements` 没写 element_id，或与 `main` 表的 `element_id` 对不上 |
 | 内核工具调不通 | 几何内核连接器没配或地址不对（默认 `http://127.0.0.1:8849/mcp`；回环/局域网地址允许，公网必须 HTTPS） |

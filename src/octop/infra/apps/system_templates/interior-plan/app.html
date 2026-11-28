@@ -137,7 +137,7 @@
     done: "校验完成。",
     failed: "校验失败",
     needConfirm: "该操作需要确认。",
-    serviceMissing: "未配置几何内核服务（cad）。请在应用详情 → 服务 中添加 provider=extension 的服务（base_url 指向内核服务），并在能力清单中开启 external.write。",
+    serviceMissing: "未配置几何内核服务（geometry）。请在应用详情 → 服务 中添加 provider=extension、mode=write 的服务（base_url 指向内核 REST 服务），并在能力清单中开启 external.write。",
     missingTables: "缺少 rooms / diagnostics / bom 表。请让装修设计专家用 app_add_table 创建这三张表后再校验。",
     confirm: "确认执行"
   };
@@ -731,7 +731,7 @@
         showNotice(T.missingTables);
         return;
       }
-      var service = APP.service("cad");
+      var service = APP.service("geometry");
       var args = { ir: buildIR() };
       var options = {};
       if (extra && extra.token) {
