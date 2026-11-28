@@ -284,7 +284,9 @@ def parse_mep_point(raw: dict[str, Any]) -> MEPPoint:
 
 
 def parse_room(raw: dict[str, Any]) -> Room:
-    polygon = _points(raw.get("polygon"))
+    # `poly` is the legacy key the expert template wrote; accept both at the
+    # boundary so a plan cannot lose its rooms depending on which key it used.
+    polygon = _points(raw.get("polygon") or raw.get("poly"))
     return Room(
         id=str(raw.get("id") or ""),
         name=str(raw.get("name") or ""),

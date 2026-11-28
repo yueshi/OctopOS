@@ -492,3 +492,20 @@ def test_room_exterior_flag_is_read_from_kind_name_and_explicit_field() -> None:
         }
     )
     assert [room.is_exterior for room in ir.rooms] == [True, False, True, True]
+
+
+def test_room_polygon_accepts_the_legacy_poly_key() -> None:
+    room = {
+        "id": "R-1",
+        "name": "主卧",
+        "kind": "bedroom",
+        "poly": [[0, 0], [1000, 0], [1000, 1000]],
+    }
+    assert len(parse_ir({"rooms": [room]}).rooms[0].polygon) == 3
+    row = {
+        "element_id": "R-1",
+        "kind": "room",
+        "name": "主卧",
+        "payload": json.dumps({"name": "主卧", "kind": "bedroom", "poly": room["poly"]}),
+    }
+    assert len(ir_from_rows([row]).rooms[0].polygon) == 3
