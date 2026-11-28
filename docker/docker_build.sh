@@ -16,6 +16,9 @@
 #   NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/ \
 #   APT_MIRROR=mirrors.cloud.tencent.com \
 #   bash docker/docker_build.sh
+#
+# 构建排障（ghcr/PyPI 超时、uv 缓存、仅源码变更的快速发布）:
+#   docs/docker-build.md
 # =============================================================================
 set -euo pipefail
 

@@ -75,6 +75,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OCTOP_BIND_HOST=0.0.0.0 \
     OCTOP_PORT=8088 \
     OCTOP_LOG_LEVEL=info \
+    UV_CACHE_DIR=/root/.cache/uv \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
@@ -97,6 +98,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         curl \
         git \
         ripgrep \
+        nodejs \
+        npm \
+        chromium \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
