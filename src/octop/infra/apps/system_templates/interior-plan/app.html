@@ -224,7 +224,10 @@
     tableKeys = {};
     try {
       var tables = await APP.tables();
-      (tables || []).forEach(function (table) {
+      // The host bridge answers `tables` with `{tables: [...]}`; accept a bare
+      // array too so old/new hosts and test stubs all work.
+      var list = Array.isArray(tables) ? tables : (tables && Array.isArray(tables.tables) ? tables.tables : []);
+      list.forEach(function (table) {
         tableKeys[String(table.table_key || "")] = true;
       });
     } catch (e) {

@@ -87,9 +87,10 @@ window.octopApp = {
     });
   },
   tables: function () {
-    return Promise.resolve(Object.keys(window.__rows).map(function (key) {
+    // Match the real host bridge: it answers {tables: [...]}, not an array.
+    return Promise.resolve({ tables: Object.keys(window.__rows).map(function (key) {
       return { table_key: key };
-    }));
+    }) });
   },
   appendRow: function (row, options) {
     var table = (options || {}).table || "main";
