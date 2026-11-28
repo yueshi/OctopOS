@@ -161,6 +161,13 @@ class OctopConfig:
     backup: BackupConfig = field(default_factory=BackupConfig)
     capabilities: CapabilitiesConfig = field(default_factory=CapabilitiesConfig)
     max_upload_mb: int = DEFAULT_MAX_UPLOAD_MB
+    # Dashboard chat turn limits. A silent model call is cancelled after
+    # ``chat_model_idle_timeout_seconds``; a whole turn is capped by
+    # ``chat_turn_max_seconds``. Progress frames go out every
+    # ``chat_progress_interval_seconds`` while a turn streams.
+    chat_model_idle_timeout_seconds: int = 300
+    chat_turn_max_seconds: int = 1200
+    chat_progress_interval_seconds: int = 10
     browser_idle_timeout_minutes: int = DEFAULT_BROWSER_IDLE_TIMEOUT_MINUTES
     # Absolute origin used when handing links to IM users (e.g. WeChat).
     # Empty → tools return relative paths only.
@@ -545,6 +552,13 @@ def load_config(path: Path) -> OctopConfig:
         v := os.environ.get("OCTOP_CRON_TIMEZONE")
     ):
         merged["default_timezone"] = v
+    for env_key, merged_key in (
+        ("OCTOP_CHAT_MODEL_IDLE_TIMEOUT_SECONDS", "chat_model_idle_timeout_seconds"),
+        ("OCTOP_CHAT_TURN_MAX_SECONDS", "chat_turn_max_seconds"),
+        ("OCTOP_CHAT_PROGRESS_INTERVAL_SECONDS", "chat_progress_interval_seconds"),
+    ):
+        if v := os.environ.get(env_key):
+            merged[merged_key] = _coerce_int(env_key, v, merged[merged_key])
     if v := os.environ.get("OCTOP_CORS_ORIGINS"):
         merged["cors_origins"] = [s.strip() for s in v.split(",") if s.strip()]
     if v := os.environ.get("OCTOP_ENABLE_DASHBOARD"):

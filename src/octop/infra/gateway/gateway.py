@@ -108,8 +108,16 @@ class Gateway:
         repos: RepoBundle,
         trajectory_service: Any | None = None,
         history_archive: Any | None = None,
+        chat_model_idle_timeout_seconds: int = 300,
+        chat_turn_max_seconds: int = 1200,
+        chat_progress_interval_seconds: int = 10,
     ) -> None:
         self._agent_manager = agent_manager
+        self._chat_limits = (
+            chat_model_idle_timeout_seconds,
+            chat_turn_max_seconds,
+            chat_progress_interval_seconds,
+        )
         self._repos = repos
         self._trajectory_service = trajectory_service
         self._history_archive = history_archive
@@ -369,6 +377,9 @@ class Gateway:
             hub=self._ws_hub,
             steer=self._steer,
             channel_id=WS_CHANNEL_ID,
+            model_idle_timeout=self._chat_limits[0],
+            turn_max_seconds=self._chat_limits[1],
+            progress_interval=self._chat_limits[2],
         )
         await self._channel_manager.add_channel(self._ws_channel)
 

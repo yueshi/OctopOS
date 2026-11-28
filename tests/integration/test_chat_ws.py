@@ -104,6 +104,11 @@ async def test_ws_rebind_after_disconnect_receives_later_chunks(env: Any) -> Non
 
     cancel_spy.assert_not_called()
     assert frames[0] == {"type": "turn_status", "thread_id": tid, "active": True}
+    # A page that reloads mid-turn has no in-memory stream: the subscribe reply
+    # must replay what already streamed before live chunks continue.
+    assert frames[1]["type"] == "turn.snapshot"
+    assert frames[1]["text"] == "first"
+    assert frames[1]["turn_id"]
     contents = [f.get("content") for f in frames if f.get("type") == "token"]
     assert "second" in contents
     assert frames[-1].get("type") == "done"

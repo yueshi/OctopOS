@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections.abc import AsyncIterator
@@ -981,3 +982,109 @@ async def test_ws_channel_pure_text_stream_is_never_preempted() -> None:
     types = [f["type"] for f in frames]
     assert "steer.drained" in types
     assert types[-1] == "turn.ended"
+
+
+@pytest.mark.asyncio
+async def test_hub_turn_snapshot_accumulates_and_clears() -> None:
+    hub = WebSocketHub()
+    frames: list[dict[str, Any]] = []
+
+    async def capture(frame: dict[str, Any]) -> None:
+        frames.append(frame)
+
+    hub.register("c1", capture)
+    hub.subscribe("t1", "c1")
+    hub.mark_turn_active("t1")
+    await hub.push_to_thread("t1", {"type": "turn.started", "turn_id": "turn-1"})
+    await hub.push_to_thread("t1", {"type": "reasoning", "content": "thinking "})
+    await hub.push_to_thread("t1", {"type": "token", "content": "hello"})
+    await hub.push_to_thread("t1", {"type": "tool_call_chunk", "name": "read_file"})
+
+    snapshot = hub.turn_snapshot("t1")
+    assert snapshot is not None
+    assert snapshot["turn_id"] == "turn-1"
+    assert snapshot["reasoning"] == "thinking "
+    assert snapshot["text"] == "hello"
+    assert snapshot["phase"] == "tool"
+    assert snapshot["last_tool"] == "read_file"
+    assert snapshot["elapsed_s"] >= 0
+
+    progress = hub.turn_progress("t1")
+    assert progress is not None
+    assert progress["phase"] == "tool"
+    assert progress["text_chars"] == 5
+    assert progress["reasoning_chars"] == 9
+
+    await hub.push_to_thread("t1", {"type": "tool_result", "messages": []})
+    assert hub.turn_snapshot("t1")["phase"] == "model"  # type: ignore[index]
+
+    hub.mark_turn_idle("t1")
+    assert hub.turn_snapshot("t1") is None
+    assert hub.turn_progress("t1") is None
+
+
+@pytest.mark.asyncio
+async def test_hub_records_without_a_live_subscriber() -> None:
+    hub = WebSocketHub()
+    hub.mark_turn_active("t1")
+    await hub.push_to_thread("t1", {"type": "turn.started", "turn_id": "turn-1"})
+    await hub.push_to_thread("t1", {"type": "token", "content": "kept"})
+    snapshot = hub.turn_snapshot("t1")
+    assert snapshot is not None
+    assert snapshot["text"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_watch_turn_heartbeats_then_cancels_a_stalled_model() -> None:
+    hub = WebSocketHub()
+    frames: list[dict[str, Any]] = []
+    cancelled: list[tuple[str, str]] = []
+
+    class _StallingProcessor:
+        def cancel_agent_stream(self, agent_id: str, thread_id: str) -> None:
+            cancelled.append((agent_id, thread_id))
+
+    async def capture(frame: dict[str, Any]) -> None:
+        frames.append(frame)
+
+    hub.register("c1", capture)
+    hub.subscribe("thread-1", "c1")
+    hub.mark_turn_active("thread-1")
+    await hub.push_to_thread("thread-1", {"type": "turn.started", "turn_id": "turn-1"})
+
+    channel = WebSocketChannel(_StallingProcessor(), hub=hub)  # type: ignore[arg-type]
+    channel._model_idle_timeout = 0.05
+    channel._turn_max_seconds = 60.0
+    channel._progress_interval = 0.01
+
+    msg = InboundMessage(
+        channel_id=WS_CHANNEL_ID,
+        channel_type="dashboard",
+        tenant_id="agent-1",
+        channel_subject=ChannelSubject(subject_id="7"),
+        content=[TextContent(text="hi")],
+        metadata={"thread_id": "thread-1", "locale": "en"},
+    )
+    await asyncio.wait_for(channel._watch_turn("thread-1", "turn-1", msg), timeout=2)
+
+    assert cancelled == [("agent-1", "thread-1")]
+    progress = [frame for frame in frames if frame["type"] == "turn.progress"]
+    assert progress
+    assert progress[0]["phase"] == "model"
+    error = next(frame for frame in frames if frame["type"] == "error")
+    assert error["error_code"] == "stream_stall"
+    assert "stopped sending" in error["message"]
+
+
+def test_turn_timeout_reason() -> None:
+    from octop.infra.gateway.ws.ws_channel import turn_timeout_reason
+
+    limits = {"model_idle_timeout": 300.0, "turn_max_seconds": 1200.0}
+    model_idle = {"phase": "model", "idle_s": 301.0, "elapsed_s": 400.0}
+    assert turn_timeout_reason(model_idle, **limits) == "model_idle"
+    tool_idle = {"phase": "tool", "idle_s": 301.0, "elapsed_s": 400.0}
+    assert turn_timeout_reason(tool_idle, **limits) is None
+    long_turn = {"phase": "tool", "idle_s": 10.0, "elapsed_s": 1201.0}
+    assert turn_timeout_reason(long_turn, **limits) == "turn_max"
+    healthy = {"phase": "model", "idle_s": 29.0, "elapsed_s": 100.0}
+    assert turn_timeout_reason(healthy, **limits) is None

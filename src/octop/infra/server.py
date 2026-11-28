@@ -631,6 +631,9 @@ class OctopServer:
             repos=self.services.repos,
             trajectory_service=trajectory_service,
             history_archive=history_archive,
+            chat_model_idle_timeout_seconds=config.chat_model_idle_timeout_seconds,
+            chat_turn_max_seconds=config.chat_turn_max_seconds,
+            chat_progress_interval_seconds=config.chat_progress_interval_seconds,
         )
         await gateway.boot()
 

@@ -619,7 +619,13 @@ function isStaleTurnFrame(
   live: LiveSocket,
 ): boolean {
   const type = String(data.type || "");
-  if (type === "turn_status" || type === "pong" || type === "turn.queued") {
+  if (
+    type === "turn_status" ||
+    type === "turn.progress" ||
+    type === "turn.snapshot" ||
+    type === "pong" ||
+    type === "turn.queued"
+  ) {
     return false;
   }
   if (type === "turn.started" || type === "turn.resumed") return false;
@@ -1381,6 +1387,66 @@ function findLastToolMessageIndex(
     }
   }
   return -1;
+}
+
+function hasLiveStreamContent(state: SessionStreamState): boolean {
+  if (state.streamMsg) return true;
+  return state.messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.status === "streaming" &&
+      (Boolean(message.content) || Boolean(message.contentBlocks?.length)),
+  );
+}
+
+/**
+ * Seed a freshly reloaded page with what the active turn already produced.
+ *
+ * A socket that reconnected without a reload still has its live stream, so the
+ * snapshot is ignored there; the server only sends it when the turn is active.
+ */
+function applyTurnSnapshot(
+  state: SessionStreamState,
+  data: Record<string, unknown>,
+  sessionId?: string,
+): void {
+  const turnId = String(data.turn_id || "").trim();
+  if (!turnId) return;
+  state.activeTurnId = turnId;
+  const hadLiveContent = hasLiveStreamContent(state);
+  if (!state.isStreaming && sessionId) beginStream(state, sessionId);
+  if (hadLiveContent) {
+    // A reconnect with a live stream may still have missed frames while the
+    // socket was down; keep the turn marked incomplete so the end-of-turn
+    // history refetch fills any gap.
+    notify(state);
+    return;
+  }
+  // A capped snapshot is missing its oldest text; refetch history when the
+  // turn ends so the persisted message replaces the partial replay.
+  state.streamIncomplete = data.truncated === true;
+  const elapsed = Number(data.elapsed_s || 0);
+  if (Number.isFinite(elapsed) && elapsed > 0) {
+    state.thinkingStartedAt = Date.now() - elapsed * 1000;
+  }
+  const reasoning = typeof data.reasoning === "string" ? data.reasoning : "";
+  const text = typeof data.text === "string" ? data.text : "";
+  if (reasoning) appendStreamingReasoning(state, reasoning);
+  if (text) appendStreamingToken(state, text, undefined, true, false, true);
+  notify(state);
+}
+
+/** Keep the thinking clock aligned while the model is silent. */
+function applyTurnProgress(
+  state: SessionStreamState,
+  data: Record<string, unknown>,
+): void {
+  if (!state.isStreaming) return;
+  const elapsed = Number(data.elapsed_s || 0);
+  if (Number.isFinite(elapsed) && elapsed > 0) {
+    state.thinkingStartedAt = Date.now() - elapsed * 1000;
+    notify(state);
+  }
 }
 
 function handleHarnessChunk(
@@ -2821,6 +2887,14 @@ export async function attachThread(
           return;
         }
 
+        if (data.type === "turn.snapshot") {
+          applyTurnSnapshot(state, data, sessionId);
+          return;
+        }
+        if (data.type === "turn.progress") {
+          applyTurnProgress(state, data);
+          return;
+        }
         handleHarnessChunk(state, data as unknown as HarnessChunk, sessionId);
         if (
           isHostTurnTerminal(
@@ -3091,6 +3165,15 @@ async function sendTurnWebSocket(
             }
             settle(true);
           }
+          return;
+        }
+        const replayData = data as unknown as Record<string, unknown>;
+        if (replayData.type === "turn.snapshot") {
+          applyTurnSnapshot(state, replayData, sessionId);
+          return;
+        }
+        if (replayData.type === "turn.progress") {
+          applyTurnProgress(state, replayData);
           return;
         }
         handleHarnessChunk(state, data, sessionId);

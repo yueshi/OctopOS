@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import logging
 from typing import Any
 
@@ -20,6 +22,7 @@ from octop_gateway.models import (
 )
 from octop_gateway.utils import close_event_stream
 
+from octop.i18n import tr
 from octop.i18n.domains.stream import format_stream_error
 from octop.infra.gateway.media.attachment_hints import (
     inbound_attachments_from_parts,
@@ -36,6 +39,23 @@ logger = logging.getLogger(__name__)
 WS_CHANNEL_ID = "octop-dashboard"
 
 
+def turn_timeout_reason(
+    progress: dict[str, Any],
+    *,
+    model_idle_timeout: float,
+    turn_max_seconds: float,
+) -> str | None:
+    """Why this turn should be cancelled, or ``None`` while it is healthy."""
+    if float(progress.get("elapsed_s") or 0.0) >= turn_max_seconds:
+        return "turn_max"
+    if (
+        str(progress.get("phase") or "") == "model"
+        and float(progress.get("idle_s") or 0.0) >= model_idle_timeout
+    ):
+        return "model_idle"
+    return None
+
+
 class WebSocketChannel(BaseChannel):
     """Routes chat turns through GlobalProcessor.iter_turn_chunks → WebSocket hub."""
 
@@ -48,10 +68,16 @@ class WebSocketChannel(BaseChannel):
         hub: WebSocketHub,
         steer: SteerCoordinator | None = None,
         channel_id: str = WS_CHANNEL_ID,
+        model_idle_timeout: float = 300.0,
+        turn_max_seconds: float = 1200.0,
+        progress_interval: float = 10.0,
     ) -> None:
         super().__init__(processor, channel_id=channel_id, debounce_seconds=0.0)
         self._hub = hub
         self._steer = steer or SteerCoordinator()
+        self._model_idle_timeout = max(10.0, float(model_idle_timeout))
+        self._turn_max_seconds = max(60.0, float(turn_max_seconds))
+        self._progress_interval = max(1.0, float(progress_interval))
 
     def _default_constraints(self) -> ChannelConstraints:
         return ChannelConstraints(
@@ -95,6 +121,75 @@ class WebSocketChannel(BaseChannel):
     def should_batch_inbound(self, message: InboundMessage) -> bool:  # noqa: ARG002
         # Never concatenate two dashboard user_turns (would look like 串流).
         return False
+
+    async def _watch_turn(
+        self,
+        thread_id: str,
+        turn_id: str,
+        message: InboundMessage,
+    ) -> None:
+        """Heartbeat progress, and cancel a turn that stops making progress.
+
+        Tool execution may legitimately be quiet for a while, so the idle
+        timeout only applies while the model is producing output. The wall
+        clock cap applies to every phase.
+        """
+        while True:
+            await asyncio.sleep(self._progress_interval)
+            progress = self._hub.turn_progress(thread_id)
+            if progress is None:
+                return
+            await self._hub.push_to_thread(thread_id, progress)
+            reason = turn_timeout_reason(
+                progress,
+                model_idle_timeout=self._model_idle_timeout,
+                turn_max_seconds=self._turn_max_seconds,
+            )
+            if reason is None:
+                continue
+            meta = message.metadata if isinstance(message.metadata, dict) else None
+            locale = resolve_locale(
+                channel_type=str(getattr(message, "channel_type", "") or ""),
+                metadata=meta,
+            )
+            if reason == "turn_max":
+                text = tr(
+                    "stream_errors.turn_timeout",
+                    locale,
+                    minutes=int(self._turn_max_seconds // 60),
+                )
+                code = "turn_timeout"
+            else:
+                text = tr("stream_errors.stream_stall", locale)
+                code = "stream_stall"
+            logger.warning(
+                "websocket turn %s on thread %s cancelled (%s): idle=%.0fs elapsed=%.0fs",
+                turn_id,
+                thread_id,
+                reason,
+                progress.get("idle_s", 0.0),
+                progress.get("elapsed_s", 0.0),
+            )
+            try:
+                await self._hub.push_to_thread(
+                    thread_id,
+                    {
+                        "type": "error",
+                        "message": text,
+                        "error_code": code,
+                        "turn_id": turn_id,
+                        "thread_id": thread_id,
+                    },
+                )
+            except Exception:
+                logger.exception("websocket failed to deliver timeout frame thread=%s", thread_id)
+            cancel = getattr(self._processor, "cancel_agent_stream", None)
+            if callable(cancel):
+                try:
+                    cancel(str(message.tenant_id or ""), thread_id)
+                except Exception:
+                    logger.exception("failed to cancel stalled stream thread=%s", thread_id)
+            return
 
     async def handle_inbound(self, raw_payload: Any) -> None:
         """Stream harness chunks to all thread subscribers (no delta batching).
@@ -176,6 +271,7 @@ class WebSocketChannel(BaseChannel):
                     "thread_id": thread_id,
                 },
             )
+            watchdog = asyncio.create_task(self._watch_turn(thread_id, turn_id, message))
             current = message
             while True:
                 saw_tool_result = False
@@ -310,6 +406,10 @@ class WebSocketChannel(BaseChannel):
             except Exception:
                 logger.exception("websocket failed to deliver error frame thread=%s", thread_id)
         finally:
+            if "watchdog" in locals():
+                watchdog.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog
             discarded = self._steer.end_turn(thread_id, failed=failed)
             self._hub.mark_turn_idle(thread_id)
             if stream is not None:

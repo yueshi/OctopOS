@@ -130,6 +130,11 @@ async def dashboard_chat_ws(
                         "active": hub.is_turn_active(thread_id),
                     },
                 )
+                # A reloaded page has no in-memory stream; hand it what the
+                # active turn already produced before live chunks continue.
+                snapshot = hub.turn_snapshot(thread_id)
+                if snapshot is not None:
+                    await send_frame(snapshot)
                 expired = gateway.steer.sweep_expired(thread_id)
                 if expired is not None:
                     await send_frame(
@@ -300,6 +305,7 @@ async def dashboard_chat_ws(
                 ws_connection_id=connection_id,
                 user_is_admin=bool(getattr(user, "is_admin", False)),
             )
+            inbound.metadata["locale"] = getattr(user, "locale", None) or "zh"
             hub.subscribe(prepared_early.thread_id, connection_id)
             channel_manager.enqueue(WS_CHANNEL_ID, inbound)
 
