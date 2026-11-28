@@ -406,6 +406,20 @@
           x1: o.x, y1: o.y, x2: x2, y2: y2,
           stroke: color, "stroke-width": 60, "stroke-linecap": "butt"
         }));
+      } else if (o.type === "sliding_door") {
+        // 推拉门：轨道 + 双门扇线（不画平开门开启弧）
+        group.appendChild(svgEl("line", {
+          x1: o.x, y1: o.y, x2: x2, y2: y2,
+          stroke: color, "stroke-width": 40
+        }));
+        var slideNx = -Math.sin(rad), slideNy = Math.cos(rad);
+        [70, -70].forEach(function (offset) {
+          group.appendChild(svgEl("line", {
+            x1: o.x + offset * slideNx, y1: o.y + offset * slideNy,
+            x2: x2 + offset * slideNx, y2: y2 + offset * slideNy,
+            stroke: color, "stroke-width": 18, opacity: "0.7"
+          }));
+        });
       } else {
         group.appendChild(svgEl("line", {
           x1: o.x, y1: o.y, x2: x2, y2: y2,

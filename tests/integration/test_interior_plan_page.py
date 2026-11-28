@@ -42,6 +42,10 @@ window.__rows = {
       element_id: "D-001", kind: "opening", name: "入户门",
       payload: JSON.stringify({type:"door",x:2000,y:0,width:900,angle:0,host:"W-001"}),
       source: "t", status: "confirmed" } },
+    { row_id: "r9", version: 1, values: {
+      element_id: "D-009", kind: "opening", name: "阳台推拉门",
+      payload: JSON.stringify({type:"sliding_door",x:1000,y:0,width:1200,angle:0,host:"W-001"}),
+      source: "t", status: "confirmed" } },
     { row_id: "r3", version: 1, values: {
       element_id: "F-001", kind: "furniture", name: "衣柜",
       payload: JSON.stringify({x:0,y:0,w:2000,d:600,rot:0,kind:"wardrobe"}),
