@@ -3461,12 +3461,16 @@ class AppService:
                     payload = json.loads(values.get("payload") or "{}")
                 except ValueError:
                     continue
-                polygon = [tuple(point) for point in payload.get("polygon") or []]
+                polygon = [
+                    tuple(point) for point in payload.get("polygon") or payload.get("poly") or []
+                ]
                 rooms.append(
                     Room(
                         id=values.get("room_id", ""),
                         name=values.get("name", ""),
                         polygon=polygon,
+                        kind=str(payload.get("kind") or ""),
+                        exterior=payload.get("exterior") is True,
                     )
                 )
             ir = IR(

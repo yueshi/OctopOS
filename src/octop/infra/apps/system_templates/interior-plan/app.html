@@ -442,7 +442,9 @@
     state.rooms.forEach(function (row) {
       var v = vals(row);
       var payload = parseJSON(v.payload, {}) || {};
-      var polygon = Array.isArray(payload.polygon) ? payload.polygon : [];
+      var polygon = Array.isArray(payload.polygon)
+        ? payload.polygon
+        : Array.isArray(payload.poly) ? payload.poly : [];
       if (polygon.length < 3) return;
       var centroid = polygonCentroid(polygon);
       var area = num(v.area_mm2, 0) / 1000000;
@@ -591,7 +593,9 @@
         id: String(v.room_id || row.row_id || ""),
         name: String(v.name || ""),
         area_mm2: num(v.area_mm2, 0),
-        polygon: payload.polygon || []
+        kind: String(payload.kind || ""),
+        exterior: payload.exterior === true,
+        polygon: payload.polygon || payload.poly || []
       });
     });
     var ir = {

@@ -25,6 +25,20 @@ PLACEMENT_TOLERANCE_MM: Final = 20.0
 
 OPENING_TYPES: Final = frozenset({"door", "window", "sliding_door", "opening"})
 
+#: Rooms open to the outside. They keep counting towards floor area, but are
+#: not targets for enclosure / daylight / route / occupancy checks.
+EXTERIOR_ROOM_KINDS: Final = frozenset({"balcony", "terrace", "patio", "garden", "courtyard"})
+EXTERIOR_ROOM_WORDS: Final = (
+    "阳台",
+    "露台",
+    "庭院",
+    "balcony",
+    "terrace",
+    "patio",
+    "garden",
+    "courtyard",
+)
+
 
 @dataclass(frozen=True)
 class Wall:
@@ -139,6 +153,18 @@ class Room:
     name: str
     polygon: list[tuple[float, float]] = field(default_factory=list)
     area_mm2: float = 0.0
+    #: Room programme, e.g. ``bedroom`` / ``kitchen`` / ``balcony``.
+    kind: str = ""
+    #: Explicit semi-exterior flag; ``kind=balcony`` is enough on its own.
+    exterior: bool = False
+
+    @property
+    def is_exterior(self) -> bool:
+        """Balconies and terraces are semi-outdoor, not ordinary rooms."""
+        if self.exterior or self.kind in EXTERIOR_ROOM_KINDS:
+            return True
+        name = (self.name or "").casefold()
+        return any(word in name for word in EXTERIOR_ROOM_WORDS)
 
 
 @dataclass(frozen=True)
@@ -264,6 +290,8 @@ def parse_room(raw: dict[str, Any]) -> Room:
         name=str(raw.get("name") or ""),
         polygon=polygon,
         area_mm2=_num(raw.get("area_mm2")),
+        kind=str(raw.get("kind") or "").strip().casefold(),
+        exterior=raw.get("exterior") is True,
     )
 
 
@@ -356,6 +384,8 @@ def ir_to_dict(ir: IR) -> dict[str, Any]:
                 "name": r.name,
                 "polygon": [list(point) for point in r.polygon],
                 "area_mm2": r.area_mm2,
+                "kind": r.kind,
+                "exterior": r.exterior,
             }
             for r in ir.rooms
         ],

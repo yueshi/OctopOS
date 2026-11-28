@@ -322,3 +322,173 @@ def test_apply_ops_adds_an_element() -> None:
     assert result.applied == 1
     payload = result.to_dict()["ir"]
     assert any(item["id"] == "F-030" for item in payload["furniture"])
+
+
+def _two_room_door_plan(order: tuple[str, ...]) -> dict[str, Any]:
+    """A living room and a smaller bedroom sharing a wall with one door."""
+    plan = _plan()
+    plan["walls"].extend(
+        [
+            {"id": "W-005", "x1": 7000, "y1": 0, "x2": 7000, "y2": 3000, "t": 120},
+            {"id": "W-006", "x1": 7000, "y1": 3000, "x2": 4000, "y2": 3000, "t": 120},
+            {"id": "W-007", "x1": 7000, "y1": 0, "x2": 4000, "y2": 0, "t": 120},
+        ]
+    )
+    plan["openings"].append(
+        {
+            "id": "D-002",
+            "type": "door",
+            "x": 4000,
+            "y": 1000,
+            "width": 800,
+            "angle": 90,
+            "host": "W-002",
+        }
+    )
+    # The table sits immediately behind the door on the living-room side. A
+    # swing into the living room would hit it; a swing into the bedroom would not.
+    plan["furniture"].append(
+        {
+            "id": "F-002",
+            "x": 3350,
+            "y": 900,
+            "w": 600,
+            "d": 800,
+            "rot": 0,
+            "kind": "dining_table",
+            "name": "餐桌",
+        }
+    )
+    rooms = {
+        "living": {
+            "id": "R-001",
+            "name": "客厅",
+            "polygon": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]],
+            "area_mm2": 12000000,
+        },
+        "bedroom": {
+            "id": "R-002",
+            "name": "儿童房",
+            "polygon": [[4000, 0], [7000, 0], [7000, 3000], [4000, 3000]],
+            "area_mm2": 9000000,
+        },
+    }
+    plan["rooms"] = [rooms[key] for key in order]
+    return plan
+
+
+@pytest.mark.parametrize("order", [("living", "bedroom"), ("bedroom", "living")])
+def test_door_swing_into_the_smaller_room_does_not_depend_on_room_order(
+    order: tuple[str, ...],
+) -> None:
+    finding = _finding(parse_ir(_two_room_door_plan(order)), "safety.blocked_egress")
+    assert finding is None
+
+
+def _balcony_plan(balcony: dict[str, Any]) -> dict[str, Any]:
+    """A bedroom whose south window has a balcony on the other side of the wall."""
+    return {
+        "walls": [
+            {"id": "W-001", "x1": 0, "y1": 0, "x2": 4000, "y2": 0, "t": 120},
+            {"id": "W-002", "x1": 4000, "y1": 0, "x2": 4000, "y2": 3000, "t": 120},
+            {"id": "W-003", "x1": 4000, "y1": 3000, "x2": 0, "y2": 3000, "t": 120},
+            {"id": "W-004", "x1": 0, "y1": -1500, "x2": 0, "y2": 3000, "t": 120},
+            {"id": "W-005", "x1": 0, "y1": -1500, "x2": 3000, "y2": -1500, "t": 120},
+            {"id": "W-006", "x1": 3000, "y1": -1500, "x2": 3000, "y2": 0, "t": 120},
+        ],
+        "openings": [
+            {
+                "id": "N-001",
+                "type": "window",
+                "x": 1000,
+                "y": 0,
+                "width": 1200,
+                "angle": 0,
+                "host": "W-001",
+            }
+        ],
+        "furniture": [
+            {
+                "id": "F-001",
+                "x": 100,
+                "y": -1400,
+                "w": 600,
+                "d": 600,
+                "rot": 0,
+                "kind": "washer",
+                "name": "洗衣机",
+            }
+        ],
+        "rooms": [
+            {
+                "id": "R-001",
+                "name": "主卧",
+                "kind": "bedroom",
+                "polygon": [[0, 0], [4000, 0], [4000, 3000], [0, 3000]],
+                "area_mm2": 12000000,
+            },
+            {
+                "id": "R-002",
+                "polygon": [[0, -1500], [3000, -1500], [3000, 0], [0, 0]],
+                "area_mm2": 4500000,
+                **balcony,
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "balcony",
+    [
+        {"name": "阳台", "kind": "balcony"},
+        {"name": "阳台"},
+    ],
+)
+def test_balcony_is_semi_exterior_for_checks_but_not_for_area(balcony: dict[str, Any]) -> None:
+    plan = _balcony_plan(balcony)
+    ir = parse_ir(plan)
+    diagnostics = check_drawing(ir)
+    findings = {item.rule_id: item for item in diagnostics}
+    # The balcony must not turn the bedroom's exterior wall into an interior one.
+    assert "daylight.service_window" not in findings
+    # Nor is it an ordinary room target for route/occupancy checks.
+    assert "route.continuity" not in findings
+    assert "route.width" not in findings
+    assert all(
+        "R-002" not in item.elements for item in diagnostics if item.rule_id == "room.occupancy"
+    )
+    # Its area still belongs in the take-off.
+    assert takeoff(ir)["floor_area_m2"] == pytest.approx(16.5)
+
+
+def test_room_exterior_flag_is_read_from_kind_name_and_explicit_field() -> None:
+    ir = parse_ir(
+        {
+            "rooms": [
+                {
+                    "id": "R-1",
+                    "name": "阳台",
+                    "polygon": [[0, 0], [1000, 0], [1000, 1000]],
+                },
+                {
+                    "id": "R-2",
+                    "name": "儿童房",
+                    "kind": "bedroom",
+                    "polygon": [[0, 0], [1000, 0], [1000, 1000]],
+                },
+                {
+                    "id": "R-3",
+                    "name": "Terrace",
+                    "polygon": [[0, 0], [1000, 0], [1000, 1000]],
+                },
+                {
+                    "id": "R-4",
+                    "name": "多功能房",
+                    "kind": "study",
+                    "exterior": True,
+                    "polygon": [[0, 0], [1000, 0], [1000, 1000]],
+                },
+            ]
+        }
+    )
+    assert [room.is_exterior for room in ir.rooms] == [True, False, True, True]

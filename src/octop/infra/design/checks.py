@@ -357,6 +357,23 @@ def _room_of_point(rooms: list[Room], point: Point) -> Room | None:
     return None
 
 
+def _room_for_opening(rooms: list[Room], opening: Opening) -> Room | None:
+    """The room a door swings into.
+
+    A door sits on the wall centre line, so both adjacent rooms contain its
+    start point. List order must not decide which one wins; prefer the smaller
+    (private) room, which is where an interior door normally opens.
+    """
+    hits = [
+        room
+        for room in rooms
+        if room.polygon and point_in_polygon((opening.x, opening.y), room.polygon)
+    ]
+    if not hits:
+        return None
+    return min(hits, key=lambda room: (abs(polygon_area(room.polygon)), room.id))
+
+
 def _wall_for_edge(a: Point, b: Point, walls: list[Wall], tolerance: float) -> Wall | None:
     """The wall that carries the room edge ``a``-``b``, if any."""
     edge_dx = b[0] - a[0]
@@ -455,6 +472,8 @@ def _check_wall_overlaps(ir: IR) -> list[Diagnostic]:
 def _check_rooms(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
     for room in ir.rooms:
+        if room.is_exterior:
+            continue
         if len(room.polygon) < 3:
             findings.append(
                 Diagnostic(
@@ -1014,8 +1033,9 @@ def _room_is(room: Room, words: tuple[str, ...]) -> bool:
     return any(word.lower() in name for word in words)
 
 
-def _room_adjacency(ir: IR) -> dict[str, set[str]]:
-    rooms = [room for room in ir.rooms if room.polygon]
+def _room_adjacency(ir: IR, rooms: list[Room] | None = None) -> dict[str, set[str]]:
+    if rooms is None:
+        rooms = [room for room in ir.rooms if room.polygon]
     adjacency: dict[str, set[str]] = {room.id: set() for room in rooms}
     for opening in ir.openings:
         if opening.type not in {"door", "sliding_door", "opening"}:
@@ -1055,13 +1075,13 @@ def _reachable(
 
 def _check_privacy_path(ir: IR) -> list[Diagnostic]:
     """Shared rooms must not be reached by walking through a bedroom or bath."""
-    rooms = [room for room in ir.rooms if room.polygon]
+    rooms = [room for room in ir.rooms if room.polygon and not room.is_exterior]
     if not rooms:
         return []
     entrance = _entrance_room(ir, rooms)
     if entrance is None:
         return []
-    adjacency = _room_adjacency(ir)
+    adjacency = _room_adjacency(ir, rooms)
     full = _reachable(adjacency, entrance.id)
     private = {room.id for room in rooms if _room_is(room, PRIVATE_ROOM_WORDS)}
     shared = [room for room in rooms if _room_is(room, SHARED_ROOM_WORDS)]
@@ -1094,10 +1114,10 @@ def _check_route_width(ir: IR) -> list[Diagnostic]:
     entrance cell: a room counts as reachable when any cell inside it survives
     the erosion. Cells are 100 mm, so the measured width carries that error.
     """
-    rooms = [room for room in ir.rooms if room.polygon]
+    rooms = [room for room in ir.rooms if room.polygon and not room.is_exterior]
     if len(rooms) < 2:
         return []
-    adjacency = _room_adjacency(ir)
+    adjacency = _room_adjacency(ir, rooms)
     entrance = _entrance_room(ir, rooms)
     if entrance is None:
         return []
@@ -1264,6 +1284,8 @@ def _wall_has_rooms_on_both_sides(ir: IR, wall: Wall) -> bool:
     midpoint = ((wall.x1 + wall.x2) / 2, (wall.y1 + wall.y2) / 2)
     sides: set[int] = set()
     for room in ir.rooms:
+        if room.is_exterior:
+            continue
         for point in room.polygon:
             side = dot(normal, (point[0] - midpoint[0], point[1] - midpoint[1]))
             if abs(side) > wall.t:
@@ -1278,7 +1300,7 @@ def _inward_normal(ir: IR, opening: Opening) -> tuple[Point, Room] | None:
     rooms = [room for room in ir.rooms if room.polygon]
     if not rooms:
         return None
-    room = _room_of_point(rooms, (opening.x, opening.y))
+    room = _room_for_opening(rooms, opening)
     if room is None:
         return None
     direction = (math.cos(opening.heading), math.sin(opening.heading))
@@ -1363,7 +1385,7 @@ def _check_service_window(ir: IR) -> list[Diagnostic]:
     windows = [opening for opening in ir.openings if opening.is_window]
     findings: list[Diagnostic] = []
     for room in ir.rooms:
-        if not room.polygon or not _room_is(room, DAYLIGHT_ROOM_WORDS):
+        if room.is_exterior or not room.polygon or not _room_is(room, DAYLIGHT_ROOM_WORDS):
             continue
         if any(_window_serves_room(ir, window, room) for window in windows):
             continue
@@ -1474,6 +1496,8 @@ def _check_door_swing(ir: IR) -> list[Diagnostic]:
 def _check_room_occupancy(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
     for room in ir.rooms:
+        if room.is_exterior:
+            continue
         area = abs(polygon_area(room.polygon))
         if area <= 0 or _room_is(room, CIRCULATION_ROOM_WORDS):
             continue
@@ -1716,7 +1740,7 @@ def _check_pair_clearance(ir: IR) -> list[Diagnostic]:
 
 
 def _check_window_ratio(ir: IR) -> list[Diagnostic]:
-    floor_area = sum(abs(polygon_area(room.polygon)) for room in ir.rooms)
+    floor_area = sum(abs(polygon_area(room.polygon)) for room in ir.rooms if not room.is_exterior)
     if floor_area <= 0.0:
         return [
             Diagnostic(
@@ -1750,6 +1774,8 @@ def _check_window_ratio(ir: IR) -> list[Diagnostic]:
 def _check_min_area(ir: IR) -> list[Diagnostic]:
     findings: list[Diagnostic] = []
     for room in ir.rooms:
+        if room.is_exterior:
+            continue
         kind = _room_kind(room)
         if not kind:
             continue
@@ -1780,7 +1806,7 @@ def _check_min_area(ir: IR) -> list[Diagnostic]:
 
 def _check_route_continuity(ir: IR) -> list[Diagnostic]:
     """Every room must be reachable from the entrance through openings."""
-    rooms = [room for room in ir.rooms if room.polygon]
+    rooms = [room for room in ir.rooms if room.polygon and not room.is_exterior]
     if len(rooms) < 2:
         return []
     adjacency: dict[str, set[str]] = {room.id: set() for room in rooms}

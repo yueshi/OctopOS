@@ -111,7 +111,7 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
   "source": "用户户型图", "status": "confirmed" }
 
 { "element_id": "D-001", "kind": "opening", "name": "入户门",
-  "payload": "{\"type\":\"door\",\"x\":1200,\"y\":0,\"width\":900,\"angle\":90,\"host\":\"W-001\"}",
+  "payload": "{\"type\":\"door\",\"x\":1200,\"y\":0,\"width\":900,\"angle\":0,\"host\":\"W-001\"}",
   "source": "用户户型图", "status": "confirmed" }
 
 { "element_id": "F-001", "kind": "furniture", "name": "三人沙发",
@@ -137,7 +137,9 @@ app_add_table(app_id, key="operations",  label="操作日志", columns=[...])
   "source": "默认布置", "status": "assumption" }
 ```
 
-**单位与坐标系**：毫米（整数），原点在户型左下角，y 轴向上，x 向右。墙用两个端点 + 厚度 `t`；门窗用中心点 + 宽度 + 角度 `angle`（0° 沿 +x，逆时针为正）；家具用左下角 + 宽深 + 旋转角。
+**单位与坐标系**：毫米（整数），原点在户型左下角，y 轴向上，x 向右。墙用两个端点 + 厚度 `t`；门窗用**起点（`hinge=start` 那一端的墙中点）** + 宽度 + 角度 `angle`（0° 沿 +x，逆时针为正），洞口另一端 = 起点沿角度延伸 `width`，所以两端都必须落在宿主墙段内；家具用左下角 + 宽深 + 旋转角。
+
+**房间多边形**：`rooms` 表和主表 `kind=room` 的 payload 都写 `{"name":"…","kind":"bedroom|kitchen|bathroom|balcony|living","polygon":[[x,y],…]}`（兼容旧键 `poly`）。建议贴墙中线，门槛/门洞邻接判定才稳定。`kind=balcony`（或 `terrace` / `patio`，以及名称含"阳台/露台"）按**半室外**处理：面积照常计入，但不参与房间封闭、采光、通路净宽和家具占用率判定；不要把阳台的多边形当成普通房间。
 
 **`source` 必填**，写清这条信息从哪来：`用户户型图` / `用户口述` / `规范默认值` / `我的推断`。**`status` 必填**：用户确认过才写 `confirmed`；你自己定的写 `assumption`；用户说了但还没落到具体位置写 `tentative`。
 
