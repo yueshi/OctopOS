@@ -62,6 +62,7 @@
   @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
   .plan-wrap { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
   .plan-wrap svg { display: block; width: 100%; height: auto; }
+  .plan-wrap svg.hidden { display: none; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
@@ -78,6 +79,11 @@
   .empty { color: var(--muted); padding: 8px 0; }
   .legend { margin-top: 8px; }
   .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+  .plan-tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .plan-tools button { padding: 4px 9px; font-size: 12px; }
+  .plan-tools button.active { border-color: var(--accent); color: var(--accent); }
+  .iso-controls { display: inline-flex; gap: 6px; align-items: center; }
+  .iso-controls.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -96,9 +102,20 @@
 
 <div class="layout">
   <section class="card">
-    <h2>平面图</h2>
+    <h2 id="planTitle">平面图</h2>
+    <div class="row plan-tools">
+      <button id="btnPlanView" class="active">平面</button>
+      <button id="btnIsoView">2.5D</button>
+      <span id="isoControls" class="iso-controls hidden">
+        <button id="isoRotate">旋转</button>
+        <button id="isoZoomIn">放大</button>
+        <button id="isoZoomOut">缩小</button>
+        <button id="isoReset">重置</button>
+      </span>
+    </div>
     <div class="plan-wrap">
       <svg id="plan" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" role="img" aria-label="装修平面图"></svg>
+      <svg id="iso" class="hidden" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 660" role="img" aria-label="装修 2.5D 轴测图"></svg>
     </div>
     <p class="muted" id="planNote"></p>
     <div class="row legend" id="legend"></div>
@@ -685,6 +702,356 @@
     });
   }
 
+  // ---- 2.5D axonometric view ------------------------------------------------
+  // Presentation only: compliance stays with the kernel diagnostics.
+  var ISO_WALL_CUT = 1200;
+  var ISO_WINDOW_SILL = 900;
+  var ISO_W = 960;
+  var ISO_H = 660;
+  var ISO_PAD = 42;
+  var ISO_WALL_COLOR = "#64748b";
+  var KIND_HEIGHT = {
+    armchair: 800, basin: 850, bathtub: 550, bed_double: 500, bed_king: 500,
+    bed_single: 500, bedside_table: 550, bench: 450, bookshelf: 2000,
+    cabinet: 1800, chair: 900, coffee_table: 420, crib: 900, desk: 750,
+    dining_table: 750, dishwasher: 850, dryer: 850, fridge: 1800, hood: 600,
+    kitchen_counter: 900, oven: 600, shoe_cabinet: 1100, shower: 2000,
+    side_table: 550, sink: 900, socket: 86, sofa: 850, stool: 450, stove: 900,
+    switch: 86, toilet: 750, tv_stand: 500, wardrobe: 2200, washer: 850
+  };
+  var ROOM_FILL = {
+    living: "#dbeafe", bedroom: "#ede9fe", kitchen: "#fef3c7",
+    bathroom: "#cffafe", balcony: "#dcfce7", other: "#e2e8f0"
+  };
+
+  if (!state.view) {
+    state.view = "plan";
+    state.isoYaw = 0;
+    state.isoZoom = 1;
+  }
+
+  function isoShade(hex, factor) {
+    var value = String(hex || "#6366f1").replace("#", "");
+    if (value.length === 3) {
+      value = value[0] + value[0] + value[1] + value[1] + value[2] + value[2];
+    }
+    var n = parseInt(value, 16);
+    if (!isFinite(n)) return hex || "#6366f1";
+    var r = Math.min(255, Math.round(((n >> 16) & 255) * factor));
+    var g = Math.min(255, Math.round(((n >> 8) & 255) * factor));
+    var b = Math.min(255, Math.round((n & 255) * factor));
+    return "rgb(" + r + "," + g + "," + b + ")";
+  }
+
+  function isoUnit(x, y, z) {
+    var a = state.isoYaw * Math.PI / 180;
+    var rx = x * Math.cos(a) - y * Math.sin(a);
+    var ry = x * Math.sin(a) + y * Math.cos(a);
+    return [
+      (rx - ry) * Math.cos(Math.PI / 6),
+      (rx + ry) * Math.sin(Math.PI / 6) - z
+    ];
+  }
+
+  function roomKindOf(payload, name) {
+    var text = String(name || payload.name || "");
+    var kind = String(payload.kind || "").toLowerCase();
+    if (kind.indexOf("bed") >= 0) return "bedroom";
+    if (kind.indexOf("kitchen") >= 0) return "kitchen";
+    if (kind.indexOf("bath") >= 0) return "bathroom";
+    if (kind.indexOf("balcony") >= 0 || kind.indexOf("terrace") >= 0) return "balcony";
+    if (kind.indexOf("living") >= 0 || kind.indexOf("dining") >= 0) return "living";
+    if (/客厅|餐厅|living|dining/i.test(text)) return "living";
+    if (/卧|bed|儿童|书房/i.test(text)) return "bedroom";
+    if (/厨房|kitchen/i.test(text)) return "kitchen";
+    if (/卫|浴|bath|toilet/i.test(text)) return "bathroom";
+    if (/阳台|露台|balcony|terrace/i.test(text)) return "balcony";
+    return "other";
+  }
+
+  function isoFace(faces, points, fill, strong) {
+    var projected = points.map(function (point) {
+      return isoUnit(point[0], point[1], point[2]);
+    });
+    var cx = 0, cy = 0;
+    points.forEach(function (point) { cx += point[0]; cy += point[1]; });
+    cx /= points.length;
+    cy /= points.length;
+    var a = state.isoYaw * Math.PI / 180;
+    var depth = (cx * Math.cos(a) - cy * Math.sin(a)) + (cx * Math.sin(a) + cy * Math.cos(a));
+    faces.push({
+      points: projected,
+      fill: fill,
+      stroke: strong ? "#7f1d1d" : "rgba(15,23,42,0.45)",
+      width: strong ? 2.4 : 1,
+      depth: depth
+    });
+  }
+
+  function isoPrism(faces, corners, z0, z1, color, strong) {
+    if (z1 <= z0) return;
+    isoFace(faces, [
+      [corners[0][0], corners[0][1], z1],
+      [corners[1][0], corners[1][1], z1],
+      [corners[2][0], corners[2][1], z1],
+      [corners[3][0], corners[3][1], z1]
+    ], isoShade(color, 1.0), strong);
+    for (var index = 0; index < 4; index += 1) {
+      var a = corners[index];
+      var b = corners[(index + 1) % 4];
+      isoFace(faces, [
+        [a[0], a[1], z0], [b[0], b[1], z0],
+        [b[0], b[1], z1], [a[0], a[1], z1]
+      ], isoShade(color, index % 2 ? 0.68 : 0.8), strong);
+    }
+  }
+
+  function isoPointSegmentDistance(point, start, end) {
+    var dx = end[0] - start[0], dy = end[1] - start[1];
+    var length = dx * dx + dy * dy;
+    if (length <= 1) return Math.hypot(point[0] - start[0], point[1] - start[1]);
+    var t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(point[0] - (start[0] + t * dx), point[1] - (start[1] + t * dy));
+  }
+
+  function isoOpeningSpan(opening, wall) {
+    var length = Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
+    if (length <= 1) return null;
+    var ux = (wall.x2 - wall.x1) / length;
+    var uy = (wall.y2 - wall.y1) / length;
+    var rad = opening.angle * Math.PI / 180;
+    var start = [opening.x, opening.y];
+    var end = [opening.x + Math.cos(rad) * opening.width, opening.y + Math.sin(rad) * opening.width];
+    var a = (start[0] - wall.x1) * ux + (start[1] - wall.y1) * uy;
+    var b = (end[0] - wall.x1) * ux + (end[1] - wall.y1) * uy;
+    var low = Math.max(0, Math.min(a, b));
+    var high = Math.min(length, Math.max(a, b));
+    if (high - low <= 1) return null;
+    return { start: low, end: high };
+  }
+
+  function isoHostWall(geo, opening) {
+    var center = [
+      opening.x + Math.cos(opening.angle * Math.PI / 180) * opening.width / 2,
+      opening.y + Math.sin(opening.angle * Math.PI / 180) * opening.width / 2
+    ];
+    var best = null;
+    var bestGap = Infinity;
+    geo.walls.forEach(function (wall) {
+      if (opening.host && wall.id === opening.host) {
+        best = wall;
+        bestGap = 0;
+        return;
+      }
+      if (bestGap === 0) return;
+      var gap = isoPointSegmentDistance(center, [wall.x1, wall.y1], [wall.x2, wall.y2]);
+      if (gap < bestGap && gap <= Math.max(wall.t, 80) + 40) {
+        best = wall;
+        bestGap = gap;
+      }
+    });
+    return best;
+  }
+
+  function isoWallSegment(faces, wall, from, to, z0, z1, color, strong, thickness) {
+    if (to - from <= 1 || z1 <= z0) return;
+    var length = Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
+    if (length <= 1) return;
+    var ux = (wall.x2 - wall.x1) / length;
+    var uy = (wall.y2 - wall.y1) / length;
+    var nx = -uy, ny = ux;
+    var half = Math.max(20, (thickness == null ? wall.t : thickness) / 2);
+    var p1 = [wall.x1 + ux * from, wall.y1 + uy * from];
+    var p2 = [wall.x1 + ux * to, wall.y1 + uy * to];
+    isoPrism(faces, [
+      [p1[0] + nx * half, p1[1] + ny * half],
+      [p2[0] + nx * half, p2[1] + ny * half],
+      [p2[0] - nx * half, p2[1] - ny * half],
+      [p1[0] - nx * half, p1[1] - ny * half]
+    ], z0, z1, color, strong);
+  }
+
+  function isoWalls(faces, geo, severity, wallHeight) {
+    geo.walls.forEach(function (wall) {
+      var length = Math.hypot(wall.x2 - wall.x1, wall.y2 - wall.y1);
+      if (length <= 1) return;
+      var color = SEV_COLOR[severity[wall.id]] || ISO_WALL_COLOR;
+      var strong = Boolean(SEV_COLOR[severity[wall.id]]);
+      var spans = [];
+      geo.openings.forEach(function (opening) {
+        var host = isoHostWall(geo, opening);
+        if (!host || host.id !== wall.id) return;
+        var span = isoOpeningSpan(opening, wall);
+        if (span) {
+          span.type = opening.type;
+          span.height = Number(opening.h) || (opening.type === "window" ? 1800 : 2100);
+          span.id = opening.id;
+          spans.push(span);
+        }
+      });
+      spans.sort(function (a, b) { return a.start - b.start; });
+      var cursor = 0;
+      spans.forEach(function (span) {
+        if (span.start > cursor) {
+          isoWallSegment(faces, wall, cursor, span.start, 0, wallHeight, color, strong);
+        }
+        if (span.type === "window") {
+          var sill = Math.min(ISO_WINDOW_SILL, wallHeight);
+          var top = Math.min(ISO_WINDOW_SILL + span.height, wallHeight);
+          if (top > 0) isoWallSegment(faces, wall, span.start, span.end, 0, sill, color, strong);
+          if (top > sill) {
+            var glass = SEV_COLOR[severity[span.id]] || "#7dd3fc";
+            isoWallSegment(faces, wall, span.start, span.end, sill, top, glass, Boolean(SEV_COLOR[severity[span.id]]), 50);
+          }
+          if (top < wallHeight) {
+            isoWallSegment(faces, wall, span.start, span.end, top, wallHeight, color, strong);
+          }
+        }
+        cursor = Math.max(cursor, span.end);
+      });
+      if (cursor < length) {
+        isoWallSegment(faces, wall, cursor, length, 0, wallHeight, color, strong);
+      }
+    });
+  }
+
+  function isoFurniture(faces, geo, severity) {
+    geo.furniture.forEach(function (item) {
+      if (item.host) return;
+      var height = Number(item.h) || KIND_HEIGHT[item.kind] || 800;
+      if (height <= 0) return;
+      var cx = item.x + item.w / 2;
+      var cy = item.y + item.d / 2;
+      var angle = (item.rot || 0) * Math.PI / 180;
+      var cos = Math.cos(angle), sin = Math.sin(angle);
+      var corners = [
+        [item.x, item.y], [item.x + item.w, item.y],
+        [item.x + item.w, item.y + item.d], [item.x, item.y + item.d]
+      ].map(function (point) {
+        var dx = point[0] - cx, dy = point[1] - cy;
+        return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+      });
+      var category = KIND_CATEGORY[item.kind] || "";
+      var color = SEV_COLOR[severity[item.id]] ||
+        CATEGORY_COLOR[category] || FURNITURE_COLOR;
+      isoPrism(faces, corners, 0, height, color, Boolean(SEV_COLOR[severity[item.id]]));
+    });
+  }
+
+  function renderIso() {
+    var svg = $("iso");
+    if (!svg) return;
+    clear(svg);
+    svg.setAttribute("viewBox", "0 0 " + ISO_W + " " + ISO_H);
+    var geo = geometry();
+    if (!geo.walls.length && !geo.furniture.length && !state.rooms.length) {
+      setText($("planNote"), T.noGeometry);
+      return;
+    }
+    var severity = severityMap();
+    var wallHeight = Math.min(ISO_WALL_CUT, Number(geo.ceiling) || 2800);
+    var faces = [];
+    var floors = [];
+    var labels = [];
+
+    state.rooms.forEach(function (row) {
+      var values = vals(row);
+      var payload = parseJSON(values.payload, {}) || {};
+      var polygon = payload.polygon || payload.poly || [];
+      if (!Array.isArray(polygon) || polygon.length < 3) return;
+      var kind = roomKindOf(payload, values.name);
+      var fill = ROOM_FILL[kind] || ROOM_FILL.other;
+      var strong = Boolean(SEV_COLOR[severity[values.room_id || row.row_id]]);
+      floors.push({
+        points: polygon.map(function (point) {
+          return isoUnit(point[0], point[1], 0);
+        }),
+        fill: fill,
+        strong: strong
+      });
+      var center = polygonCentroid(polygon);
+      var area = Number(values.area_mm2);
+      labels.push({
+        point: isoUnit(center[0], center[1], 0),
+        text: String(values.name || payload.name || "") +
+          (isFinite(area) && area > 0 ? " · " + (area / 1000000).toFixed(1) + "㎡" : "")
+      });
+    });
+
+    isoWalls(faces, geo, severity, wallHeight);
+    isoFurniture(faces, geo, severity);
+
+    var points = [];
+    floors.forEach(function (floor) { points = points.concat(floor.points); });
+    faces.forEach(function (face) { points = points.concat(face.points); });
+    labels.forEach(function (label) { points.push(label.point); });
+    if (!points.length) {
+      setText($("planNote"), T.noGeometry);
+      return;
+    }
+    var minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+    points.forEach(function (point) {
+      if (point[0] < minU) minU = point[0];
+      if (point[0] > maxU) maxU = point[0];
+      if (point[1] < minV) minV = point[1];
+      if (point[1] > maxV) maxV = point[1];
+    });
+    var spanU = Math.max(maxU - minU, 1);
+    var spanV = Math.max(maxV - minV, 1);
+    var scale = Math.min((ISO_W - 2 * ISO_PAD) / spanU, (ISO_H - 2 * ISO_PAD) / spanV) *
+      (state.isoZoom || 1);
+    var offsetX = ISO_PAD + (ISO_W - 2 * ISO_PAD - spanU * scale) / 2 - minU * scale;
+    var offsetY = ISO_PAD + (ISO_H - 2 * ISO_PAD - spanV * scale) / 2 - minV * scale;
+    function map(point) {
+      return [point[0] * scale + offsetX, point[1] * scale + offsetY];
+    }
+    function polygonPoints(list) {
+      return list.map(map).map(function (point) {
+        return point[0].toFixed(1) + "," + point[1].toFixed(1);
+      }).join(" ");
+    }
+
+    floors.forEach(function (floor) {
+      svg.appendChild(svgEl("polygon", {
+        points: polygonPoints(floor.points),
+        fill: floor.fill,
+        "fill-opacity": "0.9",
+        stroke: floor.strong ? "#7f1d1d" : "var(--line)",
+        "stroke-width": floor.strong ? 2.5 : 1
+      }));
+    });
+    faces.sort(function (a, b) { return a.depth - b.depth; });
+    faces.forEach(function (face) {
+      svg.appendChild(svgEl("polygon", {
+        points: polygonPoints(face.points),
+        fill: face.fill,
+        stroke: face.stroke,
+        "stroke-width": face.width,
+        "stroke-linejoin": "round"
+      }));
+    });
+    labels.forEach(function (label) {
+      if (!label.text) return;
+      var point = map(label.point);
+      var text = svgEl("text", {
+        x: point[0], y: point[1],
+        "text-anchor": "middle",
+        "font-size": 12,
+        fill: "currentColor",
+        "paint-order": "stroke",
+        stroke: "var(--card)",
+        "stroke-width": 3,
+        opacity: "0.85"
+      });
+      text.textContent = label.text;
+      svg.appendChild(text);
+    });
+    setText($("planNote"),
+      "2.5D 轴测示意：墙体剖切 " + ISO_WALL_CUT + "mm，窗台按 " +
+      ISO_WINDOW_SILL + "mm 估算；尺寸与合规以平面图和内核诊断为准。");
+  }
+
   function render() {
     var geo = geometry();
     var appliances = geo.furniture.filter(function (item) {
@@ -694,7 +1061,14 @@
       "元素 " + state.elements.length + " 个 · 家具 " + (geo.furniture.length - appliances) +
       " · 电器 " + appliances + " · 点位 " + geo.mep.length +
       " · 诊断 " + state.diagnostics.length + " 条 · 房间 " + state.rooms.length + " 个");
-    renderPlan();
+    var iso = state.view === "iso";
+    $("btnPlanView").classList.toggle("active", !iso);
+    $("btnIsoView").classList.toggle("active", iso);
+    $("isoControls").classList.toggle("hidden", !iso);
+    setText($("planTitle"), iso ? "2.5D 视图" : "平面图");
+    $("plan").classList.toggle("hidden", iso);
+    $("iso").classList.toggle("hidden", !iso);
+    if (iso) renderIso(); else renderPlan();
     renderLegend();
     renderDiagnostics();
     renderTable($("roomWrap"), state.rooms, [
@@ -770,6 +1144,25 @@
 
   $("btnRefresh").addEventListener("click", function () { refresh(); });
   $("btnCheck").addEventListener("click", function () { runCheck(null); });
+  $("btnPlanView").addEventListener("click", function () { state.view = "plan"; render(); });
+  $("btnIsoView").addEventListener("click", function () { state.view = "iso"; render(); });
+  $("isoRotate").addEventListener("click", function () {
+    state.isoYaw = ((state.isoYaw || 0) + 90) % 360;
+    render();
+  });
+  $("isoZoomIn").addEventListener("click", function () {
+    state.isoZoom = Math.min(1.8, (state.isoZoom || 1) * 1.15);
+    render();
+  });
+  $("isoZoomOut").addEventListener("click", function () {
+    state.isoZoom = Math.max(0.6, (state.isoZoom || 1) / 1.15);
+    render();
+  });
+  $("isoReset").addEventListener("click", function () {
+    state.isoYaw = 0;
+    state.isoZoom = 1;
+    render();
+  });
 
   APP.onDataChange(function () { refresh(); });
 

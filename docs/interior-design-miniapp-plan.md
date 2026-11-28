@@ -400,14 +400,14 @@ OCTOP_INTERIOR_KERNEL_TOKEN=xxx python -m octop.infra.design   # 开启 Bearer �
 
 | 区块 | 内容 |
 |---|---|
-| 顶栏 | 标题 + 元素/诊断计数 + 「刷新」「重新校验」 |
-| 左：平面图 | 内联 SVG。按 `elements` 画墙（按厚度）、门（门扇 + 弧）、窗、家具（矩形）；`diagnostics` 里 severity≥significant 的元素图元高亮（blocking 红 / significant 橙） |
+| 顶栏 | 标题 + 元素/诊断计数 + 「刷新」「校验」 |
+| 左：平面图 / 2.5D | 内联 SVG。平面图按 `elements` 画墙（按厚度）、门（门扇 + 弧）、窗、家具（矩形）；`diagnostics` 里 severity≥significant 的元素图元高亮（blocking 红 / significant 橙）。2.5D 为自绘轴测视图：墙体剖切 1200mm、家具盒体、房间地面、门窗开口、四向旋转/缩放；窗台按 900mm 估算，仅作展示 |
 | 右：诊断清单 | 按严重度分组；显示 rule_id、message、涉及元素 |
 | 下：房间与工程量 | 房间面积表 + BOM 表 |
 
 页面动作：
-- 「重新校验」→ 读 `elements` 组成 IR → `svc.invoke("check_drawing", {ir})` → 把返回的 diagnostics 写回 `diagnostics` 表 → 重绘高亮。
-- 页面**不读像素截图**，也不把诊断结论写回几何；修复由专家/用户决定。
+- 「校验」→ 读 `elements` 组成 IR → `svc.invoke("check_drawing", {ir})` → 把返回的 diagnostics 写回 `diagnostics` 表 → 重绘高亮。
+- 页面**不读像素截图**，也不把诊断结论写回几何；修复由专家/用户决定。2.5D 不参与合规判定，尺寸/净空以平面图与内核诊断为准。
 
 ---
 

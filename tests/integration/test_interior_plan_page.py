@@ -203,3 +203,39 @@ def test_page_sends_kind_and_highlights_the_finding(browser: Any) -> None:
 
     # The stale row was replaced rather than duplicated.
     assert remaining == ["clearance.wardrobe_front"], remaining
+
+
+def test_iso_view_renders_walls_furniture_and_rotates(browser: Any) -> None:
+    html = TEMPLATE.read_text(encoding="utf-8")
+    page_html = html.replace("<script>", STUB_SDK + "<script>", 1)
+
+    page = browser.new_page()
+    try:
+        page.set_content(page_html)
+        page.wait_for_function("document.querySelectorAll('#plan line').length > 0")
+        page.click("#btnIsoView")
+        page.wait_for_function("document.querySelectorAll('#iso polygon').length > 0")
+        polygons = page.evaluate("document.querySelectorAll('#iso polygon').length")
+        title = page.inner_text("#planTitle")
+        toggled = page.evaluate(
+            "!document.getElementById('iso').classList.contains('hidden')"
+            " && document.getElementById('plan').classList.contains('hidden')"
+        )
+
+        page.click("#isoRotate")
+        page.wait_for_function("document.querySelectorAll('#iso polygon').length > 0")
+        rotated = page.evaluate("document.querySelectorAll('#iso polygon').length")
+
+        page.click("#btnPlanView")
+        back_to_plan = page.evaluate(
+            "!document.getElementById('plan').classList.contains('hidden')"
+            " && document.getElementById('iso').classList.contains('hidden')"
+        )
+    finally:
+        page.close()
+
+    assert polygons >= 6
+    assert rotated == polygons
+    assert title == "2.5D 视图"
+    assert toggled
+    assert back_to_plan
