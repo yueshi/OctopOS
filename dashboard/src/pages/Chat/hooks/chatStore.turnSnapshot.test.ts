@@ -153,3 +153,59 @@ describe("turn snapshot replay", () => {
     }
   });
 });
+
+  it("replays ordered token/tool frames from a snapshot", async () => {
+    const fake = installFakeWebSocket();
+    try {
+      const turn = sendTurn(SESSION, "hi", "agent-1", "", undefined);
+      await Promise.resolve();
+      const ws = fake.instances[0];
+      ws.onmessage?.(frame({ type: "turn_status", active: true }));
+      ws.onmessage?.(
+        frame({
+          type: "turn.snapshot",
+          turn_id: "turn-1",
+          elapsed_s: 12,
+          frames: [
+            { type: "reasoning", content: "think" },
+            { type: "token", content: "before" },
+            {
+              type: "tool_call_chunk",
+              id: "call-1",
+              index: 0,
+              name: "read_file",
+              args: "{}",
+            },
+            {
+              type: "tool_result",
+              messages: [{ content: "done", tool_call_id: "call-1" }],
+            },
+            { type: "token", content: "after" },
+          ],
+        }),
+      );
+
+      const snap = getSnapshot(SESSION);
+      const assistantTexts = snap.messages.filter(
+        (message) => message.role === "assistant" && !message.toolData,
+      );
+      const tools = snap.messages.filter((message) => message.toolData);
+      expect(assistantTexts.map((message) => message.content)).toEqual([
+        "before",
+        "after",
+      ]);
+      expect(assistantTexts[0]?.contentBlocks?.[0]).toMatchObject({
+        type: "thinking",
+        content: "think",
+      });
+      expect(tools).toHaveLength(1);
+      expect(tools[0]?.toolData?.name).toBe("read_file");
+      expect(tools[0]?.toolData?.output).toBe("done");
+      expect(snap.messages.indexOf(tools[0]!)).toBe(1);
+
+      ws.onmessage?.(frame({ type: "turn.ended", turn_id: "turn-1" }));
+      await turn;
+    } finally {
+      fake.restore();
+    }
+  });

@@ -1008,6 +1008,12 @@ async def test_hub_turn_snapshot_accumulates_and_clears() -> None:
     assert snapshot["phase"] == "tool"
     assert snapshot["last_tool"] == "read_file"
     assert snapshot["elapsed_s"] >= 0
+    assert [item["type"] for item in snapshot["frames"]] == [
+        "reasoning",
+        "token",
+        "tool_call_chunk",
+    ]
+    assert snapshot["frames"][2]["name"] == "read_file"
 
     progress = hub.turn_progress("t1")
     assert progress is not None
@@ -1016,7 +1022,10 @@ async def test_hub_turn_snapshot_accumulates_and_clears() -> None:
     assert progress["reasoning_chars"] == 9
 
     await hub.push_to_thread("t1", {"type": "tool_result", "messages": []})
-    assert hub.turn_snapshot("t1")["phase"] == "model"  # type: ignore[index]
+    snapshot = hub.turn_snapshot("t1")
+    assert snapshot is not None
+    assert snapshot["phase"] == "model"
+    assert snapshot["frames"][-1]["type"] == "tool_result"
 
     hub.mark_turn_idle("t1")
     assert hub.turn_snapshot("t1") is None

@@ -419,7 +419,8 @@ function enrichAttachmentPreviewUrls(
 }
 
 function convertCallEntries(entries: CallEntry[]): ChatMessage[] {
-  const raw: InternalChatMessage[] = entries.map((entry, index) => {
+  const raw: InternalChatMessage[] = [];
+  entries.forEach((entry, index) => {
     const tool = extractToolData(entry.content);
     const toolFeedback = parseToolExecutionFeedback(tool?.data.output);
     const toolErrorCode = toolFeedback?.code || tool?.data.errorCode;
@@ -448,8 +449,18 @@ function convertCallEntries(entries: CallEntry[]): ChatMessage[] {
         ? stripInlineImageMarkdown(textContent, attachments)
         : textContent;
 
-    return {
-      id: entry.message_id || entry.entry_index || `call-${index}`,
+    const baseId = entry.message_id || entry.entry_index || `call-${index}`;
+    const hitlData = parseHistoryHitl(entry.hitl);
+    const decision = parseDecisionNotice(entry.decision) ?? undefined;
+    const editedFiles = Array.isArray(entry.edited_files)
+      ? entry.edited_files
+          .filter(
+            (p): p is string => typeof p === "string" && p.trim().length > 0,
+          )
+          .map((p) => p.trim())
+      : undefined;
+    const base: InternalChatMessage = {
+      id: baseId,
       role:
         entry.role === "user"
           ? "user"
@@ -483,7 +494,7 @@ function convertCallEntries(entries: CallEntry[]): ChatMessage[] {
             )
           : undefined,
       toolData: tool?.data,
-      hitlData: parseHistoryHitl(entry.hitl),
+      hitlData,
       usage: normalizeTokenUsage(entry.usage ?? undefined) ?? undefined,
       metadata: normalizeMessageMetadata(entry.metadata ?? undefined),
       errorInfo:
@@ -517,15 +528,45 @@ function convertCallEntries(entries: CallEntry[]): ChatMessage[] {
           ? entry.speaker_agent_id.trim()
           : undefined,
       teamWrapup: Boolean(entry.team_wrapup),
-      decision: parseDecisionNotice(entry.decision) ?? undefined,
-      editedFiles: Array.isArray(entry.edited_files)
-        ? entry.edited_files
-            .filter(
-              (p): p is string => typeof p === "string" && p.trim().length > 0,
-            )
-            .map((p) => p.trim())
-        : undefined,
+      decision,
+      editedFiles,
     };
+
+    const hasAssistantContent = Boolean(
+      cleanedText.trim() || contentBlocks?.some((block) => block.content.trim()),
+    );
+    if (entry.role === "assistant" && tool?.kind === "call" && hasAssistantContent) {
+      // A history AI row can carry text/thinking and the tool call in one
+      // record. Split it so the page keeps the narration before the tool and
+      // renders the call in its real position; the old shape attached toolData
+      // to the same bubble, which made the process view drop the text.
+      raw.push({
+        ...base,
+        id: `${baseId}:text`,
+        toolData: undefined,
+        hitlData: undefined,
+        _toolKind: undefined,
+      });
+      raw.push({
+        ...base,
+        id: `${baseId}:tool:${tool.data.callId || index}`,
+        role: "assistant",
+        content: "",
+        contentBlocks: undefined,
+        attachments: undefined,
+        composerContext: undefined,
+        toolData: tool.data,
+        hitlData,
+        usage: undefined,
+        decision: undefined,
+        editedFiles: undefined,
+        errorInfo: undefined,
+        _toolKind: "call",
+        status: "done",
+      });
+      return;
+    }
+    raw.push(base);
   });
 
   const merged: ChatMessage[] = [];

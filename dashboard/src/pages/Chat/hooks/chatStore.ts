@@ -1422,12 +1422,28 @@ function applyTurnSnapshot(
     notify(state);
     return;
   }
-  // A capped snapshot is missing its oldest text; refetch history when the
+  // A capped snapshot is missing its oldest content; refetch history when the
   // turn ends so the persisted message replaces the partial replay.
   state.streamIncomplete = data.truncated === true;
   const elapsed = Number(data.elapsed_s || 0);
   if (Number.isFinite(elapsed) && elapsed > 0) {
     state.thinkingStartedAt = Date.now() - elapsed * 1000;
+  }
+  const frames = Array.isArray(data.frames) ? data.frames : [];
+  if (frames.length > 0) {
+    // Replay the real token/reasoning/tool order. The old text+reasoning
+    // fields collapsed every round into one bubble and dropped tool positions.
+    for (const frame of frames) {
+      if (frame && typeof frame === "object") {
+        handleHarnessChunk(
+          state,
+          frame as unknown as HarnessChunk,
+          sessionId,
+        );
+      }
+    }
+    notify(state);
+    return;
   }
   const reasoning = typeof data.reasoning === "string" ? data.reasoning : "";
   const text = typeof data.text === "string" ? data.text : "";

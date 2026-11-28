@@ -267,3 +267,51 @@ describe("thinking display preference", () => {
     ).not.toBeChecked();
   });
 });
+
+function intermediateTextSplit(): AssistantTurnSplit {
+  const tool: ChatMessage = {
+    id: "tool-1",
+    role: "assistant",
+    content: "",
+    status: "done",
+    timestamp: Date.now(),
+    toolData: { name: "read_file", arguments: "{}", output: "ok" },
+  };
+  const text = { messageId: "m1", content: "我先查一下", isStreaming: false };
+  return {
+    tools: [tool],
+    thinkings: [],
+    processSteps: [
+      { kind: "text", item: text },
+      { kind: "tool", message: tool },
+    ],
+    answerMessage: null,
+  };
+}
+
+describe("intermediate output timeline", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("keeps intermediate text inside the process fold", () => {
+    render(
+      <AssistantProcessSummary
+        split={intermediateTextSplit()}
+        isStreaming={false}
+      />,
+    );
+    expect(screen.queryByText("我先查一下")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("我先查一下")).toBeInTheDocument();
+  });
+
+  it("expands automatically while streaming so the round is visible", () => {
+    render(
+      <AssistantProcessSummary split={intermediateTextSplit()} isStreaming />,
+    );
+    expect(screen.getByText("我先查一下")).toBeInTheDocument();
+    const toggle = screen
+      .getAllByRole("button")
+      .find((button) => button.hasAttribute("aria-expanded"));
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+});

@@ -63,6 +63,7 @@ export interface ThinkingProcessItem {
 
 export type ProcessStep =
   | { kind: "thinking"; item: ThinkingProcessItem }
+  | { kind: "text"; item: ThinkingProcessItem }
   | { kind: "tool"; message: ChatMessage }
   | { kind: "decision"; notice: DecisionNotice };
 
@@ -116,40 +117,55 @@ function hasCompletedToolBetweenTexts(messages: ChatMessage[]): boolean {
   return false;
 }
 
+/** Ordered thinking/text segments inside one assistant message. */
+function orderedContentBlocks(
+  message: ChatMessage,
+): Array<{ type: "thinking" | "text"; content: string }> {
+  const out: Array<{ type: "thinking" | "text"; content: string }> = [];
+  if (message.contentBlocks && message.contentBlocks.length > 0) {
+    for (const block of message.contentBlocks) {
+      if (block.type === "thinking" && block.content.trim()) {
+        out.push({ type: "thinking", content: block.content });
+      } else if (block.type === "text") {
+        const text = stripThinkTags(block.content);
+        if (text.trim()) out.push({ type: "text", content: text });
+      }
+    }
+    if (out.length > 0) return out;
+  }
+  if (message.type === "reasoning" && message.content) {
+    return [{ type: "thinking", content: message.content }];
+  }
+  const text = message.content ? stripThinkTags(message.content) : "";
+  return text.trim() ? [{ type: "text", content: text }] : [];
+}
+
 export function splitAssistantTurn(
   messages: ChatMessage[],
   opts?: { joinAnswerFragments?: boolean },
 ): AssistantTurnSplit {
   const tools: ChatMessage[] = [];
   const thinkings: ThinkingProcessItem[] = [];
-  const processSteps: ProcessStep[] = [];
-  const textParts: string[] = [];
+  const timeline: ProcessStep[] = [];
+  const textEntries: Array<{
+    item: ThinkingProcessItem;
+    message: ChatMessage;
+    timelineIndex: number;
+  }> = [];
   const errorMessages: ChatMessage[] = [];
   const decision = messages.find((item) => item.decision)?.decision;
   if (decision) {
-    processSteps.push({ kind: "decision", notice: decision });
+    timeline.push({ kind: "decision", notice: decision });
   }
-  let answerTemplate: ChatMessage | null = null;
-  let answerStreaming = false;
 
   for (const msg of messages) {
-    const { thinkingParts, textContent } = deriveMessageContent(msg);
-    const thinkingContent = thinkingParts.join("").trim();
-    if (thinkingContent) {
-      const item: ThinkingProcessItem = {
-        messageId: msg.id,
-        content: thinkingContent,
-        isStreaming: msg.status === "streaming" && !textContent.trim(),
-      };
-      thinkings.push(item);
-      processSteps.push({ kind: "thinking", item });
-    }
     if (msg.toolData) {
       tools.push(msg);
-      processSteps.push({ kind: "tool", message: msg });
+      timeline.push({ kind: "tool", message: msg });
       continue;
     }
     if (msg.status === "error") {
+      const { textContent } = deriveMessageContent(msg);
       const errorText =
         textContent.trim() || msg.errorInfo?.message?.trim() || "";
       errorMessages.push({
@@ -159,16 +175,30 @@ export function splitAssistantTurn(
       });
       continue;
     }
-    if (textContent.trim()) {
-      textParts.push(textContent);
-      answerTemplate = msg;
-      answerStreaming = msg.status === "streaming";
+    const blocks = orderedContentBlocks(msg);
+    const hasText = blocks.some((block) => block.type === "text");
+    for (const block of blocks) {
+      const item: ThinkingProcessItem = {
+        messageId: msg.id,
+        content: block.content,
+        isStreaming: msg.status === "streaming",
+      };
+      if (block.type === "thinking") {
+        item.isStreaming = msg.status === "streaming" && !hasText;
+        thinkings.push(item);
+        timeline.push({ kind: "thinking", item });
+      } else {
+        const timelineIndex = timeline.length;
+        textEntries.push({ item, message: msg, timelineIndex });
+        timeline.push({ kind: "text", item });
+      }
     }
   }
 
   // 1:1 ReAct (text → tool → conclusion) keeps the last bubble as the answer
   // once the turn settles. While generating (or for stamped team speakers),
   // join fragments so the answer never shrinks mid-flight after a tool round.
+  const textParts = textEntries.map((entry) => entry.item.content);
   const teamStamped = messages.some((item) =>
     Boolean((item.speakerAgentId || "").trim()),
   );
@@ -178,19 +208,64 @@ export function splitAssistantTurn(
       teamStamped ||
       messages.some((item) => item.teamWrapup) ||
       !hasCompletedToolBetweenTexts(messages));
+
+  // Text after the last *completed* tool is the answer group. If the turn
+  // stopped on a tool/approval with no trailing text, the last text before it
+  // is still the last visible output and must remain the answer. A pending
+  // approval / in-flight tool (no output yet) does not end a narration round.
+  const lastToolTimelineIndex = timeline.reduce(
+    (last, step, index) =>
+      step.kind === "tool" && step.message.toolData?.output !== undefined
+        ? index
+        : last,
+    -1,
+  );
+  const trailingTextEntries = textEntries.filter(
+    (entry) => entry.timelineIndex > lastToolTimelineIndex,
+  );
+  const answerEntries = joinFragments
+    ? textEntries
+    : trailingTextEntries.length > 0
+    ? trailingTextEntries
+    : textEntries;
+  const answerEntry = answerEntries[answerEntries.length - 1];
   const answerMessage =
-    answerTemplate && textParts.length > 0
+    answerEntry && answerEntries.length > 0
       ? {
-          ...answerTemplate,
+          ...answerEntry.message,
           content: joinFragments
             ? joinAnswerParts(textParts)
-            : textParts[textParts.length - 1],
+            : answerEntry.item.content,
           contentBlocks: undefined,
-          status: answerStreaming
-            ? ("streaming" as const)
-            : answerTemplate.status,
+          status:
+            answerEntry.message.status === "streaming"
+              ? ("streaming" as const)
+              : answerEntry.message.status,
         }
       : null;
+
+  // Intermediate outputs (everything before the final answer) stay inside the
+  // process fold, in the same order as thinking/tool steps. Joining them into
+  // the answer would mix rounds; dropping them loses the real transcript.
+  let processSteps = timeline;
+  if (textEntries.length > 0) {
+    if (joinFragments) {
+      processSteps = timeline.filter((step) => step.kind !== "text");
+    } else {
+      const intermediate = new Set(
+        textEntries
+          .filter(
+            (entry) =>
+              answerEntry !== undefined &&
+              entry.timelineIndex < answerEntry.timelineIndex,
+          )
+          .map((entry) => entry.item),
+      );
+      processSteps = timeline.filter(
+        (step) => step.kind !== "text" || intermediate.has(step.item),
+      );
+    }
+  }
 
   return { tools, thinkings, processSteps, answerMessage, errorMessages };
 }

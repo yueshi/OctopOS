@@ -420,3 +420,37 @@ describe("groupConsecutiveAssistantMessages", () => {
     expect(groups[1].messages[0].id).toBe("u1");
   });
 });
+
+describe("assistant process timeline", () => {
+  it("keeps intermediate output before the tool and the final answer separate", () => {
+    const split = splitAssistantTurn([
+      msg("assistant", "m1", {
+        contentBlocks: [
+          { type: "thinking", content: "先想一下" },
+          { type: "text", content: "我先查一下" },
+        ],
+      }),
+      msg("assistant", "tool", {
+        toolData: { name: "read_file", arguments: "{}", output: "ok" },
+      }),
+      msg("assistant", "m2", {
+        contentBlocks: [
+          { type: "thinking", content: "再想一下" },
+          { type: "text", content: "结论" },
+        ],
+      }),
+    ]);
+    expect(split.answerMessage?.content).toBe("结论");
+    expect(split.processSteps.map((step) => step.kind)).toEqual([
+      "thinking",
+      "text",
+      "tool",
+      "thinking",
+    ]);
+    const intermediate = split.processSteps[1];
+    expect(intermediate.kind).toBe("text");
+    if (intermediate.kind === "text") {
+      expect(intermediate.item.content).toBe("我先查一下");
+    }
+  });
+});

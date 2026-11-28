@@ -29,6 +29,10 @@ def stamp_thread_id(frame: dict[str, Any], thread_id: str) -> dict[str, Any]:
 #: shipping an unbounded history. Text and reasoning are capped independently.
 MAX_SNAPSHOT_CHARS = 500_000
 
+#: A turn can emit thousands of tiny token frames. Keep enough for a real
+#: redraw without letting one reconnect payload grow without bound.
+MAX_SNAPSHOT_FRAMES = 4_000
+
 #: Frames that mean the turn produced something. Only these may reset the idle
 #: clock — notably *not* ``turn.progress`` itself, or the heartbeat would keep
 #: the stall watchdog from ever firing.
@@ -61,6 +65,26 @@ class TurnBuffer:
     phase: str = "model"
     last_tool: str = ""
     truncated: bool = False
+    #: Ordered token/reasoning/tool frames for a mid-turn redraw. Text and
+    #: reasoning are also kept separately for older clients.
+    frames: list[dict[str, Any]] = field(default_factory=list)
+    frame_chars: int = 0
+
+    def add_frame(self, frame: dict[str, Any]) -> None:
+        self.frames.append(frame)
+        try:
+            self.frame_chars += len(json.dumps(frame, ensure_ascii=False, default=str))
+        except (TypeError, ValueError):
+            self.frame_chars += len(repr(frame))
+        while (
+            len(self.frames) > MAX_SNAPSHOT_FRAMES or self.frame_chars > MAX_SNAPSHOT_CHARS
+        ) and len(self.frames) > 1:
+            dropped = self.frames.pop(0)
+            try:
+                self.frame_chars -= len(json.dumps(dropped, ensure_ascii=False, default=str))
+            except (TypeError, ValueError):
+                self.frame_chars -= len(repr(dropped))
+            self.truncated = True
 
     def add_text(self, chunk: str) -> None:
         if not chunk:
@@ -202,17 +226,31 @@ class WebSocketHub:
             buffer.phase = "model"
             buffer.last_tool = ""
         elif kind == "token":
-            buffer.add_text(str(frame.get("content") or ""))
+            content = str(frame.get("content") or "")
+            buffer.add_text(content)
+            buffer.add_frame({"type": "token", "content": content})
         elif kind == "reasoning":
-            buffer.add_reasoning(str(frame.get("content") or ""))
+            content = str(frame.get("content") or "")
+            buffer.add_reasoning(content)
+            buffer.add_frame({"type": "reasoning", "content": content})
         elif kind == "tool_call_chunk":
             name = str(frame.get("name") or "").strip()
             if name:
                 buffer.phase = "tool"
                 buffer.last_tool = name
+            compact: dict[str, Any] = {"type": "tool_call_chunk"}
+            for key in ("id", "index", "name", "args", "display_name"):
+                if frame.get(key) is not None:
+                    compact[key] = frame[key]
+            buffer.add_frame(compact)
         elif kind == "tool_result":
             buffer.phase = "model"
             buffer.last_tool = ""
+            compact = {"type": "tool_result"}
+            for key in ("messages", "id", "name"):
+                if frame.get(key) is not None:
+                    compact[key] = frame[key]
+            buffer.add_frame(compact)
 
     def turn_snapshot(self, thread_id: str) -> dict[str, Any] | None:
         """A one-shot resume payload, or ``None`` when no turn is active."""
@@ -231,6 +269,7 @@ class WebSocketHub:
             "last_tool": buffer.last_tool,
             "elapsed_s": round(max(0.0, time.time() - buffer.started_at), 1),
             "truncated": buffer.truncated,
+            "frames": [dict(item) for item in buffer.frames],
             "thread_id": tid,
         }
 

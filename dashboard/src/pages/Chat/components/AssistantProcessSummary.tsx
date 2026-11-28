@@ -227,7 +227,12 @@ function AssistantProcessSummary({
 }: AssistantProcessSummaryProps) {
   const { t } = useTranslation();
   const [collapseThinking] = useCollapseThinking(isTeam);
-  const [expanded, setExpanded] = useState(isStreaming && !collapseThinking);
+  const hasIntermediateText = split.processSteps.some(
+    (step) => step.kind === "text",
+  );
+  const [expanded, setExpanded] = useState(
+    isStreaming && (hasIntermediateText || !collapseThinking),
+  );
   const prevStreaming = useRef(isStreaming);
   const prevCollapseThinking = useRef(collapseThinking);
   const elapsedSeconds = useElapsedSeconds(startedAt, isStreaming);
@@ -257,7 +262,7 @@ function AssistantProcessSummary({
     prevStreaming.current = isStreaming;
     prevCollapseThinking.current = collapseThinking;
     if (isStreaming) {
-      setExpanded(!collapseThinking);
+      setExpanded(hasIntermediateText || !collapseThinking);
       return;
     }
     if (wasStreaming) {
@@ -265,7 +270,7 @@ function AssistantProcessSummary({
     } else if (collapseThinking) {
       setExpanded(false);
     }
-  }, [isStreaming, collapseThinking]);
+  }, [isStreaming, collapseThinking, hasIntermediateText]);
 
   if (toolCount === 0 && thinkingCount === 0) {
     return decisionOnly?.kind === "decision" ? (
@@ -329,6 +334,16 @@ function AssistantProcessSummary({
               <div
                 key={`${step.item.messageId}-thinking-${idx}`}
                 className={styles.processThinkingItem}
+              >
+                <Markdown
+                  content={step.item.content}
+                  isStreaming={!!step.item.isStreaming && isStreaming}
+                />
+              </div>
+            ) : step.kind === "text" ? (
+              <div
+                key={`${step.item.messageId}-text-${idx}`}
+                className={styles.processTextItem}
               >
                 <Markdown
                   content={step.item.content}
