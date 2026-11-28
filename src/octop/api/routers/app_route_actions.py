@@ -39,6 +39,7 @@ APP_ROUTE_ACTIONS: dict[str, Action | None] = {
     "get_app_asset": Action.VIEW_APP,
     "get_app_preview": Action.VIEW_APP,
     "get_app_dataset": Action.VIEW_APP,
+    "export_app_drawing": Action.VIEW_APP,
     # Rows.
     "query_app_dataset": Action.VIEW_ROW,
     "get_app_rows": Action.VIEW_ROW,
